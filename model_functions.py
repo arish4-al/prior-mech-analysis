@@ -1,3 +1,7 @@
+'''
+Functions to setup, run, and analyze the model.
+'''
+
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
