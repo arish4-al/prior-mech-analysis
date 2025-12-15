@@ -1,3 +1,7 @@
+'''
+This script is used to fit the weights of the model, 2nd stage of the fitting process.
+'''
+
 import types
 import cma
 from model_functions import *

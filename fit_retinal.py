@@ -1,3 +1,7 @@
+'''
+This script is used to fit the retinal params of the model, 1st stage of the fitting process.
+'''
+
 import time, traceback
 import numpy as np
 import matplotlib.pyplot as plt

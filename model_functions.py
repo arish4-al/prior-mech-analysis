@@ -11,7 +11,6 @@ from itertools import product
 from scipy.signal import savgol_filter
 
 from one.api import ONE
-from reproducible_ephys_processing import bin_spikes2D
 from brainwidemap import bwm_query, load_good_units, bwm_units
 from iblatlas.atlas import AllenAtlas
 from iblatlas.regions import BrainRegions

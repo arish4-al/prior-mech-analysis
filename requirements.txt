@@ -1,1 +1,18 @@
-# Add your Python dependencies here
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+scikit-learn
+
+one-api
+brainbox
+brainwidemap # from IBL's paper-brain-wide-map repo
+iblatlas
+
+Pillow
+python-dateutil
+adjustText
+
+cma
+ipython
