@@ -1,3 +1,6 @@
+'''
+This script contains the analysis and plotting functions used in analysis_figs.ipynb.
+'''
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -634,14 +637,14 @@ def plot_regional_distance(reg, time, combined=True, ptype='p_mean_c', dist='de'
             mean_first5 = np.mean(r[:, :5], axis=1)
             # print(mean_first5[0])
         # if offset is significant, subtract offset to examine gain effect
-        if d['p_offset'] < alpha:
+        if d['p_offset'] <= alpha:
             offset = mean_first5[0] - np.mean(mean_first5[1:])
             r_shifted = r[0] - offset
             # print(offset, r_shifted[0], r[0])
             axs[0].plot(times, r_shifted, c='black', linewidth=1)
         else: 
             r_shifted = r[0]
-        p_val_gain = d['p_gain']
+        p_val_gain = np.mean(np.mean(r[1:,4:], axis=1) >= np.mean(r_shifted[4:]))
 
     # Plot p-values per time
     if plot_p_per_time:
@@ -650,11 +653,11 @@ def plot_regional_distance(reg, time, combined=True, ptype='p_mean_c', dist='de'
         # corrected_p_values = multipletests(p_per_time, alpha=0.05, method='fdr_bh')[1]
         # p_per_time = corrected_p_values
 
-        ax2 = axs[0].twinx()
-        ax2.plot(times, p_per_time, color='blue', linestyle='--', linewidth=1, label='p per time')
-        ax2.set_ylim([0, 1])
-        ax2.set_ylabel('p', fontsize=10, color='blue')
-        ax2.tick_params(axis='y', labelcolor='blue', labelsize=8)
+        # ax2 = axs[0].twinx()
+        # ax2.plot(times, p_per_time, color='blue', linestyle='--', linewidth=1, label='p per time')
+        # ax2.set_ylim([0, 1])
+        # ax2.set_ylabel('p', fontsize=10, color='blue')
+        # ax2.tick_params(axis='y', labelcolor='blue', labelsize=8)
 
         sig_mask = p_per_time <= alpha
         axs[0].scatter(times[sig_mask], np.full(np.sum(sig_mask), axs[0].get_ylim()[0]),
@@ -1455,6 +1458,10 @@ def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha
                                 sc_threshold=0.6, slope_threshold=0, amp_loc_threshold=67, n=72, stim_restr=True,
                                 display='overall'):
 
+    '''
+    display: overall, gain_offset
+    '''
+
     if stim_restr: # if stim regions are restricted to those without any significant choice coding
         sc_splits = ['sc_duringchoice_regtype', 'sc_duringstim_regtype']
     else:
@@ -2172,7 +2179,7 @@ def plot_averaged_distances(block_pairs, raster_type, vers='concat_by_contrast_a
 def plot_average_distance_across_all_pairs(comparison_pairs, raster_type, vers='concat_by_contrast_act', 
                                            ptype='mean', suffix='', plot_offset=False, offset_window=5,
                                            alpha=0.05, plot_p_per_time=False, plot_gain=False, short_window=False, 
-                                           ylim=None, yticks=None):
+                                           ylim=None, yticks=None, plot_inset=False):
     """ 
     Plot averaged distance traces for a raster type across all contrasts and comparison (block, stim, choice) 
     pairs within a timewindow.
@@ -2186,12 +2193,18 @@ def plot_average_distance_across_all_pairs(comparison_pairs, raster_type, vers='
     all_distances = []
     all_controls = []
 
-    if 'move' in raster_type:
+    if 'stim' in vers or 'choice' in vers:
+        dist_color = 'black'
+        ls = '-'
+    elif 'move' in raster_type:
         dist_color = 'tomato'
+        ls = '--'
     elif 'stim' in raster_type or 'vis' in raster_type:
         dist_color = '#57C1EB'
+        ls = '--'
     elif raster_type == 'integrator':
         dist_color = 'gold'
+        ls = '--'
     # else:
     #     raise ValueError(f'Invalid raster type: {raster_type}')
 
@@ -2256,11 +2269,11 @@ def plot_average_distance_across_all_pairs(comparison_pairs, raster_type, vers='
 
     if 'stim' in suffix and plot_offset:
         ax_main.plot(x_plot[:offset_window], mean_distance[:offset_window], color='blue', 
-            linestyle='--', linewidth=2, label='Distance')
+            linestyle=ls, linewidth=2, label='Distance')
         ax_main.plot(x_plot[offset_window-1:], mean_distance[offset_window-1:], color=dist_color, 
-            linestyle='--', linewidth=2, label='Distance')
+            linestyle=ls, linewidth=2, label='Distance')
     else:
-        ax_main.plot(x_plot, mean_distance, color=dist_color, linestyle='--', linewidth=2, label='Distance')
+        ax_main.plot(x_plot, mean_distance, color=dist_color, linestyle=ls, linewidth=2, label='Distance')
 
     # Subtract the mean of the first 5 datapoints to examine gain effect
     if plot_gain:
@@ -2285,31 +2298,32 @@ def plot_average_distance_across_all_pairs(comparison_pairs, raster_type, vers='
     elif 'choice' in comparison_pairs[0][0]:
         ax_main.set_xticks([0, -40, -80, -120])
 
-    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-    # Inset: mean_distance - mean(stacked_controls) with shuffle band
-    ctrl_mean = np.mean(stacked_controls, axis=0)
-    diff_curve = mean_distance - ctrl_mean
+    if plot_inset:
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+        # Inset: mean_distance - mean(stacked_controls) with shuffle band
+        ctrl_mean = np.mean(stacked_controls, axis=0)
+        diff_curve = mean_distance - ctrl_mean
 
-    # shuffle-centered distribution per time bin
-    shuf_centered = stacked_controls - ctrl_mean[None, :]
-    low_band = np.percentile(shuf_centered, 100 * (alpha / 2), axis=0)
-    high_band = np.percentile(shuf_centered, 100 * (1 - alpha / 2), axis=0)
+        # shuffle-centered distribution per time bin
+        shuf_centered = stacked_controls - ctrl_mean[None, :]
+        low_band = np.percentile(shuf_centered, 100 * (alpha / 2), axis=0)
+        high_band = np.percentile(shuf_centered, 100 * (1 - alpha / 2), axis=0)
 
-    ax_ins = inset_axes(ax_main, width="20%", height="20%", loc='upper left', borderpad=2.8)
-    ax_ins.fill_between(x_plot, low_band, high_band, alpha=0.3, color='gray', linewidth=0)
-    ax_ins.plot(x_plot, diff_curve, linewidth=1, color=dist_color)
+        ax_ins = inset_axes(ax_main, width="20%", height="20%", loc='upper left', borderpad=2.8)
+        ax_ins.fill_between(x_plot, low_band, high_band, alpha=0.3, color='gray', linewidth=0)
+        ax_ins.plot(x_plot, diff_curve, linewidth=1, color=dist_color)
 
-    # tidy inset
-    ax_ins.set_xticks([])
-    # ymin, ymax = np.min(low_band), np.max(high_band)
-    # if ymin == ymax:
-    #     ymax = ymin + 1e-6
-    # pad = 0.05 * (ymax - ymin)
-    ax_ins.set_ylim(-0.05, 0.22)
-    # ax_ins.set_yticks([0, 0.15, 0.3])
-    ax_ins.set_facecolor('none')
-    for spine in ("top", "right"):
-        ax_ins.spines[spine].set_visible(False)
+        # tidy inset
+        ax_ins.set_xticks([])
+        # ymin, ymax = np.min(low_band), np.max(high_band)
+        # if ymin == ymax:
+        #     ymax = ymin + 1e-6
+        # pad = 0.05 * (ymax - ymin)
+        # ax_ins.set_ylim(-0.05, 0.22)
+        # ax_ins.set_yticks([0, 0.15, 0.3])
+        ax_ins.set_facecolor('none')
+        for spine in ("top", "right"):
+            ax_ins.spines[spine].set_visible(False)
 
     # print p_value
     color_main = 'red' if p_value < alpha else 'black'
@@ -2338,11 +2352,11 @@ def plot_average_distance_across_all_pairs(comparison_pairs, raster_type, vers='
     # Histogram panel
     avg_val_per_control = np.mean(stacked_controls, axis=1)
     ax_hist.hist(avg_val_per_control, bins=20, orientation='horizontal', color='gray', alpha=0.6)
-    ax_hist.axhline(np.mean(mean_distance), linestyle='--', linewidth=2, color=dist_color)
+    ax_hist.axhline(np.mean(mean_distance), linestyle=ls, linewidth=2, color=dist_color)
     if 'stim' in suffix and plot_offset:
         ax_hist.hist(np.mean(stacked_controls[:,:offset_window], axis=1), bins=20, 
                      orientation='horizontal', color='#5f7ea3', alpha=0.5)
-        ax_hist.axhline(np.mean(mean_distance[:offset_window]), color='blue', linestyle='--', linewidth=2)
+        ax_hist.axhline(np.mean(mean_distance[:offset_window]), color='blue', linestyle=ls, linewidth=2)
     if plot_gain:
         ax_hist.hist(np.mean(stacked_controls[:, 4:], axis=1), density=True, bins=20,
                     color='#c8a2d6', orientation='horizontal', alpha=0.5)
