@@ -20,11 +20,11 @@ Requires access to the IBL brain-wide map dataset (https://docs.internationalbra
 ## Main Scripts
 
 - `block_analysis_allsplits.py` - Computes prior sensitivity metrics across brain regions
-- `fit_retinal.py` - Stage 1: Fits retinal front-end parameters
-- `fit_weights.py` - Stage 2: Fits network weights and gains
-- `model_functions.py` - Model implementation and simulation
 - `analysis_functions.py` - Analysis and plotting utilities
 - `analysis_figs.ipynb` - Notebook for generating analysis figures
+- `model_functions.py` - Model implementation and simulation
+- `fit_retinal.py` - Stage 1: Fits retinal front-end parameters
+- `fit_weights.py` - Stage 2: Fits network weights and gains
 
 ## Usage
 
