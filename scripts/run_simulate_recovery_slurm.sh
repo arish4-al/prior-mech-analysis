@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH -p mit_normal
-#SBATCH --time=24:00:00
+#SBATCH --time=8:00:00
 #SBATCH --mail-user=arily
 #SBATCH --mail-type=FAIL
 #SBATCH -o simulate_recovery_%j.out
@@ -28,6 +28,7 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export MPLBACKEND=Agg
 export PYTHONUNBUFFERED=1
+export ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 
 REPO_DIR="${REPO_DIR:-/home/arily/int-brain-lab/prior-mech-analysis}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
@@ -59,6 +60,10 @@ if [[ ! -f "$WEIGHTS_JSON" ]]; then
   echo "ERROR: weights JSON not found: $WEIGHTS_JSON" >&2
   exit 1
 fi
+if [[ ! -d "$OUTPUT_DIR" ]]; then
+  mkdir -p "$OUTPUT_DIR"
+fi
+python3 -c "import simulate_recovery as sr; print('Resolved ONE cache:', sr.resolve_one_cache_dir())"
 
 EXTRA_ARGS=()
 if [[ "$FULL_ANALYSIS" == "1" ]]; then

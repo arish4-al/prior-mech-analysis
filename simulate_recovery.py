@@ -52,11 +52,9 @@ ALPHA_ACT = 0.2
 DT_MS = 2.0
 PRIOR_COLUMN = "p_subjective_probabilityLeft"
 
-WEIGHTS_JSON = (
-    Path(mf.one.cache_dir)
-    / "models"
-    / "weights_run_20251125_182058"
-    / "weights_2stagelocalrefine_loss0p4044_20251125-195255.json"
+WEIGHTS_REL = Path(
+    "models/weights_run_20251125_182058/"
+    "weights_2stagelocalrefine_loss0p4044_20251125-195255.json"
 )
 
 # Model populations used directly as "regions" (no synthetic neurons / atlas).
@@ -65,15 +63,69 @@ POPULATION_TYPE = {"S": "S", "I": "I", "M": "M", "P": "P"}
 PRIOR_OFFSET_BINS = 5
 
 
+def _one_cache_dir_candidates():
+    """ONE cache roots: ONE_CACHE_DIR env, one.cache_dir, and one.cache_dir/alyx."""
+    bases = []
+    if "ONE_CACHE_DIR" in os.environ:
+        bases.append(Path(os.environ["ONE_CACHE_DIR"]))
+    cache = Path(mf.one.cache_dir)
+    bases.extend([cache, cache / "alyx"])
+    seen = set()
+    for base in bases:
+        base = base.resolve()
+        if base in seen:
+            continue
+        seen.add(base)
+        yield base
+
+
+def resolve_one_cache_dir():
+    """
+    Resolve the active ONE cache directory.
+
+    On ORCD, fitted weights and analysis outputs often live under .../ONE/alyx while
+    one.cache_dir may point at the parent .../ONE.
+    """
+    candidates = list(_one_cache_dir_candidates())
+    for base in candidates:
+        if (base / "models").is_dir() or (base / "manifold").is_dir():
+            return base
+    return candidates[0] if candidates else Path(mf.one.cache_dir)
+
+
+def default_output_dir():
+    return resolve_one_cache_dir() / "manifold_sim"
+
+
+def _weights_json_candidates():
+    """Search ONE cache roots (incl. .../alyx) for the fitted weights file."""
+    for base in _one_cache_dir_candidates():
+        yield base / WEIGHTS_REL
+
+
+def resolve_weights_json(explicit=None):
+    """Resolve weights JSON path; explicit must exist if provided."""
+    if explicit is not None:
+        path = Path(explicit)
+        if not path.is_file():
+            raise FileNotFoundError(f"Weights JSON not found: {path}")
+        return path
+    for candidate in _weights_json_candidates():
+        if candidate.is_file():
+            return candidate
+    tried = ", ".join(str(p) for p in _weights_json_candidates())
+    raise FileNotFoundError(
+        f"Weights JSON not found. Tried: {tried}. "
+        "Pass --weights-json or set ONE_CACHE_DIR."
+    )
+
+
 def fitted_integrator_scales(json_path=None):
     """Return fitted g_i, d_i to use as comparable g_s, d_s for sensory prior presence."""
-    json_path = Path(json_path) if json_path is not None else WEIGHTS_JSON
+    json_path = resolve_weights_json(json_path)
     with open(json_path) as f:
         meta = json.load(f)
     return float(meta["g"]["g_i"]), float(meta["d"]["d_i"])
-
-
-GAIN_PRESENCE_DEFAULT, OFFSET_PRESENCE_DEFAULT = fitted_integrator_scales()
 
 SC_TIMES = [
     "stim_duringstim_act",
@@ -232,7 +284,7 @@ def blocks_for_min_trials(min_trials, rng):
 
 
 def load_fitted_model(g_s=0.0, d_s=0.0, json_path=None):
-    json_path = Path(json_path) if json_path is not None else WEIGHTS_JSON
+    json_path = resolve_weights_json(json_path)
     with open(json_path) as f:
         meta = json.load(f)
 
@@ -537,7 +589,8 @@ def compute_population_distances(b, n0, nrand, rng, n_jobs=1):
 
     means_arr = np.stack(means, axis=0)
     diff = means_arr[0::2] - means_arr[1::2]
-    d_eucs = np.sum(diff**2, axis=-1)
+    # Sum squared channel differences over channels (axis=1), keep time bins.
+    d_eucs = np.sum(diff**2, axis=1)
     ws = means_arr[:2]
     return d_eucs, ws
 
@@ -1017,74 +1070,43 @@ def s_only_prior_test(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
     }
 
 
-def s_prior_presence_vs_absence_pvalues(abs_s, pres_s, alpha=0.01):
+def s_prior_presence_vs_absence_direct(abs_s, pres_s, alpha=0.01):
     """
-    Cross-condition p-values for S prior curves (presence vs absence).
+    Direct presence vs absence comparison on real S prior curves.
 
-    Uses paired label-shuffle null curves: for each permutation index, compares
-    presence vs absence on curve mean, early-bin mean, and p_gain late-bin mean.
-  """
+    Label-shuffle nulls are not used here; they test within-condition prior
+    grouping, not generative absence vs presence differences.
+    """
     if abs_s is None or pres_s is None:
         return None
 
-    nulls_abs = np.atleast_2d(np.asarray(abs_s["null_curves"], dtype=float))
     nulls_pres = np.atleast_2d(np.asarray(pres_s["null_curves"], dtype=float))
-    n = min(nulls_abs.shape[0], nulls_pres.shape[0])
-    if n == 0:
-        return None
+    nulls_abs = np.atleast_2d(np.asarray(abs_s["null_curves"], dtype=float))
 
-    real_mean_diff = float(pres_s["curve_mean"] - abs_s["curve_mean"])
-    real_amp_diff = float(pres_s["curve_amp"] - abs_s["curve_amp"])
-    real_offset_diff = float(pres_s["offset_mean"] - abs_s["offset_mean"])
-
-    null_mean_diffs = np.array(
-        [np.mean(nulls_pres[i]) - np.mean(nulls_abs[i]) for i in range(n)]
+    diff_mean = float(pres_s["curve_mean"] - abs_s["curve_mean"])
+    diff_amp = float(pres_s["curve_amp"] - abs_s["curve_amp"])
+    diff_offset = float(pres_s["offset_mean"] - abs_s["offset_mean"])
+    gain_pres = _gain_late_mean_for_curve(
+        pres_s["curve_real"], nulls_pres, alpha=alpha
     )
-    null_amp_diffs = np.array(
-        [
-            (np.max(nulls_pres[i]) - np.min(nulls_pres[i]))
-            - (np.max(nulls_abs[i]) - np.min(nulls_abs[i]))
-            for i in range(n)
-        ]
+    gain_abs = _gain_late_mean_for_curve(
+        abs_s["curve_real"], nulls_abs, alpha=alpha
     )
-    n_early = min(PRIOR_OFFSET_BINS, nulls_abs.shape[1], nulls_pres.shape[1])
-    null_offset_diffs = np.array(
-        [
-            np.mean(nulls_pres[i, :n_early]) - np.mean(nulls_abs[i, :n_early])
-            for i in range(n)
-        ]
-    )
-
-    real_gain_diff = float(
-        _gain_late_mean_for_curve(pres_s["curve_real"], nulls_pres, alpha=alpha)
-        - _gain_late_mean_for_curve(abs_s["curve_real"], nulls_abs, alpha=alpha)
-    )
-    null_gain_diffs = np.array(
-        [
-            _gain_late_mean_for_curve(nulls_pres[i], nulls_pres, alpha=alpha)
-            - _gain_late_mean_for_curve(nulls_abs[i], nulls_abs, alpha=alpha)
-            for i in range(n)
-        ]
-    )
-
-    p_mean_diff = float(np.mean(null_mean_diffs >= real_mean_diff))
-    p_amp_diff = float(np.mean(null_amp_diffs >= real_amp_diff))
-    p_offset_diff = float(np.mean(null_offset_diffs >= real_offset_diff))
-    p_gain_diff = float(np.mean(null_gain_diffs >= real_gain_diff))
+    diff_gain = float(gain_pres - gain_abs) if not (
+        np.isnan(gain_pres) or np.isnan(gain_abs)
+    ) else np.nan
 
     return {
-        "real_mean_diff": real_mean_diff,
-        "real_amp_diff": real_amp_diff,
-        "real_offset_diff": real_offset_diff,
-        "real_gain_diff": real_gain_diff,
-        "p_mean_pres_vs_abs": p_mean_diff,
-        "p_amp_pres_vs_abs": p_amp_diff,
-        "p_offset_pres_vs_abs": p_offset_diff,
-        "p_gain_pres_vs_abs": p_gain_diff,
-        "null_mean_diffs": null_mean_diffs,
-        "null_amp_diffs": null_amp_diffs,
-        "null_offset_diffs": null_offset_diffs,
-        "null_gain_diffs": null_gain_diffs,
+        "diff_mean": diff_mean,
+        "diff_amp": diff_amp,
+        "diff_offset": diff_offset,
+        "diff_gain": diff_gain,
+        "presence_gt_absence_mean": diff_mean > 0,
+        "presence_gt_absence_amp": diff_amp > 0,
+        "presence_gt_absence_offset": diff_offset > 0,
+        "presence_gt_absence_gain": (
+            diff_gain > 0 if not np.isnan(diff_gain) else False
+        ),
     }
 
 
@@ -1198,7 +1220,16 @@ def recovery_classification_metrics(recovered):
     return df, cm, acc
 
 
-def _draw_shuffle_control_panel(ax, s_prior, condition, n_sample=SHUFFLE_PLOT_N_SAMPLE, rng_seed=0):
+def _draw_shuffle_control_panel(
+    ax,
+    s_prior,
+    condition,
+    n_sample=SHUFFLE_PLOT_N_SAMPLE,
+    rng_seed=0,
+    show_null_mean=True,
+    true_color="#C44E52",
+    null_color="0.78",
+):
     """Draw one shuffle-control panel on ax."""
     real = np.asarray(s_prior["curve_real"], dtype=float)
     nulls = np.atleast_2d(np.asarray(s_prior["null_curves"], dtype=float))
@@ -1208,18 +1239,19 @@ def _draw_shuffle_control_panel(ax, s_prior, condition, n_sample=SHUFFLE_PLOT_N_
 
     t = s_prior["t_axis"]
     for j in idx:
-        ax.plot(t, nulls[j], color="0.78", lw=0.7, alpha=0.28, zorder=1)
-    ax.plot(
-        t,
-        s_prior["curve_null_mean"],
-        color="#4C72B0",
-        ls="--",
-        lw=1.4,
-        alpha=0.9,
-        label="null mean",
-        zorder=8,
-    )
-    ax.plot(t, real, color="#C44E52", lw=2.5, label="true labels", zorder=10)
+        ax.plot(t, nulls[j], color=null_color, lw=0.7, alpha=0.28, zorder=1)
+    if show_null_mean:
+        ax.plot(
+            t,
+            s_prior["curve_null_mean"],
+            color="#4C72B0",
+            ls="--",
+            lw=1.4,
+            alpha=0.9,
+            label="null mean",
+            zorder=8,
+        )
+    ax.plot(t, real, color=true_color, lw=2.5, label="true labels", zorder=10)
     if len(t) >= PRIOR_OFFSET_BINS:
         ax.axvspan(t[0], t[PRIOR_OFFSET_BINS - 1], color="gray", alpha=0.1)
     ax.set_xlabel("Time (s)")
@@ -1259,21 +1291,91 @@ def plot_s_shuffle_control(condition, s_prior, fig_dir, n_sample=SHUFFLE_PLOT_N_
     print(f"Saved shuffle control figure to {out}")
 
 
+def _plot_shuffle_trajectories(
+    ax,
+    s_prior,
+    true_color,
+    null_color,
+    n_sample=SHUFFLE_PLOT_N_SAMPLE,
+    rng_seed=0,
+    true_label=None,
+):
+    """Plot time-resolved prior-distance trajectories: real + sampled null shuffles."""
+    real = np.asarray(s_prior["curve_real"], dtype=float)
+    nulls = np.atleast_2d(np.asarray(s_prior["null_curves"], dtype=float))
+    t = s_prior["t_axis"]
+    n_plot = min(n_sample, nulls.shape[0])
+    rng = np.random.RandomState(rng_seed)
+    idx = rng.choice(nulls.shape[0], size=n_plot, replace=False)
+    for j in idx:
+        ax.plot(t, nulls[j], color=null_color, lw=0.7, alpha=0.22, zorder=1)
+    ax.plot(t, real, color=true_color, lw=2.5, label=true_label, zorder=10)
+
+
 def plot_combined_shuffle_controls(base_dir, abs_s, pres_s, rng_seed=0):
-    """Side-by-side absence/presence shuffle-control panels with within-condition p-values."""
+    """Overlay absence/presence distance trajectories with sampled shuffle nulls."""
     if abs_s is None and pres_s is None:
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.5), sharey=True)
-    panels = [("absence", abs_s, rng_seed), ("presence", pres_s, rng_seed + 1)]
-    for ax, (cond, s_prior, seed) in zip(axes, panels):
-        if s_prior is None:
-            ax.set_title(f"{cond} (no data)")
-            ax.axis("off")
-            continue
-        _draw_shuffle_control_panel(ax, s_prior, cond, rng_seed=seed)
-
-    fig.suptitle("S prior distance vs label-shuffle nulls (model P subjective prior)", y=1.02)
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    t_ref = None
+    if abs_s is not None:
+        t_ref = abs_s["t_axis"]
+        _plot_shuffle_trajectories(
+            ax,
+            abs_s,
+            true_color="#4C72B0",
+            null_color="#4C72B0",
+            rng_seed=rng_seed,
+            true_label="absence (true labels)",
+        )
+    if pres_s is not None:
+        t_ref = pres_s["t_axis"] if t_ref is None else t_ref
+        _plot_shuffle_trajectories(
+            ax,
+            pres_s,
+            true_color="#DD8452",
+            null_color="#DD8452",
+            rng_seed=rng_seed + 1,
+            true_label="presence (true labels)",
+        )
+    if t_ref is not None and len(t_ref) >= PRIOR_OFFSET_BINS:
+        ax.axvspan(t_ref[0], t_ref[PRIOR_OFFSET_BINS - 1], color="gray", alpha=0.1)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("S prior distance (raw)")
+    ax.set_title(
+        "S prior distance trajectories vs label-shuffle nulls\n"
+        "(model P subjective prior; faint lines = sampled nulls)"
+    )
+    if abs_s is not None:
+        ax.text(
+            0.98,
+            0.98,
+            f"absence\np_mean={abs_s['p_mean']:.3f}\np_offset={abs_s['p_offset']:.3f}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            family="monospace",
+            color="#4C72B0",
+            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.88},
+        )
+    if pres_s is not None:
+        p_gain = pres_s.get("p_gain", np.nan)
+        ax.text(
+            0.98,
+            0.72,
+            f"presence\np_mean={pres_s['p_mean']:.3f}\np_offset={pres_s['p_offset']:.3f}\n"
+            f"p_gain={p_gain:.3f}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            family="monospace",
+            color="#DD8452",
+            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.88},
+        )
+    ax.legend(fontsize=8, loc="upper left")
     fig.tight_layout()
     out = base_dir / "s_shuffle_control_combined.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -1621,7 +1723,7 @@ def process_condition(
     return summary
 
 
-def plot_s_prior_comparison(base_dir, abs_s, pres_s, cross_p, sensory_prior_recovery):
+def plot_s_prior_comparison(base_dir, abs_s, pres_s, direct_cmp, sensory_prior_recovery):
     """Dedicated S prior comparison figure (raw curves, baseline not removed)."""
     if abs_s is None or pres_s is None:
         return
@@ -1631,8 +1733,6 @@ def plot_s_prior_comparison(base_dir, abs_s, pres_s, cross_p, sensory_prior_reco
 
     ax.plot(t, abs_s["curve_real"], color="#4C72B0", lw=2, label="absence")
     ax.plot(t, pres_s["curve_real"], color="#DD8452", lw=2, label="presence")
-    ax.plot(t, abs_s["curve_null_mean"], color="#4C72B0", ls="--", alpha=0.5, label="abs null")
-    ax.plot(t, pres_s["curve_null_mean"], color="#DD8452", ls="--", alpha=0.5, label="pres null")
     if len(t) >= PRIOR_OFFSET_BINS:
         ax.axvspan(t[0], t[PRIOR_OFFSET_BINS - 1], color="gray", alpha=0.12, label="offset window")
     ax.set_xlabel("Time (s)")
@@ -1640,16 +1740,16 @@ def plot_s_prior_comparison(base_dir, abs_s, pres_s, cross_p, sensory_prior_reco
     ax.set_title("S prior curves (raw, baseline retained)")
     ax.legend(fontsize=8)
 
-    if cross_p:
+    if direct_cmp:
         g_s = sensory_prior_recovery.get("g_s_presence", "?")
         d_s = sensory_prior_recovery.get("d_s_presence", "?")
         g_i = sensory_prior_recovery.get("g_i_fitted", "?")
         d_i = sensory_prior_recovery.get("d_i_fitted", "?")
         txt = (
             f"fitted integrator: g_i={g_i}, d_i={d_i} | presence sensory: g_s={g_s}, d_s={d_s}\n"
-            f"p_mean(pres>abs)={cross_p['p_mean_pres_vs_abs']:.4f}  "
-            f"p_offset(pres>abs)={cross_p['p_offset_pres_vs_abs']:.4f}  "
-            f"p_gain(pres>abs)={cross_p.get('p_gain_pres_vs_abs', np.nan):.4f}"
+            f"pres-abs mean={direct_cmp['diff_mean']:+.2f}  "
+            f"offset={direct_cmp['diff_offset']:+.2f}  "
+            f"gain={direct_cmp.get('diff_gain', np.nan):+.2f}"
         )
         fig.text(0.5, -0.02, txt, ha="center", va="top", fontsize=9, family="monospace")
 
@@ -1660,15 +1760,15 @@ def plot_s_prior_comparison(base_dir, abs_s, pres_s, cross_p, sensory_prior_reco
     print(f"Saved S prior comparison figure to {out}")
 
 
-def _plot_pres_abs_bar_comparison(ax, abs_val, pres_val, ylabel, metric_name, p_cross):
+def _plot_pres_abs_bar_comparison(ax, abs_val, pres_val, ylabel, metric_name, diff):
     """Grouped absence vs presence bar chart for one scalar metric."""
     x = [0, 1]
     ax.bar(x, [abs_val, pres_val], color=["#4C72B0", "#DD8452"], width=0.65)
     ax.set_xticks(x)
     ax.set_xticklabels(["absence", "presence"])
     ax.set_ylabel(ylabel)
-    p_txt = f"p(pres>abs)={p_cross:.4f}" if not np.isnan(p_cross) else "p(pres>abs)=n/a"
-    ax.set_title(f"{metric_name}\n{p_txt}")
+    diff_txt = f"pres - abs = {diff:+.3g}" if not np.isnan(diff) else "pres - abs = n/a"
+    ax.set_title(f"{metric_name}\n{diff_txt}")
 
 
 def plot_comparison_metrics_summary(
@@ -1684,24 +1784,24 @@ def plot_comparison_metrics_summary(
         sensory_prior_recovery["s_curve_mean_absence"],
         sensory_prior_recovery["s_curve_mean_presence"],
         "mean prior distance",
-        "S curve overall mean (p_mean)",
-        sensory_prior_recovery["p_mean_pres_vs_abs"],
+        "S curve overall mean",
+        sensory_prior_recovery["diff_mean"],
     )
     _plot_pres_abs_bar_comparison(
         axes[1],
         sensory_prior_recovery["s_offset_mean_absence"],
         sensory_prior_recovery["s_offset_mean_presence"],
         f"mean first {PRIOR_OFFSET_BINS} bins",
-        "S early-bin mean (p_offset)",
-        sensory_prior_recovery["p_offset_pres_vs_abs"],
+        "S early-bin mean",
+        sensory_prior_recovery["diff_offset"],
     )
     _plot_pres_abs_bar_comparison(
         axes[2],
         sensory_prior_recovery["s_gain_late_mean_absence"],
         sensory_prior_recovery["s_gain_late_mean_presence"],
         "mean bins 4+ after early offset removed",
-        "S offset-corrected late mean (p_gain)",
-        sensory_prior_recovery["p_gain_pres_vs_abs"],
+        "S offset-corrected late mean",
+        sensory_prior_recovery["diff_gain"],
     )
 
     gs = presence.get("g_s", "?")
@@ -1724,11 +1824,14 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
 
     abs_s = s_only_prior_test(base_dir / "absence" / "res", alpha=alpha)
     pres_s = s_only_prior_test(base_dir / "presence" / "res", alpha=alpha)
-    cross_p = s_prior_presence_vs_absence_pvalues(abs_s, pres_s, alpha=alpha)
+    direct_cmp = s_prior_presence_vs_absence_direct(abs_s, pres_s, alpha=alpha)
     s_amp_ratio = (
         pres_s["amp_euc"] / (abs_s["amp_euc"] + 1e-12) if abs_s and pres_s else np.nan
     )
-    g_i_fit, d_i_fit = fitted_integrator_scales()
+    g_i_fit = presence.get("g_i_fitted") or absence.get("g_i_fitted")
+    d_i_fit = presence.get("d_i_fitted") or absence.get("d_i_fitted")
+    if g_i_fit is None or d_i_fit is None:
+        g_i_fit, d_i_fit = fitted_integrator_scales()
     sensory_prior_recovery = {
         "g_i_fitted": g_i_fit,
         "d_i_fitted": d_i_fit,
@@ -1749,21 +1852,17 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
         "s_p_mean_presence": pres_s["p_mean"] if pres_s else np.nan,
         "s_gain_late_mean_absence": abs_s["gain_late_mean"] if abs_s else np.nan,
         "s_gain_late_mean_presence": pres_s["gain_late_mean"] if pres_s else np.nan,
-        "p_mean_pres_vs_abs": cross_p["p_mean_pres_vs_abs"] if cross_p else np.nan,
-        "p_amp_pres_vs_abs": cross_p["p_amp_pres_vs_abs"] if cross_p else np.nan,
-        "p_offset_pres_vs_abs": cross_p["p_offset_pres_vs_abs"] if cross_p else np.nan,
-        "p_gain_pres_vs_abs": cross_p["p_gain_pres_vs_abs"] if cross_p else np.nan,
+        "diff_mean": direct_cmp["diff_mean"] if direct_cmp else np.nan,
+        "diff_amp": direct_cmp["diff_amp"] if direct_cmp else np.nan,
+        "diff_offset": direct_cmp["diff_offset"] if direct_cmp else np.nan,
+        "diff_gain": direct_cmp["diff_gain"] if direct_cmp else np.nan,
         "s_significant_absence": bool(abs_s["significant_p_mean"]) if abs_s else False,
         "s_significant_presence": bool(pres_s["significant_p_mean"]) if pres_s else False,
         "recovered_sensory_gain": bool(
-            cross_p
-            and cross_p.get("p_gain_pres_vs_abs", 1.0) <= alpha
-            and cross_p.get("real_gain_diff", 0) > 0
+            direct_cmp and direct_cmp.get("presence_gt_absence_gain", False)
         ),
         "recovered_sensory_offset": bool(
-            cross_p
-            and cross_p["p_offset_pres_vs_abs"] <= alpha
-            and cross_p["real_offset_diff"] > 0
+            direct_cmp and direct_cmp.get("presence_gt_absence_offset", False)
         ),
     }
     out_json = base_dir / "sensory_prior_recovery.json"
@@ -1774,7 +1873,7 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
         presence,
         base_dir / "comparison_summary_metrics.png",
     )
-    plot_s_prior_comparison(base_dir, abs_s, pres_s, cross_p, sensory_prior_recovery)
+    plot_s_prior_comparison(base_dir, abs_s, pres_s, direct_cmp, sensory_prior_recovery)
     plot_combined_shuffle_controls(base_dir, abs_s, pres_s)
     print(json.dumps(sensory_prior_recovery, indent=2))
     return sensory_prior_recovery
@@ -1837,15 +1936,31 @@ def main():
         help="Target min trials when --blocks-per-session is not set",
     )
     parser.add_argument("--max-obs-per-trial", type=int, default=400)
-    parser.add_argument("--g-s-presence", type=float, default=GAIN_PRESENCE_DEFAULT)
-    parser.add_argument("--d-s-presence", type=float, default=OFFSET_PRESENCE_DEFAULT)
+    parser.add_argument(
+        "--g-s-presence",
+        type=float,
+        default=None,
+        help="Sensory prior gain in presence (default: g_i from weights JSON)",
+    )
+    parser.add_argument(
+        "--d-s-presence",
+        type=float,
+        default=None,
+        help="Sensory prior offset in presence (default: d_i from weights JSON)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=str(Path(mf.one.cache_dir) / "manifold_sim"),
+        default=None,
+        help="Output root (default: <ONE cache>/manifold_sim, prefers ONE_CACHE_DIR / alyx)",
     )
-    parser.add_argument("--weights-json", type=str, default=str(WEIGHTS_JSON))
+    parser.add_argument(
+        "--weights-json",
+        type=str,
+        default=None,
+        help="Fitted weights JSON (default: search ONE cache / ONE_CACHE_DIR)",
+    )
     parser.add_argument(
         "--recovery-only",
         action="store_true",
@@ -1864,16 +1979,22 @@ def main():
     )
     args = parser.parse_args()
 
-    weights_json = Path(args.weights_json)
+    base_dir = Path(args.output_dir) if args.output_dir else default_output_dir()
+    base_dir.mkdir(parents=True, exist_ok=True)
     n_jobs = args.n_jobs if args.n_jobs is not None else _default_n_jobs()
     s_prior_only = not args.full_analysis
-
-    base_dir = Path(args.output_dir)
-    base_dir.mkdir(parents=True, exist_ok=True)
 
     if args.recovery_only:
         run_recovery_only(base_dir, s_prior_only=s_prior_only)
         return
+
+    weights_json = resolve_weights_json(args.weights_json)
+    g_i_fit, d_i_fit = fitted_integrator_scales(weights_json)
+    g_s_presence = args.g_s_presence if args.g_s_presence is not None else g_i_fit
+    d_s_presence = args.d_s_presence if args.d_s_presence is not None else d_i_fit
+    print(f"ONE cache: {resolve_one_cache_dir()}")
+    print(f"Output: {base_dir}")
+    print(f"Weights: {weights_json}")
 
     common_kw = dict(
         n_sessions=args.n_sessions,
@@ -1895,8 +2016,8 @@ def main():
     )
     process_condition(
         "presence",
-        g_s=args.g_s_presence,
-        d_s=args.d_s_presence,
+        g_s=g_s_presence,
+        d_s=d_s_presence,
         rng_seed=args.seed + 1000,
         **common_kw,
     )
