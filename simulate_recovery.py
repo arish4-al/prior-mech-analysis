@@ -21,6 +21,7 @@ import shutil
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 
@@ -82,6 +83,7 @@ SC_TIMES = [
 ]
 
 TIMING_SPLITS = ["act_block_duringstim", "act_block_duringchoice"]
+S_PRIOR_TIMEFRAME = "act_block_duringstim"
 
 FOCUSED_TIMEFRAMES = SC_TIMES + TIMING_SPLITS + [
     "stim_duringstim1_act",
@@ -479,7 +481,21 @@ def build_population_b_for_split(df, split, population, steps_before_obs):
     return np.concatenate([b0, b1], axis=0), len(b0)
 
 
-def compute_population_distances(b, n0, nrand, rng):
+def _null_shuffle_executor(n_workers):
+    """Process pool on Linux (fork); threads on macOS (spawn re-imports this script)."""
+    import multiprocessing as mp
+
+    n_workers = max(1, int(n_workers))
+    if sys.platform == "darwin":
+        return ThreadPoolExecutor(max_workers=n_workers)
+    try:
+        ctx = mp.get_context("fork")
+        return ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx)
+    except (ValueError, AttributeError):
+        return ThreadPoolExecutor(max_workers=n_workers)
+
+
+def compute_population_distances(b, n0, nrand, rng, n_jobs=1):
     """
     Euclidean prior-distance curves for one population.
 
@@ -492,20 +508,37 @@ def compute_population_distances(b, n0, nrand, rng):
 
     ys_true = np.zeros(ntr, dtype=bool)
     ys_true[:n0] = True
-
     means = [b[:n0].mean(axis=0), b[n0:].mean(axis=0)]
-    for _ in range(nrand):
-        perm = ys_true.copy()
-        rng.shuffle(perm)
-        means.append(b[perm].mean(axis=0))
-        means.append(b[~perm].mean(axis=0))
 
-    d_eucs = []
-    for j in range(nrand + 1):
-        diff = means[2 * j] - means[2 * j + 1]
-        d_eucs.append(np.sum(diff**2, axis=0))
+    n_jobs = max(1, int(n_jobs))
+    if n_jobs > 1 and nrand >= n_jobs:
+        from null_shuffle_worker import null_shuffle_chunk
 
-    ws = np.stack(means[:2], axis=0)
+        chunk = int(np.ceil(nrand / n_jobs))
+        tasks = []
+        start = 0
+        while start < nrand:
+            n_chunk = min(chunk, nrand - start)
+            tasks.append((n_chunk, int(rng.randint(0, 2**31 - 1))))
+            start += n_chunk
+        with _null_shuffle_executor(min(n_jobs, len(tasks))) as pool:
+            futures = [
+                pool.submit(null_shuffle_chunk, b, n0, ys_true, nc, seed)
+                for nc, seed in tasks
+            ]
+            for fut in futures:
+                means.extend(fut.result())
+    else:
+        for _ in range(nrand):
+            perm = ys_true.copy()
+            rng.shuffle(perm)
+            means.append(b[perm].mean(axis=0))
+            means.append(b[~perm].mean(axis=0))
+
+    means_arr = np.stack(means, axis=0)
+    diff = means_arr[0::2] - means_arr[1::2]
+    d_eucs = np.sum(diff**2, axis=-1)
+    ws = means_arr[:2]
     return d_eucs, ws
 
 
@@ -537,17 +570,18 @@ def _metrics_from_regde(regde_curves, split):
     }
 
 
-def build_split_results(df, split, steps_before_obs, nrand, rng):
+def build_split_results(df, split, steps_before_obs, nrand, rng, populations=None, n_jobs=1):
     """Build {split}.npy / {split}_regde.npy outputs from pooled model trajectories."""
+    populations = populations or MODEL_POPULATIONS
     regde = {}
     regxn = {}
     r = {}
-    for pop in MODEL_POPULATIONS:
+    for pop in populations:
         built = build_population_b_for_split(df, split, pop, steps_before_obs)
         if built is None:
             continue
         b, n0 = built
-        dist = compute_population_distances(b, n0, nrand, rng)
+        dist = compute_population_distances(b, n0, nrand, rng, n_jobs=n_jobs)
         if dist is None:
             continue
         d_eucs, ws = dist
@@ -561,13 +595,25 @@ def build_split_results(df, split, steps_before_obs, nrand, rng):
     return r, regde, regxn
 
 
-def build_res_from_trajectories(session_dfs, splits, steps_before_obs, nrand, rng, pth_res):
+def s_prior_splits():
+    """Splits for S act_block_duringstim prior distance (subjective prior grouping)."""
+    import analysis_functions as af
+
+    return list(af.run_align[S_PRIOR_TIMEFRAME])
+
+
+def build_res_from_trajectories(
+    session_dfs, splits, steps_before_obs, nrand, rng, pth_res, populations=None, n_jobs=1
+):
     """Write per-split res files by pooling trials across simulated sessions."""
     pth_res.mkdir(parents=True, exist_ok=True)
     all_df = pd.concat(session_dfs, ignore_index=True)
     n_saved = 0
-    for split in splits:
-        out = build_split_results(all_df, split, steps_before_obs, nrand, rng)
+    t0 = time.perf_counter()
+    for i, split in enumerate(splits):
+        out = build_split_results(
+            all_df, split, steps_before_obs, nrand, rng, populations=populations, n_jobs=n_jobs
+        )
         if out is None:
             continue
         r, regde, regxn = out
@@ -575,6 +621,8 @@ def build_res_from_trajectories(session_dfs, splits, steps_before_obs, nrand, rn
         np.save(pth_res / f"{split}_regxn.npy", regxn, allow_pickle=True)
         np.save(pth_res / f"{split}.npy", r, allow_pickle=True)
         n_saved += 1
+        if (i + 1) % max(1, len(splits) // 4) == 0 or i + 1 == len(splits):
+            print(f"    split {i + 1}/{len(splits)} ({split}) — {time.perf_counter() - t0:.1f}s")
     return n_saved
 
 
@@ -1336,6 +1384,23 @@ def plot_recovery_figures(
     prior_df.to_csv(fig_dir / "prior_modulation.csv", index=False)
 
 
+def plot_s_prior_figures(condition, s_prior, fig_dir):
+    """S-prior-only figure outputs (curve + shuffle control)."""
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    if s_prior is not None:
+        plot_s_prior_curve(condition, s_prior, fig_dir)
+        plot_s_shuffle_control(condition, s_prior, fig_dir)
+        pd.DataFrame(
+            [{k: v for k, v in s_prior.items() if not isinstance(v, np.ndarray)}]
+        ).to_csv(fig_dir / "s_prior_stats.csv", index=False)
+
+
+def _default_n_jobs():
+    if "SLURM_CPUS_PER_TASK" in os.environ:
+        return max(1, int(os.environ["SLURM_CPUS_PER_TASK"]))
+    return max(1, (os.cpu_count() or 1))
+
+
 def process_condition(
     condition_name,
     g_s,
@@ -1348,6 +1413,8 @@ def process_condition(
     rng_seed=0,
     weights_json=None,
     min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
+    s_prior_only=True,
+    n_jobs=1,
 ):
     print(f"\n=== Condition: {condition_name} (g_s={g_s}, d_s={d_s}) ===")
     t0 = time.time()
@@ -1361,7 +1428,10 @@ def process_condition(
     res_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = collect_all_splits()
+    splits = s_prior_splits() if s_prior_only else collect_all_splits()
+    populations = ("S",) if s_prior_only else None
+    timeframes = [S_PRIOR_TIMEFRAME] if s_prior_only else FOCUSED_TIMEFRAMES
+    n_jobs = max(1, int(n_jobs))
     rng = np.random.RandomState(rng_seed)
     session_dfs = []
     steps_before_obs = int(mf.STEPS_BEFORE_OBS_DURATION_MS / DT_MS)
@@ -1391,11 +1461,63 @@ def process_condition(
             + (f" (target >={min_trials_per_session})" if blocks_per_session is None else "")
         )
 
-    n_splits = build_res_from_trajectories(
-        session_dfs, splits, steps_before_obs, nrand, rng, res_dir
+    print(
+        f"  distance stage: {len(splits)} splits, populations="
+        f"{populations or MODEL_POPULATIONS}, nrand={nrand}, n_jobs={n_jobs}"
     )
-    print(f"  wrote {n_splits} split result files")
-    stack_combined_timeframes(res_dir, FOCUSED_TIMEFRAMES)
+    t_dist = time.perf_counter()
+    n_splits = build_res_from_trajectories(
+        session_dfs,
+        splits,
+        steps_before_obs,
+        nrand,
+        rng,
+        res_dir,
+        populations=populations,
+        n_jobs=n_jobs,
+    )
+    print(f"  wrote {n_splits} split files in {time.perf_counter() - t_dist:.1f}s")
+    stack_combined_timeframes(res_dir, timeframes)
+
+    s_prior = s_only_prior_test(res_dir)
+
+    if s_prior_only:
+        plot_s_prior_figures(condition_name, s_prior, fig_dir)
+        n_trials_total = int(sum(m["n_trials"] for m in session_meta))
+        summary = {
+            "condition": condition_name,
+            "g_s": g_s,
+            "d_s": d_s,
+            "mode": "s_prior_only",
+            "prior_conditioning": {
+                "prior_column": PRIOR_COLUMN,
+                "timeframe": S_PRIOR_TIMEFRAME,
+                "splits": splits,
+                "populations": ["S"],
+                "null_scheme": f"label shuffle, nrand={nrand}, n_jobs={n_jobs}",
+            },
+            "sessions": session_meta,
+            "n_trials_total": n_trials_total,
+            "g_i_fitted": float(meta["g"]["g_i"]),
+            "d_i_fitted": float(meta["d"]["d_i"]),
+            "s_prior_p_mean": s_prior["p_mean"] if s_prior else np.nan,
+            "s_prior_p_offset": s_prior["p_offset"] if s_prior else np.nan,
+            "s_prior_p_gain": s_prior["p_gain"] if s_prior else np.nan,
+            "s_prior_gain_late_mean": s_prior["gain_late_mean"] if s_prior else np.nan,
+            "s_prior_offset_mean": s_prior["offset_mean"] if s_prior else np.nan,
+            "s_prior_amp_euc": s_prior["amp_euc"] if s_prior else np.nan,
+            "s_prior_significant": bool(s_prior["significant_p_mean"]) if s_prior else False,
+            "n_sessions": n_sessions,
+            "nrand": nrand,
+            "n_jobs": n_jobs,
+            "weights_loss": meta.get("loss"),
+            "runtime_sec": time.time() - t0,
+        }
+        with open(cond_dir / "summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
+        print(json.dumps(summary, indent=2))
+        return summary
+
     sc_table, af = run_analysis(res_dir)
     bwm_recovered = classify_regions(sc_table, af)
     bwm_class_df, bwm_cm, bwm_acc = recovery_classification_metrics(bwm_recovered)
@@ -1658,8 +1780,8 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
     return sensory_prior_recovery
 
 
-def run_recovery_only(base_dir, alpha=0.01):
-    """Re-run population classifier + S-prior tests on existing res/ outputs."""
+def run_recovery_only(base_dir, alpha=0.01, s_prior_only=True):
+    """Re-run analysis on existing res/ outputs."""
     base_dir = Path(base_dir)
     summaries = {}
     for cond in ("absence", "presence"):
@@ -1667,9 +1789,17 @@ def run_recovery_only(base_dir, alpha=0.01):
         fig_dir = base_dir / cond / "figs"
         if not res_dir.exists():
             continue
+        s_prior = s_only_prior_test(res_dir, alpha=alpha)
+        if s_prior_only:
+            plot_s_prior_figures(cond, s_prior, fig_dir)
+            summaries[cond] = {
+                "s_prior": {
+                    k: v for k, v in (s_prior or {}).items() if not isinstance(v, np.ndarray)
+                },
+            }
+            continue
         pop_features = load_population_features(res_dir)
         pop_recovered, pop_class_df, pop_cm, pop_acc = classify_populations(pop_features)
-        s_prior = s_only_prior_test(res_dir, alpha=alpha)
         pop_prior_df = population_prior_tests(res_dir, alpha=alpha)
         _, regde_name, _ = _combined_names("act_block_duringstim")
         regde_path = res_dir / f"{regde_name}.npy"
@@ -1719,17 +1849,30 @@ def main():
     parser.add_argument(
         "--recovery-only",
         action="store_true",
-        help="Skip simulation; re-run population classifier on existing res/ outputs",
+        help="Skip simulation; re-run analysis on existing res/ outputs",
+    )
+    parser.add_argument(
+        "--full-analysis",
+        action="store_true",
+        help="All splits/populations + classifiers (slow). Default: S-prior distance only.",
+    )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=None,
+        help="Parallel workers for label-shuffle nulls (default: SLURM_CPUS_PER_TASK or CPU count)",
     )
     args = parser.parse_args()
 
     weights_json = Path(args.weights_json)
+    n_jobs = args.n_jobs if args.n_jobs is not None else _default_n_jobs()
+    s_prior_only = not args.full_analysis
 
     base_dir = Path(args.output_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
 
     if args.recovery_only:
-        run_recovery_only(base_dir)
+        run_recovery_only(base_dir, s_prior_only=s_prior_only)
         return
 
     common_kw = dict(
@@ -1740,6 +1883,8 @@ def main():
         base_dir=base_dir,
         weights_json=weights_json,
         min_trials_per_session=args.min_trials_per_session,
+        s_prior_only=s_prior_only,
+        n_jobs=n_jobs,
     )
     process_condition(
         "absence",
