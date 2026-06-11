@@ -70,6 +70,9 @@ diag = {'evals':0,'sim_calls':0,'sim_ok':0,'sim_nan':0,'sim_exc':0,'t_loss':0.0,
 _exc_counters = {'unpack':0,'stimuli':0,'sim':0,'avg':0,'sse':0,'other':0}
 _MAX_SHOW = 3  # print only first few tracebacks per site
 
+# Context for Stage 1 DE CPU-parallel evaluation (quiet worker)
+_LOSS_RETINAL_DE_CONTEXT = None
+
 # ---------------------------------------------------------------------
 # Parameter layout (MIXED space): beta_w is native (can be negative).
 # All other parameters are positive (optimized in log-space).
@@ -195,7 +198,8 @@ def disable_realtime_plot():
 #   - blocks_per_session, trials_per_block_param, block_side_probs, ...
 #   - dt, steps_before_obs, etc.
 # ---------------------------------------------------------------------
-def loss_retinal_weight(theta_vec, avg_data_R, model_type='data', baseline=0, fit_mode='rms'):
+def loss_retinal_weight(theta_vec, avg_data_R, model_type='data', baseline=0, fit_mode='rms',
+                        verbose=False, stim_rng=None):
     """
     Returns (loss, S_avg). Phase-split diagnostics to reveal where exceptions occur.
     Mixed parameterization: beta_w is native; others are positive via log-space.
@@ -228,7 +232,9 @@ def loss_retinal_weight(theta_vec, avg_data_R, model_type='data', baseline=0, fi
                 block_side_probs, num_stimulus_strength,
                 min_stimulus_strength, max_stimulus_strength,
                 min_trials_per_block, max_trials_per_block,
-                max_obs_per_trial, steps_before_obs, **model_params
+                max_obs_per_trial, steps_before_obs,
+                rng=stim_rng,
+                **model_params
             )
         except Exception:
             _exc_counters['stimuli'] += 1
@@ -243,7 +249,8 @@ def loss_retinal_weight(theta_vec, avg_data_R, model_type='data', baseline=0, fi
             t_sim0 = time.perf_counter()
             results = run_model(
                 model_type, stimuli, trial_strengths, trial_sides, block_sides, blocks_per_session,
-                dt, steps_before_obs, only_initial=False, **model_params
+                steps_before_obs=steps_before_obs, only_initial=False,
+                verbose=verbose, backend='auto', **model_params
             )
             diag['t_sim'] += time.perf_counter() - t_sim0
         except Exception:
@@ -307,12 +314,28 @@ def loss_retinal_weight_verbose(theta_vec, avg_data_R, baseline=0, fit_mode='rms
             plot_S_diff_by_contrast_side_with_data(S_avg, None, avg_data_R, baseline)
     return float(loss)
 
-def _tracked_loss(theta_vec, avg_data_R, baseline=0, fit_mode='rms', verbose=True):
+def _loss_retinal_de_worker(theta_vec):
+    """Top-level DE worker for retinal fitting (CPU-parallel, quiet)."""
+    if _LOSS_RETINAL_DE_CONTEXT is None:
+        raise RuntimeError("Stage 1 DE context not initialized")
+    ctx = _LOSS_RETINAL_DE_CONTEXT
+    loss, _ = loss_retinal_weight(
+        theta_vec, ctx['avg_data_R'], baseline=ctx['baseline'], fit_mode=ctx['fit_mode'],
+        verbose=False, stim_rng=ctx.get('stim_rng'),
+    )
+    return float(loss) if np.isfinite(loss) else 1e12
+
+
+def _tracked_loss(theta_vec, avg_data_R, baseline=0, fit_mode='rms', verbose=True,
+                  stim_rng=None, plot_curves=None):
     """
     Print params + loss each eval, update live loss plot every N steps,
     and plot curves periodically or when loss is small.
     """
-    loss, S_avg = loss_retinal_weight(theta_vec, avg_data_R, baseline=baseline, fit_mode=fit_mode)
+    loss, S_avg = loss_retinal_weight(
+        theta_vec, avg_data_R, baseline=baseline, fit_mode=fit_mode,
+        verbose=False, stim_rng=stim_rng,
+    )
 
     _eval_counter['n'] += 1
     step = _eval_counter['n']
@@ -352,8 +375,11 @@ def _tracked_loss(theta_vec, avg_data_R, baseline=0, fit_mode='rms', verbose=Tru
             _rt_plot['fig'].canvas.flush_events()
             plt.pause(0.001)
 
-    # plot curves if loss is reasonable or periodically
-    should_plot_curves = (np.isfinite(loss) and loss < 2.5) or (step % 100 == 0)
+    # plot curves if loss is reasonable or periodically (skip during quiet DE evals)
+    if plot_curves is None:
+        plot_curves = verbose
+    should_plot_curves = plot_curves and (
+        (np.isfinite(loss) and loss < 2.5) or (step % 100 == 0))
     if should_plot_curves and (S_avg is not None):
         try:
             if fit_mode == 'dist':
@@ -403,7 +429,8 @@ def fit_retinal_params_two_stage(
     de1_maxiter=120, elite_frac=0.10,
     de2_maxiter=150, top_k=8, local_maxiter=400,
     theta_log0=None, init_params=None,
-    de_popsize=15, jitter_scale=0.05, fit_mode='rms'
+    de_popsize=15, jitter_scale=0.05, fit_mode='rms',
+    n_jobs=1, deterministic_refine=False,
 ):
     """
     Two-stage optimization:
@@ -414,6 +441,10 @@ def fit_retinal_params_two_stage(
     """
     import os, json, datetime
     rng = np.random.RandomState(random_state)
+    refine_stim_rng = (
+        np.random.RandomState(int(random_state) + 100003)
+        if deterministic_refine else None
+    )
     bnds_log = _bounds_mixed()
     D = len(bnds_log)
 
@@ -442,11 +473,22 @@ def fit_retinal_params_two_stage(
 
     # ===== Stage 1: coarse DE =====
     init_pop1 = _make_init_population(bnds_log, de_popsize, rng, theta_log0, jitter_scale)
+    global _LOSS_RETINAL_DE_CONTEXT
+    if n_jobs != 1:
+        _LOSS_RETINAL_DE_CONTEXT = {
+            'avg_data_R': avg_data_R,
+            'baseline': baseline,
+            'fit_mode': fit_mode,
+            'stim_rng': None,
+        }
+        de_func = _loss_retinal_de_worker
+    else:
+        de_func = lambda th: _tracked_loss(
+            th, avg_data_R, baseline, fit_mode, verbose=False, plot_curves=False)
     de1 = differential_evolution(
-        func=lambda th: _tracked_loss(th, avg_data_R, baseline, fit_mode),
-        bounds=bnds_log, strategy='best1bin', maxiter=de1_maxiter,
+        func=de_func, bounds=bnds_log, strategy='best1bin', maxiter=de1_maxiter,
         popsize=de_popsize, init=init_pop1, polish=False,
-        updating='deferred', workers=1, seed=random_state
+        updating='deferred', workers=n_jobs, seed=random_state
     )
     de1_best = np.asarray(de1.x, float)
 
@@ -461,7 +503,8 @@ def fit_retinal_params_two_stage(
         th = np.array([L + z[i]*(U - L) for i, (L, U) in enumerate(bnds_log)], dtype=float)
         cand1.append(th)
 
-    vals1 = [_tracked_loss(th, avg_data_R, baseline, fit_mode) for th in cand1]
+    vals1 = [_tracked_loss(th, avg_data_R, baseline, fit_mode, verbose=False, plot_curves=False)
+             for th in cand1]
     k_elite = max(5, int(np.ceil(elite_frac * len(cand1))))
     elite_idx = np.argsort(vals1)[:k_elite]
     elite_thetas = [cand1[i] for i in elite_idx]
@@ -490,11 +533,22 @@ def fit_retinal_params_two_stage(
 
     # ===== Stage 2: focused DE =====
     init_pop2 = _make_init_population(bnds_shrunk, de_popsize, rng, theta_log0, jitter_scale)
+    if n_jobs != 1:
+        _LOSS_RETINAL_DE_CONTEXT = {
+            'avg_data_R': avg_data_R,
+            'baseline': baseline,
+            'fit_mode': fit_mode,
+            'stim_rng': refine_stim_rng,
+        }
+        de2_func = _loss_retinal_de_worker
+    else:
+        de2_func = lambda th: _tracked_loss(
+            th, avg_data_R, baseline, fit_mode, verbose=False,
+            stim_rng=refine_stim_rng, plot_curves=False)
     de2 = differential_evolution(
-        func=lambda th: _tracked_loss(th, avg_data_R, baseline, fit_mode),
-        bounds=bnds_shrunk, strategy='best1bin', maxiter=de2_maxiter,
+        func=de2_func, bounds=bnds_shrunk, strategy='best1bin', maxiter=de2_maxiter,
         popsize=de_popsize, init=init_pop2, polish=False,
-        updating='deferred', workers=1, seed=random_state
+        updating='deferred', workers=n_jobs, seed=random_state
     )
     de2_best = np.asarray(de2.x, float)
 
@@ -505,7 +559,9 @@ def fit_retinal_params_two_stage(
     for _ in range(top_k):
         cand2.append(de2_best + rng.normal(scale=jitter_scale, size=D))
 
-    vals2 = [_tracked_loss(th, avg_data_R, baseline, fit_mode) for th in cand2]
+    vals2 = [_tracked_loss(th, avg_data_R, baseline, fit_mode, verbose=False,
+                           stim_rng=refine_stim_rng, plot_curves=False)
+             for th in cand2]
     seed_idx = np.argsort(vals2)[:top_k]
     seeds = [np.asarray(cand2[i], float) for i in seed_idx]
 
@@ -530,7 +586,9 @@ def fit_retinal_params_two_stage(
     best_x, best_fun, best_loc = None, np.inf, None
     for th0 in seeds:
         loc = minimize(
-            fun=lambda th: _tracked_loss(th, avg_data_R, baseline, fit_mode),
+            fun=lambda th: _tracked_loss(
+                th, avg_data_R, baseline, fit_mode, verbose=False,
+                stim_rng=refine_stim_rng, plot_curves=False),
             x0=th0, method='L-BFGS-B', bounds=bnds_shrunk,
             options={'maxiter': local_maxiter, 'ftol': 1e-12, 'gtol': 1e-8, 'maxls': 100, 'eps': 1e-4}
         )
@@ -630,7 +688,8 @@ def fit_retinal_params_from_init(
 
     def _obj_free(x_free):
         th_full = _assemble_full(x_free)
-        return _tracked_loss(th_full, avg_data_R, baseline, fit_mode)
+        return _tracked_loss(th_full, avg_data_R, baseline, fit_mode,
+                             verbose=False, plot_curves=False)
 
     res = minimize(
         fun=_obj_free, x0=x0_free, method='L-BFGS-B', bounds=bnds_free,

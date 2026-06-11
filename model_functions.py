@@ -30,6 +30,30 @@ from pathlib import Path
 from collections import defaultdict
 import re
 
+# Optional Numba acceleration for the core simulator. If unavailable, the
+# pipeline transparently falls back to the pure-NumPy implementation.
+try:
+    from numba import njit as _njit
+    _HAVE_NUMBA = True
+except Exception:  # pragma: no cover - numba is an optional dependency
+    _HAVE_NUMBA = False
+
+    def _njit(*args, **kwargs):
+        """No-op @njit fallback so the kernel still imports without numba."""
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        def _wrap(func):
+            return func
+
+        return _wrap
+
+
+class _NumbaUnsupported(Exception):
+    """Raised internally when a run configuration is not supported by the
+    Numba kernel, so the dispatcher can fall back to NumPy."""
+    pass
+
 # Commented out to avoid pickling issues with joblib parallel execution.
 # The functions we need (load_group, load_combined_data, run_align, _debias_selected_vector)
 # have been copied directly into this file above.
@@ -112,9 +136,8 @@ pth_res.mkdir(parents=True, exist_ok=True)
 pth_dmn = Path(one.cache_dir, 'dmn', 'res')
 pth_dmn.mkdir(parents=True, exist_ok=True)
 
-save_dir = '/Users/ariliu/Desktop/ibl-figures'
-# save_dir = Path(one.cache_dir, 'model')
-# save_dir.mkdir(parents=True, exist_ok=True)
+save_dir = Path(one.cache_dir, 'models')
+save_dir.mkdir(parents=True, exist_ok=True)
 
 meta_splits={
     'duringstim': ['block_duringstim_r_choice_r_f1', 'block_duringstim_l_choice_l_f1',
@@ -1072,6 +1095,399 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
         }
 
 
+# ---------------------------------------------------------------------------
+# Numba-accelerated simulator
+#
+# `_run_model_kernel` is a faithful, JIT-compiled port of the per-step
+# dynamics in `_run_model_numpy` for the configuration used during fitting
+# (linear/tanh/sigmoid nonlinearity, no `only_initial`, no `debug`). It works
+# on flat contiguous arrays so the Python-level trial/step loops compile away.
+# `_run_model_numba` prepares the inputs and reassembles the exact same result
+# dict that `_run_model_numpy` returns. Numerical results match NumPy to
+# floating-point round-off because the operation order is preserved.
+# ---------------------------------------------------------------------------
+_NONLIN_CODES = {'linear': 0, 'tanh': 1, 'sigmoid': 2}
+
+
+@_njit(cache=True)
+def _nl(x, code):
+    if code == 0:
+        return x
+    elif code == 1:
+        return np.tanh(x)
+    else:
+        return 1.0 / (1.0 + np.exp(-x))
+
+
+@_njit(cache=True)
+def _nl_vec(x, code):
+    """Element-wise nonlinearity on a length-2 vector (matches NumPy broadcasting)."""
+    out = np.empty(2, dtype=np.float64)
+    out[0] = _nl(x[0], code)
+    out[1] = _nl(x[1], code)
+    return out
+
+
+@_njit(cache=True)
+def _j_apply(v):
+    """J @ v for J = [[1,-1],[-1,1]] — same as NumPy ``J @ v``."""
+    out = np.empty(2, dtype=np.float64)
+    out[0] = v[0] - v[1]
+    out[1] = v[1] - v[0]
+    return out
+
+
+@_njit(cache=True)
+def _jg_apply(S0d, g_s, del_P):
+    """(J + g_s * diag(del_P)) @ S0d — matches NumPy ``(J + g_s * P_gain) @ S0_delayed``."""
+    out = _j_apply(S0d)
+    out[0] += g_s * del_P * S0d[0]
+    out[1] += g_s * del_P * S0d[1]
+    return out
+
+
+@_njit(cache=True)
+def _si_input(W_is, g_i, del_P, S):
+    """(W_is * J + g_i * diag(del_P)) @ S."""
+    jS = _j_apply(S)
+    out = np.empty(2, dtype=np.float64)
+    out[0] = W_is * jS[0] + g_i * del_P * S[0]
+    out[1] = W_is * jS[1] + g_i * del_P * S[1]
+    return out
+
+
+@_njit(cache=True)
+def _run_model_kernel(
+    stim, contrast_mag, trial_side, theta_c_tr, theta_d_tr,
+    L, steps_before_obs, min_trial_steps_unused,
+    dt, tau_s, tau_i, tau_p, tau_m, tau_a,
+    W_ss, W_ii, W_pp, W_mm, W_is, W_mi, W_pi, W_as,
+    g_s, g_i, g_m, d_s, d_i, d_m,
+    alpha_d, beta_d, default_dt,
+    baseline, stim_adap, direct_offset, nonlin_code,
+    prestim_offset_start, post_action_steps,
+):
+    Ntr = stim.shape[0]
+    Ntot = Ntr * L
+
+    Sout = np.empty((Ntot, 2))
+    Iout = np.empty((Ntot, 2))
+    Pout = np.empty((Ntot, 2))
+    Mout = np.empty((Ntot, 2))
+    aout = np.empty((Ntot, 2))
+    perceived = np.empty((Ntot, 2))
+    actionsig = np.empty(Ntot)
+
+    trial_len = np.zeros(Ntr, dtype=np.int64)
+    choice_arr = np.zeros(Ntr, dtype=np.int64)
+    correct_arr = np.zeros(Ntr, dtype=np.int64)
+    rt_arr = np.zeros(Ntr, dtype=np.int64)
+    atime_arr = np.full(Ntr, -1, dtype=np.int64)
+    subprior_mean = np.zeros(Ntr)
+
+    # persistent states (carry across trials/blocks) — length-2 vectors like NumPy
+    S = np.array([baseline, baseline])
+    S_ = np.array([baseline, baseline])
+    I = np.array([baseline, baseline])
+    I_ = np.array([baseline, baseline])
+    P = np.array([baseline, baseline])
+    M = np.array([baseline, baseline])
+    M_ = np.array([baseline, baseline])
+    a = np.array([1.0, 1.0])
+    zero2 = np.zeros(2)
+
+    finite_ok = 1
+    g = 0  # global step index (== `t` in the NumPy version)
+
+    for tr in range(Ntr):
+        cmag = contrast_mag[tr]
+        delay_cont_base = alpha_d / (1.0 + beta_d * cmag)
+        delay_ms = delay_cont_base * default_dt
+        delay = int(round(delay_ms / dt))
+        if delay < 0:
+            delay = 0
+
+        theta_c = theta_c_tr[tr]
+        theta_d = theta_d_tr[tr]
+        tside = trial_side[tr]
+
+        trial_rt = 0
+        sp_sum = 0.0
+        sp_cnt = 0
+        ch = 0
+        corr = 0
+        atime = -1
+
+        k = 0
+        trial_complete = 0
+        while trial_complete == 0 and k < L:
+            S0 = stim[tr, k]
+
+            if stim_adap:
+                abs_S_ = np.empty(2, dtype=np.float64)
+                abs_S_[0] = abs(S_[0])
+                abs_S_[1] = abs(S_[1])
+                a = a + (dt / tau_a) * _nl_vec(-(a - 1.0) - a * W_as * abs_S_, nonlin_code)
+
+            # concordant/discordant prior gain + threshold (pre-update, like NumPy)
+            dS = S[0] - S[1]
+            dP = P[0] - P[1]
+            if dS * dP >= 0.0:
+                del_P = abs(dP)
+                action_threshold = theta_c
+            else:
+                del_P = -abs(dP)
+                action_threshold = theta_d
+
+            if k >= (steps_before_obs - prestim_offset_start):
+                P_offset = _j_apply(P)
+            else:
+                P_offset = zero2
+
+            if delay > 0:
+                if k >= (delay + steps_before_obs):
+                    S0_delayed = perceived[g - delay]
+                else:
+                    S0_delayed = zero2
+            else:
+                S0_delayed = S0
+
+            Jg = _jg_apply(S0_delayed, g_s, del_P)
+            aJg = np.empty(2, dtype=np.float64)
+            aJg[0] = a[0] * Jg[0]
+            aJg[1] = a[1] * Jg[1]
+
+            if direct_offset:
+                S_ = S_ + (dt / tau_s) * _nl_vec(
+                    -S_ + W_ss * _j_apply(S_) + aJg, nonlin_code)
+                S = S_ + d_s * P_offset
+                IS = _si_input(W_is, g_i, del_P, S)
+                I_ = I_ + (dt / tau_i) * _nl_vec(-I_ + W_ii * _j_apply(I_) + IS, nonlin_code)
+                I = I_ + d_i * P_offset
+                MI = _si_input(W_mi, g_m, del_P, I)
+                M_ = M_ + (dt / tau_m) * _nl_vec(-M_ + W_mm * _j_apply(M_) + MI, nonlin_code)
+                M = M_ + d_m * P_offset
+            else:
+                S = S + (dt / tau_s) * _nl_vec(
+                    -S + W_ss * _j_apply(S) + d_s * P_offset + aJg, nonlin_code)
+                S_ = S
+                IS = _si_input(W_is, g_i, del_P, S)
+                I = I + (dt / tau_i) * _nl_vec(
+                    -I + W_ii * _j_apply(I) + d_i * P_offset + IS, nonlin_code)
+                I_ = I
+                MI = _si_input(W_mi, g_m, del_P, I)
+                M = M + (dt / tau_m) * _nl_vec(
+                    -M + W_mm * _j_apply(M) + d_m * P_offset + MI, nonlin_code)
+                M_ = M
+
+            jI = _j_apply(I)
+            P = P + (dt / tau_p) * _nl_vec(-P + W_pp * _j_apply(P) + W_pi * jI, nonlin_code)
+
+            Sout[g, 0] = S[0]; Sout[g, 1] = S[1]
+            Iout[g, 0] = I[0]; Iout[g, 1] = I[1]
+            Pout[g, 0] = P[0]; Pout[g, 1] = P[1]
+            Mout[g, 0] = M[0]; Mout[g, 1] = M[1]
+            aout[g, 0] = a[0]; aout[g, 1] = a[1]
+            perceived[g, 0] = S0[0]; perceived[g, 1] = S0[1]
+
+            sp_sum += (P[0] - P[1])
+            sp_cnt += 1
+
+            action = np.tanh(M[0] - M[1])
+            actionsig[g] = action
+
+            if (trial_rt > 0) and (k > (trial_rt + steps_before_obs + post_action_steps - 1)):
+                trial_complete = 1
+            elif k > steps_before_obs:
+                if abs(action) >= (action_threshold + 1e-6):
+                    if trial_rt == 0:
+                        if action < 0.0:  # right
+                            ch = 1
+                            corr = 1 if (tside == 1) else 0
+                            trial_rt = k + 1 - steps_before_obs
+                            atime = g
+                        else:  # left
+                            ch = -1
+                            corr = 1 if (tside == -1) else 0
+                            trial_rt = k + 1 - steps_before_obs
+                            atime = g
+                else:
+                    if (k == (L - 1)) and (trial_rt == 0):
+                        ch = 0
+                        corr = 0
+                        trial_rt = k + 1 - steps_before_obs
+
+            k += 1
+            g += 1
+
+        trial_len[tr] = k
+        choice_arr[tr] = ch
+        correct_arr[tr] = corr
+        rt_arr[tr] = trial_rt
+        atime_arr[tr] = atime
+        if sp_cnt > 0:
+            subprior_mean[tr] = sp_sum / sp_cnt
+
+        ok = (np.isfinite(S[0]) and np.isfinite(S[1]) and np.isfinite(I[0]) and np.isfinite(I[1])
+              and np.isfinite(P[0]) and np.isfinite(P[1]) and np.isfinite(M[0]) and np.isfinite(M[1]))
+        if not ok:
+            finite_ok = 0
+            break
+
+    return (Sout, Iout, Pout, Mout, aout, perceived, actionsig,
+            trial_len, choice_arr, correct_arr, rt_arr, atime_arr, subprior_mean,
+            finite_ok, g)
+
+
+def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_sides,
+                     blocks_per_session, steps_before_obs,
+                     punishment=-0.1, wait_penalty=0, only_initial=False,
+                     debug=False, verbose=True, **model_params):
+    """NumPy-faithful, Numba-accelerated driver. Falls back (via
+    `_NumbaUnsupported`) for configurations the kernel does not cover."""
+    if only_initial or debug:
+        raise _NumbaUnsupported("only_initial/debug not supported by numba backend")
+
+    nonlin_type = model_params['nonlin_type']
+    if nonlin_type not in _NONLIN_CODES:
+        raise _NumbaUnsupported(f"nonlin_type {nonlin_type!r} not supported")
+    nonlin_code = _NONLIN_CODES[nonlin_type]
+
+    dt = float(_get_dt_from_model_params(model_params))
+    d_s, d_i, d_m, g_s, g_i, g_m = set_model_parameters(model_type, **model_params)
+    if verbose:
+        print('model', model_type,
+              'offset_s, offset_i, offset_m, gain_s, gain_i, gain_m:',
+              d_s, d_i, d_m, g_s, g_i, g_m, 'nonlin_type:', nonlin_type)
+        print('direct_offset:', model_params['direct_offset'], '(numba backend)')
+
+    action_thresholds = model_params['action_thresholds']
+    is_thr_dict = isinstance(action_thresholds, dict)
+
+    # ---- flatten the (possibly ragged) per-block lists into dense arrays ----
+    try:
+        n_blocks = int(blocks_per_session)
+        L = int(np.asarray(stimuli[0]).shape[1])
+        Ntr = 0
+        for i in range(n_blocks):
+            blk = np.asarray(stimuli[i])
+            if blk.ndim != 3 or blk.shape[1] != L or blk.shape[2] != 2:
+                raise _NumbaUnsupported("unexpected stimuli shape")
+            Ntr += blk.shape[0]
+    except _NumbaUnsupported:
+        raise
+    except Exception as exc:
+        raise _NumbaUnsupported(f"cannot flatten stimuli: {exc}")
+
+    stim = np.empty((Ntr, L, 2), dtype=np.float64)
+    contrast_mag = np.empty(Ntr, dtype=np.float64)
+    trial_side = np.empty(Ntr, dtype=np.float64)
+    block_side = np.empty(Ntr, dtype=np.float64)
+    theta_c_tr = np.empty(Ntr, dtype=np.float64)
+    theta_d_tr = np.empty(Ntr, dtype=np.float64)
+
+    idx = 0
+    try:
+        for i in range(n_blocks):
+            blk = np.ascontiguousarray(stimuli[i], dtype=np.float64)
+            nt = blk.shape[0]
+            for j in range(nt):
+                stim[idx] = blk[j]
+                c = float(trial_strengths[i][j][0])
+                cm = abs(c)
+                contrast_mag[idx] = cm
+                trial_side[idx] = float(trial_sides[i][j][0])
+                block_side[idx] = float(block_sides[i][j][0])
+                if is_thr_dict:
+                    theta_c_tr[idx] = float(action_thresholds['concordant'][cm])
+                    theta_d_tr[idx] = float(action_thresholds['discordant'][cm])
+                else:
+                    theta_c_tr[idx] = float(action_thresholds)
+                    theta_d_tr[idx] = float(action_thresholds)
+                idx += 1
+    except _NumbaUnsupported:
+        raise
+    except Exception as exc:
+        raise _NumbaUnsupported(f"cannot build trial arrays: {exc}")
+
+    (Sout, Iout, Pout, Mout, aout, perceived, actionsig,
+     trial_len, choice_arr, correct_arr, rt_arr, atime_arr, subprior_mean,
+     finite_ok, ntot) = _run_model_kernel(
+        stim, contrast_mag, trial_side, theta_c_tr, theta_d_tr,
+        L, int(steps_before_obs), int(_min_trial_steps(dt)),
+        dt, float(model_params['tau_s']), float(model_params['tau_i']),
+        float(model_params['tau_p']), float(model_params['tau_m']),
+        float(model_params['tau_a']),
+        float(model_params['W_ss']), float(model_params['W_ii']),
+        float(model_params['W_pp']), float(model_params['W_mm']),
+        float(model_params['W_is']), float(model_params['W_mi']),
+        float(model_params['W_pi']), float(model_params['W_as']),
+        float(g_s), float(g_i), float(g_m), float(d_s), float(d_i), float(d_m),
+        float(model_params['alpha_d']), float(model_params['beta_d']), float(_DEFAULT_DT),
+        float(model_params['baseline']), bool(model_params['stim_adap']),
+        bool(model_params['direct_offset']), int(nonlin_code),
+        int(model_params['prestim_offset_start']), int(model_params['post_action_steps']),
+    )
+
+    if not finite_ok:
+        if verbose:
+            print('core state became non-finite')
+        keys = ["S", "I", "P", "M", "a", "choices", "reward", "correct_action_taken",
+                "reaction_time", "trial_sides", "block_sides", "choice_sides",
+                "trial_strengths", "perceived_stim", "sub_prior", "action_time",
+                "action_signal"]
+        return {k: np.nan for k in keys}
+
+    # ---- reassemble the per-trial lists exactly as the NumPy backend does ----
+    S = Sout[:ntot]
+    I = Iout[:ntot]
+    P = Pout[:ntot]
+    M = Mout[:ntot]
+    a = aout[:ntot]
+    perceived_stim = perceived[:ntot]
+    action_signal = actionsig[:ntot]
+
+    trial_sides_for_plot = []
+    block_sides_for_plot = []
+    choice_sides_for_plot = []
+    trial_strengths_for_plot = []
+    sub_prior = []
+    choices = []
+    reward = []  # kept for API parity; not used by loss/aggregation code
+    correct_action_taken = []
+    reaction_time = []
+    action_time = []
+
+    for tr in range(Ntr):
+        k = int(trial_len[tr])
+        trial_sides_for_plot.append(np.tile(trial_side[tr], k))
+        block_sides_for_plot.append(np.tile(block_side[tr], k))
+        choice_sides_for_plot.append(np.tile(float(choice_arr[tr]), k))
+        trial_strengths_for_plot.append(np.tile(contrast_mag[tr], k))
+        sub_prior.append(np.tile(subprior_mean[tr], k))
+        choices.append(int(choice_arr[tr]))
+        correct_action_taken.append(int(correct_arr[tr]))
+        reaction_time.append(int(rt_arr[tr]))
+        if atime_arr[tr] >= 0:
+            action_time.append(int(atime_arr[tr]))
+
+    return {
+        "S": S, "I": I, "P": P, "M": M, "a": a,
+        "choices": choices,
+        "reward": reward,
+        "correct_action_taken": correct_action_taken,
+        "reaction_time": reaction_time,
+        "trial_sides": trial_sides_for_plot,
+        "block_sides": block_sides_for_plot,
+        "choice_sides": choice_sides_for_plot,
+        "trial_strengths": trial_strengths_for_plot,
+        "perceived_stim": perceived_stim,
+        "sub_prior": sub_prior,
+        "action_time": action_time,
+        "action_signal": action_signal,
+    }
+
+
 def _contains_torch(obj):
     if isinstance(obj, torch.Tensor):
         return True
@@ -1147,12 +1563,19 @@ def run_model(model_type, stimuli, trial_strengths, trial_sides, block_sides,
               punishment=-0.1, wait_penalty=0, only_initial=False,
               debug=False, verbose=True,
               gradient_mode=False, grad_options=None,
+              backend='auto',
               **model_params):
     """
     Run the model simulation.
     
     Args:
         steps_before_obs: Steps before observation. If None, computed from dt.
+        backend: Simulator backend for the non-gradient path. One of
+            'auto' (default; use the Numba-accelerated kernel when available and
+            the configuration is supported, otherwise NumPy), 'numba' (force the
+            JIT kernel, error if unavailable), or 'numpy' (force the reference
+            implementation). The Numba and NumPy backends are numerically
+            identical up to floating-point round-off.
         **model_params: Model parameters. Must include 'dt' (time step in ms) or 
                        it will use the global default dt.
     
@@ -1171,7 +1594,7 @@ def run_model(model_type, stimuli, trial_strengths, trial_sides, block_sides,
     
     # Update all dt-dependent parameters in model_params
     # This ensures tau, post_action_steps, etc. are correct for the current dt
-    # _update_model_params_for_dt(model_params, dt)
+    _update_model_params_for_dt(model_params, dt)
     
     """
     Run the brain-wide map dynamical model.
@@ -1211,6 +1634,24 @@ def run_model(model_type, stimuli, trial_strengths, trial_sides, block_sides,
             punishment=punishment, wait_penalty=wait_penalty,
             only_initial=only_initial, debug=debug,
             grad_options=grad_options, **model_params)
+
+    backend_l = (backend or 'auto').lower()
+    if backend_l not in ('auto', 'numba', 'numpy'):
+        raise ValueError(f"backend must be 'auto', 'numba', or 'numpy'; got {backend!r}")
+
+    if backend_l in ('auto', 'numba') and _HAVE_NUMBA:
+        try:
+            return _run_model_numba(
+                model_type, stimuli, trial_strengths, trial_sides, block_sides,
+                blocks_per_session, steps_before_obs,
+                punishment=punishment, wait_penalty=wait_penalty,
+                only_initial=only_initial, debug=debug, verbose=verbose, **model_params)
+        except _NumbaUnsupported:
+            if backend_l == 'numba':
+                raise
+            # 'auto' -> silently fall back to the NumPy reference implementation
+    elif backend_l == 'numba' and not _HAVE_NUMBA:
+        raise ImportError("backend='numba' requested but numba is not installed")
 
     return _run_model_numpy(
         model_type, stimuli, trial_strengths, trial_sides, block_sides,

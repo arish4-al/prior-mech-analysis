@@ -43,7 +43,8 @@ pth_res.mkdir(parents=True, exist_ok=True)
 pth_avg = Path(one.cache_dir, 'manifold', 'avgs') 
 pth_avg.mkdir(parents=True, exist_ok=True)
 
-save_dir = '/Users/ariliu/Desktop/ibl-figures'
+save_dir = Path(one.cache_dir, 'manifold', 'figs')
+save_dir.mkdir(parents=True, exist_ok=True)
 
 
 # set default plot style

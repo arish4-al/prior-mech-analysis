@@ -1,14 +1,18 @@
 numpy
+torch
 scipy
 pandas
 matplotlib
 seaborn
 scikit-learn
+statsmodels
 
 one-api
 brainbox
-brainwidemap # from IBL's paper-brain-wide-map repo
+brainwidemap # adapted from IBL's paper-brain-wide-map repo
 iblatlas
+ibllib
+iblutil
 
 Pillow
 python-dateutil
@@ -16,3 +20,5 @@ adjustText
 
 cma
 ipython
+joblib
+numba

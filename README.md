@@ -1,6 +1,6 @@
 # Prior Mechanism Analysis
 
-Analysis tools and model fitting code for studying the mechanisms of prior in decision-making using neural data from the International Brain Lab (IBL) brain-wide map dataset (https://www.nature.com/articles/s41586-025-09235-0).
+Analysis tools and model fitting code for studying prior mechanisms in decision-making using neural data from the International Brain Lab (IBL) brain-wide map dataset (https://www.nature.com/articles/s41586-025-09235-0).
 
 **Preprint:** [https://www.biorxiv.org/content/10.64898/2025.12.15.694430v1](https://www.biorxiv.org/content/10.64898/2025.12.15.694430v1)
 
@@ -20,13 +20,13 @@ Requires access to the IBL brain-wide map dataset (https://docs.internationalbra
 ## Main Scripts
 
 - `block_analysis_allsplits.py` - Computes prior sensitivity metrics across brain regions
-- `analysis_functions.py` - Analysis and plotting utilities
-- `analysis_figs.ipynb` - Notebook for generating analysis figures
-- `model_functions.py` - Model implementation and simulation
 - `fit_retinal.py` - Stage 1: Fits retinal front-end parameters
 - `fit_weights.py` - Stage 2: Fits network weights and gains
+- `model_functions.py` - Model implementation and simulation
+- `analysis_functions.py` - Analysis and plotting utilities
+- `analysis_figs.ipynb` - Notebook for generating analysis figures
 
 ## Usage
 
-See individual script files for usage examples. Results are saved to `one.cache_dir/manifold/res/` for analysis and timestamped directories under `save_dir` for model fitting.
+See individual script files for usage examples. Analysis results are saved to `one.cache_dir/manifold/res/`. Figures are saved to `one.cache_dir/manifold/figs/`, and model fitting outputs to `one.cache_dir/models/` (including timestamped `fit_run_*` and `weights_run_*` subdirectories).
 

@@ -73,6 +73,9 @@ diag = {                         # diagnostics counters
 # context for Stage 1 DE CPU-parallel evaluation
 _LOSS_ACTIVE_DE_CONTEXT = None
 
+# Optional cached stimulus batch (tuple passed to run_model) for stage-2 refine
+_STIMULI_BUNDLE_CACHE = None
+
 # plotting helper functions
 def enable_realtime_plot(every=10, title="Loss vs evaluation steps", inline=True):
     plt.ion()
@@ -565,10 +568,24 @@ def _nan_or_exploded(x):
 
 
 # track losses
+def build_stimuli_bundle(bps, stim_rng=None, **create_kw):
+    """Create and return a reusable stimulus tuple for repeated loss evaluations."""
+    stimuli, trial_strengths, perceived_trial_strengths, trial_sides, block_sides = create_stimuli(
+        bps, trials_per_block_param,
+        block_side_probs, num_stimulus_strength,
+        min_stimulus_strength, max_stimulus_strength,
+        min_trials_per_block, max_trials_per_block,
+        max_obs_per_trial, steps_before_obs,
+        rng=stim_rng,
+        **create_kw,
+    )
+    return stimuli, trial_strengths, trial_sides, block_sides
+
+
 def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          model_type='data', plot=False, debug=False, return_details=False,
                          blocks_per_session_override=None, verbose=True,
-                         stim_rng=None):
+                         stim_rng=None, stimuli_bundle=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
     Combines trajectory, prior-effect, and behavioral losses.
@@ -577,6 +594,7 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
     Args:
         blocks_per_session_override: If provided, use this instead of global blocks_per_session.
         stim_rng: Optional numpy RandomState to use for deterministic stimulus generation.
+        stimuli_bundle: Optional pre-built (stimuli, trial_strengths, trial_sides, block_sides).
     """
     try:
         # Use override if provided, otherwise use global
@@ -606,14 +624,18 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
 
         # ---------- STIMULI ----------
         try:
-            stimuli, trial_strengths, perceived_trial_strengths, trial_sides, block_sides = create_stimuli(
-                bps, trials_per_block_param,
-                block_side_probs, num_stimulus_strength,
-                min_stimulus_strength, max_stimulus_strength,
-                min_trials_per_block, max_trials_per_block,
-                max_obs_per_trial, steps_before_obs,
-                rng=stim_rng,
-                **model_params)
+            bundle = stimuli_bundle if stimuli_bundle is not None else _STIMULI_BUNDLE_CACHE
+            if bundle is not None:
+                stimuli, trial_strengths, trial_sides, block_sides = bundle
+            else:
+                stimuli, trial_strengths, perceived_trial_strengths, trial_sides, block_sides = create_stimuli(
+                    bps, trials_per_block_param,
+                    block_side_probs, num_stimulus_strength,
+                    min_stimulus_strength, max_stimulus_strength,
+                    min_trials_per_block, max_trials_per_block,
+                    max_obs_per_trial, steps_before_obs,
+                    rng=stim_rng,
+                    **model_params)
         except Exception:
             if debug:
                 import traceback
@@ -633,6 +655,7 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 gradient_mode=False,
                 grad_options=None,
                 verbose=verbose,
+                backend='auto',
                 **model_params,
             )
         except Exception:
@@ -706,7 +729,6 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
 
 
 def _safe_loss_weights_v2(theta_log, *args, **kwargs):
-    # Extract verbose from kwargs if present, pass it through to loss_weights_core_v2
     verbose = kwargs.pop('verbose', True) if 'verbose' in kwargs else True
     v = loss_weights_core_v2(theta_log, *args, verbose=verbose, **kwargs)
     if not np.isfinite(v):
@@ -769,7 +791,7 @@ def _loss_active_de_worker(x_act):
 def _tracked_loss_weights_v2(theta_log, mean_data_results, prior_regions, behavior, debug=False,
                              model_type='data', plot=False, verbose=True, SAVE_THRESH_V2=0.4,
                              random_state=None, train_mask=None, blocks_per_session_override=None,
-                             stim_rng=None):
+                             stim_rng=None, stimuli_bundle=None):
     """
     Logs params + loss each evaluation, updates live loss trace,
     and plots model vs data (I,P,M) when loss < SAVE_THRESH_V2 or every 100 steps.
@@ -779,13 +801,14 @@ def _tracked_loss_weights_v2(theta_log, mean_data_results, prior_regions, behavi
         verbose: If True, print loss and parameters. Set to False to disable printing
                  during parallel evaluation to avoid I/O contention.
         stim_rng: Optional numpy RandomState to use for deterministic stimulus generation.
+        stimuli_bundle: Optional pre-built stimulus tuple (see build_stimuli_bundle).
     """
-    # Pass verbose to disable printing in run_model and loss_weights_core_v2
     loss = _safe_loss_weights_v2(theta_log, mean_data_results, prior_regions, behavior,
                                  model_type=model_type, plot=False, debug=debug,
                                  blocks_per_session_override=blocks_per_session_override,
                                  verbose=verbose,
-                                 stim_rng=stim_rng)  # keep core eval cheap
+                                 stim_rng=stim_rng,
+                                 stimuli_bundle=stimuli_bundle)
     _eval_counter['n'] += 1
     step = _eval_counter['n']
     loss_history.append(float(loss))
@@ -938,6 +961,15 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         stage2_stim_seed = int(random_state) + 100003  # any deterministic offset is fine
     else:
         stage2_stim_seed = None
+
+    stage2_stimuli_bundle = None
+    if stage2_stim_seed is not None and blocks_per_session_stage2 is not None:
+        stage2_stimuli_bundle = build_stimuli_bundle(
+            blocks_per_session_stage2,
+            stim_rng=np.random.RandomState(stage2_stim_seed),
+            **model_params,
+        )
+
     full_bounds = _log_bounds_weights_v2()
     D_full = len(full_bounds)
 
@@ -1084,17 +1116,13 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         th_full = full_from_active(x_act)
         verbose_val = verbose if verbose is not None else True
 
-        if deterministic_stage2 and (stage2_stim_seed is not None):
-            stim_rng = np.random.RandomState(stage2_stim_seed)
-        else:
-            stim_rng = None
-
         return _tracked_loss_weights_v2(
             th_full, mean_data_results, prior_regions, behavior,
             model_type=model_type, plot=False, verbose=verbose_val,
             random_state=random_state, train_mask=train_mask,
             blocks_per_session_override=blocks_per_session_stage2,
-            stim_rng=stim_rng,
+            stim_rng=None,
+            stimuli_bundle=stage2_stimuli_bundle,
         )
 
     def _make_init_population(bounds, popsize, rng, x0=None, jitter=0.05):
