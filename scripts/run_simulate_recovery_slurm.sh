@@ -11,7 +11,7 @@
 #SBATCH -o simulate_recovery_%j.out
 
 # Circuit generative recovery: 40 sessions x 6 blocks, nrand=2000, absence + presence.
-# Default: S-prior distance only (4 splits, population S), null shuffles parallelized.
+# Default: S-prior distance only; g_s=10 presence (tuned), d_s=d_i fitted; paired seed.
 # Submit from prior-mech-analysis repo root:
 #   sbatch scripts/run_simulate_recovery_slurm.sh
 #

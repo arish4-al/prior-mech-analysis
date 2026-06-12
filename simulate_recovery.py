@@ -61,6 +61,8 @@ WEIGHTS_REL = Path(
 MODEL_POPULATIONS = ("S", "I", "M", "P")
 POPULATION_TYPE = {"S": "S", "I": "I", "M": "M", "P": "P"}
 PRIOR_OFFSET_BINS = 5
+# Tuned on 20-session sweep (see circuit_generative_recovery plan): best S amp ratio vs absence.
+TUNED_G_S_PRESENCE = 10.0
 
 
 def _one_cache_dir_candidates():
@@ -1016,6 +1018,109 @@ def _gain_late_mean_for_curve(curve, nulls, alpha=0.01, n_early=PRIOR_OFFSET_BIN
     return _prior_gain_stats(curve, nulls, alpha=alpha, n_early=n_early)["gain_late_mean"]
 
 
+def _direct_early_mean(curve, n_early=PRIOR_OFFSET_BINS):
+    """Mean of the first n_early bins on the real curve (no label shuffle)."""
+    curve = np.asarray(curve, dtype=float)
+    n_early = min(n_early, len(curve))
+    if n_early < 1:
+        return np.nan
+    return float(np.mean(curve[:n_early]))
+
+
+def _direct_gain_late_mean(curve, n_early=PRIOR_OFFSET_BINS):
+    """
+    Mean of bins 4+ after subtracting this curve's early-bin mean.
+
+    Same bin window as p_gain, but offset removal uses only the real curve —
+  no label-shuffle nulls.
+    """
+    curve = np.asarray(curve, dtype=float)
+    if len(curve) <= 4:
+        return np.nan
+    n_early = min(n_early, len(curve))
+    offset = float(np.mean(curve[:n_early]))
+    shifted = curve - offset
+    return float(np.mean(shifted[4:]))
+
+
+def _one_sided_sign_p(diffs):
+    """One-sided p-value: P(diff > 0) under split-level sign-flip null (no label shuffle)."""
+    diffs = [float(d) for d in diffs if np.isfinite(d)]
+    if not diffs:
+        return np.nan
+    k = sum(d > 0 for d in diffs)
+    n = len(diffs)
+    try:
+        from scipy.stats import binomtest
+
+        return float(binomtest(k, n, 0.5, alternative="greater").pvalue)
+    except ImportError:
+        from math import comb
+
+        return sum(comb(n, i) for i in range(k, n + 1)) / (2**n)
+
+
+def s_prior_metrics_per_split(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
+    """Per-split S prior metrics on real curves (for paired presence vs absence tests)."""
+    _, _, splits = _combined_names(timeframe)
+    out = {}
+    for split in splits:
+        regde_path = Path(pth_res) / f"{split}_regde.npy"
+        if not regde_path.exists():
+            continue
+        regde = np.load(regde_path, allow_pickle=True).item()
+        if "S" not in regde:
+            continue
+        curves = np.asarray(regde["S"], dtype=float)
+        if curves.ndim == 1:
+            real = curves
+            nulls = np.empty((0, len(real)))
+        else:
+            real = curves[0]
+            nulls = curves[1:]
+        nulls = np.atleast_2d(nulls)
+        offset = _prior_offset_stats(real, nulls)
+        gain = _prior_gain_stats(real, nulls, alpha=alpha)
+        out[split] = {
+            "curve_mean": float(np.mean(real)),
+            "early_mean_direct": _direct_early_mean(real),
+            "gain_late_mean_direct": _direct_gain_late_mean(real),
+            "p_mean": float(np.mean(np.mean(nulls, axis=1) >= np.mean(real))),
+            "p_offset": offset["p_offset"],
+            "p_gain": gain["p_gain"],
+        }
+    return out
+
+
+def pres_abs_p_values_direct(abs_splits, pres_splits):
+    """
+    Presence vs absence p-values from paired per-split differences.
+
+    One-sided sign test across act_block_duringstim splits (no label-shuffle nulls).
+    """
+    splits = sorted(set(abs_splits) & set(pres_splits))
+    if not splits:
+        return {
+            "p_pres_abs_mean": np.nan,
+            "p_pres_abs_early": np.nan,
+            "p_pres_abs_gain": np.nan,
+            "n_splits": 0,
+        }
+
+    def diffs(key):
+        return [pres_splits[s][key] - abs_splits[s][key] for s in splits]
+
+    return {
+        "p_pres_abs_mean": _one_sided_sign_p(diffs("curve_mean")),
+        "p_pres_abs_early": _one_sided_sign_p(diffs("early_mean_direct")),
+        "p_pres_abs_gain": _one_sided_sign_p(diffs("gain_late_mean_direct")),
+        "n_splits": len(splits),
+        "split_diffs_mean": diffs("curve_mean"),
+        "split_diffs_early": diffs("early_mean_direct"),
+        "split_diffs_gain": diffs("gain_late_mean_direct"),
+    }
+
+
 def s_only_prior_test(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
     """
     S-only block prior test using act_block_duringstim curves (no FDR across populations).
@@ -1044,6 +1149,8 @@ def s_only_prior_test(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
     t_axis = np.linspace(-pre, post if post > 0 else -abs(post), len(real))
     offset = _prior_offset_stats(real, nulls)
     gain = _prior_gain_stats(real, nulls, alpha=alpha)
+    early_mean_direct = _direct_early_mean(real)
+    gain_late_mean_direct = _direct_gain_late_mean(real)
 
     return {
         "population": "S",
@@ -1055,7 +1162,9 @@ def s_only_prior_test(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
         "offset_effect": offset["offset_effect"],
         "gain_effect": gain["gain_effect"],
         "offset_mean": offset["offset_mean"],
+        "early_mean_direct": early_mean_direct,
         "gain_late_mean": gain["gain_late_mean"],
+        "gain_late_mean_direct": gain_late_mean_direct,
         "amp_euc": float(d["S"]["amp_euc"]),
         "curve_mean": real_mean,
         "curve_amp": amp_real,
@@ -1070,27 +1179,27 @@ def s_only_prior_test(pth_res, alpha=0.01, timeframe="act_block_duringstim"):
     }
 
 
-def s_prior_presence_vs_absence_direct(abs_s, pres_s, alpha=0.01):
+def s_prior_presence_vs_absence_direct(abs_s, pres_s):
     """
     Direct presence vs absence comparison on real S prior curves.
 
-    Label-shuffle nulls are not used here; they test within-condition prior
-    grouping, not generative absence vs presence differences.
+    All metrics are scalar differences on the raw combined regde real curves.
+    Label-shuffle nulls are not used (those test within-condition grouping only).
     """
     if abs_s is None or pres_s is None:
         return None
 
-    nulls_pres = np.atleast_2d(np.asarray(pres_s["null_curves"], dtype=float))
-    nulls_abs = np.atleast_2d(np.asarray(abs_s["null_curves"], dtype=float))
-
     diff_mean = float(pres_s["curve_mean"] - abs_s["curve_mean"])
     diff_amp = float(pres_s["curve_amp"] - abs_s["curve_amp"])
-    diff_offset = float(pres_s["offset_mean"] - abs_s["offset_mean"])
-    gain_pres = _gain_late_mean_for_curve(
-        pres_s["curve_real"], nulls_pres, alpha=alpha
+    diff_amp_euc = float(pres_s["amp_euc"] - abs_s["amp_euc"])
+    early_abs = abs_s.get("early_mean_direct", _direct_early_mean(abs_s["curve_real"]))
+    early_pres = pres_s.get("early_mean_direct", _direct_early_mean(pres_s["curve_real"]))
+    diff_offset = float(early_pres - early_abs)
+    gain_abs = abs_s.get(
+        "gain_late_mean_direct", _direct_gain_late_mean(abs_s["curve_real"])
     )
-    gain_abs = _gain_late_mean_for_curve(
-        abs_s["curve_real"], nulls_abs, alpha=alpha
+    gain_pres = pres_s.get(
+        "gain_late_mean_direct", _direct_gain_late_mean(pres_s["curve_real"])
     )
     diff_gain = float(gain_pres - gain_abs) if not (
         np.isnan(gain_pres) or np.isnan(gain_abs)
@@ -1099,10 +1208,12 @@ def s_prior_presence_vs_absence_direct(abs_s, pres_s, alpha=0.01):
     return {
         "diff_mean": diff_mean,
         "diff_amp": diff_amp,
+        "diff_amp_euc": diff_amp_euc,
         "diff_offset": diff_offset,
         "diff_gain": diff_gain,
         "presence_gt_absence_mean": diff_mean > 0,
         "presence_gt_absence_amp": diff_amp > 0,
+        "presence_gt_absence_amp_euc": diff_amp_euc > 0,
         "presence_gt_absence_offset": diff_offset > 0,
         "presence_gt_absence_gain": (
             diff_gain > 0 if not np.isnan(diff_gain) else False
@@ -1266,7 +1377,8 @@ def _draw_shuffle_control_panel(
         0.98,
         f"p_mean={s_prior['p_mean']:.4f}\n"
         f"p_offset={s_prior['p_offset']:.4f}\n"
-        f"p_gain={p_gain:.4f}",
+        f"p_gain={p_gain:.4f}\n"
+        "(vs label shuffle)",
         transform=ax.transAxes,
         ha="right",
         va="top",
@@ -1313,69 +1425,61 @@ def _plot_shuffle_trajectories(
 
 
 def plot_combined_shuffle_controls(base_dir, abs_s, pres_s, rng_seed=0):
-    """Overlay absence/presence distance trajectories with sampled shuffle nulls."""
+    """Side-by-side absence/presence panels: true trajectories + sampled null shuffles."""
     if abs_s is None and pres_s is None:
         return
 
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    t_ref = None
-    if abs_s is not None:
-        t_ref = abs_s["t_axis"]
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.5), sharey=True)
+    panels = [
+        ("absence", abs_s, rng_seed, "#4C72B0"),
+        ("presence", pres_s, rng_seed + 1, "#DD8452"),
+    ]
+    for ax, (cond, s_prior, seed, color) in zip(axes, panels):
+        if s_prior is None:
+            ax.set_title(f"{cond} (no data)")
+            ax.axis("off")
+            continue
+        t = s_prior["t_axis"]
         _plot_shuffle_trajectories(
             ax,
-            abs_s,
-            true_color="#4C72B0",
-            null_color="#4C72B0",
-            rng_seed=rng_seed,
-            true_label="absence (true labels)",
+            s_prior,
+            true_color=color,
+            null_color=color,
+            rng_seed=seed,
+            true_label="true labels",
         )
-    if pres_s is not None:
-        t_ref = pres_s["t_axis"] if t_ref is None else t_ref
-        _plot_shuffle_trajectories(
-            ax,
-            pres_s,
-            true_color="#DD8452",
-            null_color="#DD8452",
-            rng_seed=rng_seed + 1,
-            true_label="presence (true labels)",
+        if len(t) >= PRIOR_OFFSET_BINS:
+            ax.axvspan(t[0], t[PRIOR_OFFSET_BINS - 1], color="gray", alpha=0.1)
+        n_nulls = np.atleast_2d(s_prior["null_curves"]).shape[0]
+        n_plot = min(SHUFFLE_PLOT_N_SAMPLE, n_nulls)
+        p_gain = s_prior.get("p_gain", np.nan)
+        ax.set_title(
+            f"{cond}: true curve vs {n_plot} sampled nulls (of {n_nulls})"
         )
-    if t_ref is not None and len(t_ref) >= PRIOR_OFFSET_BINS:
-        ax.axvspan(t_ref[0], t_ref[PRIOR_OFFSET_BINS - 1], color="gray", alpha=0.1)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("S prior distance (raw)")
-    ax.set_title(
-        "S prior distance trajectories vs label-shuffle nulls\n"
-        "(model P subjective prior; faint lines = sampled nulls)"
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("S prior distance (raw)")
+        p_mean = s_prior.get("p_mean", np.nan)
+        p_offset = s_prior.get("p_offset", np.nan)
+        ax.text(
+            0.98,
+            0.98,
+            f"p_mean={p_mean:.4f}\n"
+            f"p_offset={p_offset:.4f}\n"
+            f"p_gain={p_gain:.4f}\n"
+            "(vs label shuffle)",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+            family="monospace",
+            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.88},
+        )
+        ax.legend(fontsize=7, loc="upper left")
+
+    fig.suptitle(
+        "Within-condition label-shuffle controls (p_mean / p_offset / p_gain per panel)",
+        y=1.02,
     )
-    if abs_s is not None:
-        ax.text(
-            0.98,
-            0.98,
-            f"absence\np_mean={abs_s['p_mean']:.3f}\np_offset={abs_s['p_offset']:.3f}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=8,
-            family="monospace",
-            color="#4C72B0",
-            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.88},
-        )
-    if pres_s is not None:
-        p_gain = pres_s.get("p_gain", np.nan)
-        ax.text(
-            0.98,
-            0.72,
-            f"presence\np_mean={pres_s['p_mean']:.3f}\np_offset={pres_s['p_offset']:.3f}\n"
-            f"p_gain={p_gain:.3f}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=8,
-            family="monospace",
-            color="#DD8452",
-            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.88},
-        )
-    ax.legend(fontsize=8, loc="upper left")
     fig.tight_layout()
     out = base_dir / "s_shuffle_control_combined.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -1590,6 +1694,7 @@ def process_condition(
             "condition": condition_name,
             "g_s": g_s,
             "d_s": d_s,
+            "rng_seed": rng_seed,
             "mode": "s_prior_only",
             "prior_conditioning": {
                 "prior_column": PRIOR_COLUMN,
@@ -1662,6 +1767,7 @@ def process_condition(
         "condition": condition_name,
         "g_s": g_s,
         "d_s": d_s,
+        "rng_seed": rng_seed,
         "prior_conditioning": {
             "prior_column": PRIOR_COLUMN,
             "description": "binarized model P subjective prior (mean P_L-P_R per trial)",
@@ -1747,9 +1853,10 @@ def plot_s_prior_comparison(base_dir, abs_s, pres_s, direct_cmp, sensory_prior_r
         d_i = sensory_prior_recovery.get("d_i_fitted", "?")
         txt = (
             f"fitted integrator: g_i={g_i}, d_i={d_i} | presence sensory: g_s={g_s}, d_s={d_s}\n"
-            f"pres-abs mean={direct_cmp['diff_mean']:+.2f}  "
-            f"offset={direct_cmp['diff_offset']:+.2f}  "
-            f"gain={direct_cmp.get('diff_gain', np.nan):+.2f}"
+            f"direct pres-abs: mean={direct_cmp['diff_mean']:+.2f}  "
+            f"amp(raw)={direct_cmp['diff_amp']:+.2f}  "
+            f"early={direct_cmp['diff_offset']:+.2f}  "
+            f"late={direct_cmp.get('diff_gain', np.nan):+.2f}"
         )
         fig.text(0.5, -0.02, txt, ha="center", va="top", fontsize=9, family="monospace")
 
@@ -1760,7 +1867,9 @@ def plot_s_prior_comparison(base_dir, abs_s, pres_s, direct_cmp, sensory_prior_r
     print(f"Saved S prior comparison figure to {out}")
 
 
-def _plot_pres_abs_bar_comparison(ax, abs_val, pres_val, ylabel, metric_name, diff):
+def _plot_pres_abs_bar_comparison(
+    ax, abs_val, pres_val, ylabel, metric_name, diff, p_value=None
+):
     """Grouped absence vs presence bar chart for one scalar metric."""
     x = [0, 1]
     ax.bar(x, [abs_val, pres_val], color=["#4C72B0", "#DD8452"], width=0.65)
@@ -1768,7 +1877,11 @@ def _plot_pres_abs_bar_comparison(ax, abs_val, pres_val, ylabel, metric_name, di
     ax.set_xticklabels(["absence", "presence"])
     ax.set_ylabel(ylabel)
     diff_txt = f"pres - abs = {diff:+.3g}" if not np.isnan(diff) else "pres - abs = n/a"
-    ax.set_title(f"{metric_name}\n{diff_txt}")
+    if p_value is not None and not np.isnan(p_value):
+        p_txt = f"p(pres>abs) = {p_value:.4f}"
+    else:
+        p_txt = "p(pres>abs) = n/a"
+    ax.set_title(f"{metric_name}\n{diff_txt}  |  {p_txt}")
 
 
 def plot_comparison_metrics_summary(
@@ -1776,41 +1889,55 @@ def plot_comparison_metrics_summary(
     presence,
     out_path,
 ):
-    """Three-panel absence vs presence metric bar chart."""
+    """Three-panel direct presence vs absence with split-level sign-test p-values."""
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5))
+    n_splits = sensory_prior_recovery.get("n_splits", "?")
 
     _plot_pres_abs_bar_comparison(
         axes[0],
         sensory_prior_recovery["s_curve_mean_absence"],
         sensory_prior_recovery["s_curve_mean_presence"],
-        "mean prior distance",
+        "mean prior distance (raw curve)",
         "S curve overall mean",
         sensory_prior_recovery["diff_mean"],
+        p_value=sensory_prior_recovery.get("p_pres_abs_mean"),
     )
     _plot_pres_abs_bar_comparison(
         axes[1],
-        sensory_prior_recovery["s_offset_mean_absence"],
-        sensory_prior_recovery["s_offset_mean_presence"],
-        f"mean first {PRIOR_OFFSET_BINS} bins",
+        sensory_prior_recovery["s_early_mean_absence"],
+        sensory_prior_recovery["s_early_mean_presence"],
+        f"mean first {PRIOR_OFFSET_BINS} bins (raw)",
         "S early-bin mean",
         sensory_prior_recovery["diff_offset"],
+        p_value=sensory_prior_recovery.get("p_pres_abs_early"),
     )
     _plot_pres_abs_bar_comparison(
         axes[2],
         sensory_prior_recovery["s_gain_late_mean_absence"],
         sensory_prior_recovery["s_gain_late_mean_presence"],
-        "mean bins 4+ after early offset removed",
-        "S offset-corrected late mean",
+        "mean bins 4+ after own early mean removed",
+        "S late gain (direct)",
         sensory_prior_recovery["diff_gain"],
+        p_value=sensory_prior_recovery.get("p_pres_abs_gain"),
     )
 
     gs = presence.get("g_s", "?")
     ds = presence.get("d_s", "?")
     fig.suptitle(
-        f"S sensory prior recovery: "
+        f"Direct presence − absence (paired seed; split sign-test, n={n_splits})\n"
         f"absence (g_s=0,d_s=0) vs presence (g_s={gs}, d_s={ds})",
-        y=1.04,
+        y=1.08,
         fontsize=11,
+    )
+    fig.text(
+        0.5,
+        -0.02,
+        "p(pres>abs): one-sided sign test on per-split paired differences (no label shuffle). "
+        "Within-condition shuffle p-values: s_shuffle_control_combined.png.",
+        ha="center",
+        va="top",
+        fontsize=8,
+        wrap=True,
     )
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1822,21 +1949,47 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
     absence = json.loads((base_dir / "absence" / "summary.json").read_text())
     presence = json.loads((base_dir / "presence" / "summary.json").read_text())
 
-    abs_s = s_only_prior_test(base_dir / "absence" / "res", alpha=alpha)
-    pres_s = s_only_prior_test(base_dir / "presence" / "res", alpha=alpha)
-    direct_cmp = s_prior_presence_vs_absence_direct(abs_s, pres_s, alpha=alpha)
+    abs_res = base_dir / "absence" / "res"
+    pres_res = base_dir / "presence" / "res"
+    abs_s = s_only_prior_test(abs_res, alpha=alpha)
+    pres_s = s_only_prior_test(pres_res, alpha=alpha)
+    abs_splits = s_prior_metrics_per_split(abs_res, alpha=alpha)
+    pres_splits = s_prior_metrics_per_split(pres_res, alpha=alpha)
+    pres_abs_p = pres_abs_p_values_direct(abs_splits, pres_splits)
+    direct_cmp = s_prior_presence_vs_absence_direct(abs_s, pres_s)
     s_amp_ratio = (
         pres_s["amp_euc"] / (abs_s["amp_euc"] + 1e-12) if abs_s and pres_s else np.nan
+    )
+    s_curve_amp_ratio = (
+        pres_s["curve_amp"] / (abs_s["curve_amp"] + 1e-12) if abs_s and pres_s else np.nan
     )
     g_i_fit = presence.get("g_i_fitted") or absence.get("g_i_fitted")
     d_i_fit = presence.get("d_i_fitted") or absence.get("d_i_fitted")
     if g_i_fit is None or d_i_fit is None:
         g_i_fit, d_i_fit = fitted_integrator_scales()
     sensory_prior_recovery = {
+        "comparison_method": "direct_pres_abs_split_sign_test",
+        "pres_abs_p_method": (
+            "one-sided sign test on per-split paired differences "
+            "(curve_mean, early_mean_direct, gain_late_mean_direct); no label shuffle"
+        ),
+        "within_condition_p_method": (
+            "label-shuffle nulls per condition: p_mean, p_offset, p_gain "
+            "(see s_shuffle_control_combined.png)"
+        ),
         "g_i_fitted": g_i_fit,
         "d_i_fitted": d_i_fit,
         "g_s_presence": presence.get("g_s"),
         "d_s_presence": presence.get("d_s"),
+        "paired_seed": presence.get("rng_seed") == absence.get("rng_seed"),
+        "rng_seed_absence": absence.get("rng_seed"),
+        "rng_seed_presence": presence.get("rng_seed"),
+        "n_splits": pres_abs_p.get("n_splits", 0),
+        "p_pres_abs_mean": pres_abs_p.get("p_pres_abs_mean", np.nan),
+        "p_pres_abs_early": pres_abs_p.get("p_pres_abs_early", np.nan),
+        "p_pres_abs_gain": pres_abs_p.get("p_pres_abs_gain", np.nan),
+        "s_early_mean_absence": abs_s["early_mean_direct"] if abs_s else np.nan,
+        "s_early_mean_presence": pres_s["early_mean_direct"] if pres_s else np.nan,
         "s_offset_mean_absence": abs_s["offset_mean"] if abs_s else np.nan,
         "s_offset_mean_presence": pres_s["offset_mean"] if pres_s else np.nan,
         "s_p_offset_absence": abs_s["p_offset"] if abs_s else np.nan,
@@ -1848,14 +2001,27 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
         "s_amp_absence": abs_s["amp_euc"] if abs_s else np.nan,
         "s_amp_presence": pres_s["amp_euc"] if pres_s else np.nan,
         "s_amp_ratio": float(s_amp_ratio),
+        "s_curve_amp_ratio": float(s_curve_amp_ratio),
+        "amp_euc_note": (
+            "amp_euc = max(curve - min(curve)) on combined split sums; "
+            "min-subtracted baseline — can saturate vs raw curve_amp"
+        ),
         "s_p_mean_absence": abs_s["p_mean"] if abs_s else np.nan,
         "s_p_mean_presence": pres_s["p_mean"] if pres_s else np.nan,
-        "s_gain_late_mean_absence": abs_s["gain_late_mean"] if abs_s else np.nan,
-        "s_gain_late_mean_presence": pres_s["gain_late_mean"] if pres_s else np.nan,
+        "s_p_gain_absence": abs_s["p_gain"] if abs_s else np.nan,
+        "s_p_gain_presence": pres_s["p_gain"] if pres_s else np.nan,
+        "s_gain_late_mean_absence": abs_s["gain_late_mean_direct"] if abs_s else np.nan,
+        "s_gain_late_mean_presence": pres_s["gain_late_mean_direct"] if pres_s else np.nan,
+        "s_gain_late_mean_shuffle_absence": abs_s["gain_late_mean"] if abs_s else np.nan,
+        "s_gain_late_mean_shuffle_presence": pres_s["gain_late_mean"] if pres_s else np.nan,
         "diff_mean": direct_cmp["diff_mean"] if direct_cmp else np.nan,
         "diff_amp": direct_cmp["diff_amp"] if direct_cmp else np.nan,
+        "diff_amp_euc": direct_cmp["diff_amp_euc"] if direct_cmp else np.nan,
         "diff_offset": direct_cmp["diff_offset"] if direct_cmp else np.nan,
         "diff_gain": direct_cmp["diff_gain"] if direct_cmp else np.nan,
+        "split_diffs_mean": pres_abs_p.get("split_diffs_mean", []),
+        "split_diffs_early": pres_abs_p.get("split_diffs_early", []),
+        "split_diffs_gain": pres_abs_p.get("split_diffs_gain", []),
         "s_significant_absence": bool(abs_s["significant_p_mean"]) if abs_s else False,
         "s_significant_presence": bool(pres_s["significant_p_mean"]) if pres_s else False,
         "recovered_sensory_gain": bool(
@@ -1863,6 +2029,9 @@ def compare_conditions(base_dir, alpha=0.01, s_amp_ratio_thresh=1.1):
         ),
         "recovered_sensory_offset": bool(
             direct_cmp and direct_cmp.get("presence_gt_absence_offset", False)
+        ),
+        "recovered_sensory_amp": bool(
+            direct_cmp and direct_cmp.get("presence_gt_absence_amp", False)
         ),
     }
     out_json = base_dir / "sensory_prior_recovery.json"
@@ -1940,7 +2109,7 @@ def main():
         "--g-s-presence",
         type=float,
         default=None,
-        help="Sensory prior gain in presence (default: g_i from weights JSON)",
+        help=f"Sensory prior gain in presence (default: tuned {TUNED_G_S_PRESENCE})",
     )
     parser.add_argument(
         "--d-s-presence",
@@ -1990,11 +2159,15 @@ def main():
 
     weights_json = resolve_weights_json(args.weights_json)
     g_i_fit, d_i_fit = fitted_integrator_scales(weights_json)
-    g_s_presence = args.g_s_presence if args.g_s_presence is not None else g_i_fit
+    g_s_presence = args.g_s_presence if args.g_s_presence is not None else TUNED_G_S_PRESENCE
     d_s_presence = args.d_s_presence if args.d_s_presence is not None else d_i_fit
     print(f"ONE cache: {resolve_one_cache_dir()}")
     print(f"Output: {base_dir}")
     print(f"Weights: {weights_json}")
+    print(
+        f"Presence sensory prior: g_s={g_s_presence}, d_s={d_s_presence} "
+        f"(paired seed={args.seed} for both conditions)"
+    )
 
     common_kw = dict(
         n_sessions=args.n_sessions,
@@ -2018,7 +2191,7 @@ def main():
         "presence",
         g_s=g_s_presence,
         d_s=d_s_presence,
-        rng_seed=args.seed + 1000,
+        rng_seed=args.seed,
         **common_kw,
     )
     compare_conditions(base_dir)
