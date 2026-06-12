@@ -8,7 +8,6 @@ from pathlib import Path
 from one.api import ONE
 from iblatlas.atlas import AllenAtlas
 from iblatlas.regions import BrainRegions
-from ibllib.atlas.plots import plot_swanson_vector
 #from brainwidemap.manifold.state_space_bwm import (plot_traj_and_dist,
 #                                                   plot_all)
 
