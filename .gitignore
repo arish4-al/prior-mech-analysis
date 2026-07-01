@@ -15,3 +15,6 @@ env/
 .DS_Store
 .idea/
 .vscode/
+
+# Local simulation outputs (canonical location: <ONE cache>/manifold_sim)
+output/
