@@ -251,6 +251,7 @@ model_params['d_i'] = 0.102762
 model_params['d_m'] = 0.00005362
 model_params['g_s'] = 0
 model_params['d_s'] = 0
+model_params['gs_outside_adaptation'] = False  # if True: a*(J@S0) + g_s*P_gain@S0 (g_s not adapted)
 
 theta = [0.91, 0.54]
 model_params['action_thresholds']={
@@ -779,6 +780,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
     post_action_steps = model_params['post_action_steps']
     baseline = model_params['baseline']
     direct_offset = model_params['direct_offset']
+    gs_outside_adap = bool(model_params.get('gs_outside_adaptation', False))
     prestim_offset_start = model_params['prestim_offset_start']
     # print(prestim_offset_start)
 
@@ -887,18 +889,17 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                 # P_offset = J @ P
 
                 S0_delayed = perceived_stim[t - delay] if delay > 0 and k >= (delay+steps_before_obs) else np.array([0, 0]) if delay > 0 else S0
-                # print(g_s, g_s * P_gain)
+                # g_s feedforward: optionally move g_s outside the adaptation gate
+                if gs_outside_adap:
+                    _ff_s = a * (J @ S0_delayed) + (g_s * P_gain) @ S0_delayed
+                else:
+                    _ff_s = a * ((J + g_s * P_gain) @ S0_delayed)
                 if direct_offset:
-                    S_ = S_ + dt/tau_s * nonlin(-S_ + W_ss * J @ S_
-                                            # + d_s * P_offset
-                                                + a * ((J + g_s * P_gain) @ S0_delayed),
-                                                nonlin_type)
+                    S_ = S_ + dt/tau_s * nonlin(-S_ + W_ss * J @ S_ + _ff_s, nonlin_type)
                     S = S_ + d_s * P_offset
                 else:
-                    S = S + dt/tau_s * nonlin(-S + W_ss * J @ S
-                                                + d_s * P_offset
-                                                + a * ((J + g_s * P_gain) @ S0_delayed),
-                                                nonlin_type)
+                    S = S + dt/tau_s * nonlin(-S + W_ss * J @ S + d_s * P_offset + _ff_s,
+                                              nonlin_type)
                     S_ = S
 
                 if k == 0:
@@ -1166,6 +1167,7 @@ def _run_model_kernel(
     alpha_d, beta_d, default_dt,
     baseline, stim_adap, direct_offset, nonlin_code,
     prestim_offset_start, post_action_steps,
+    gs_outside_adap,
 ):
     Ntr = stim.shape[0]
     Ntot = Ntr * L
@@ -1252,10 +1254,15 @@ def _run_model_kernel(
             else:
                 S0_delayed = S0
 
-            Jg = _jg_apply(S0_delayed, g_s, del_P)
             aJg = np.empty(2, dtype=np.float64)
-            aJg[0] = a[0] * Jg[0]
-            aJg[1] = a[1] * Jg[1]
+            if gs_outside_adap:
+                JS = _j_apply(S0_delayed)
+                aJg[0] = a[0] * JS[0] + g_s * del_P * S0_delayed[0]
+                aJg[1] = a[1] * JS[1] + g_s * del_P * S0_delayed[1]
+            else:
+                Jg = _jg_apply(S0_delayed, g_s, del_P)
+                aJg[0] = a[0] * Jg[0]
+                aJg[1] = a[1] * Jg[1]
 
             if direct_offset:
                 S_ = S_ + (dt / tau_s) * _nl_vec(
@@ -1427,6 +1434,7 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         float(model_params['baseline']), bool(model_params['stim_adap']),
         bool(model_params['direct_offset']), int(nonlin_code),
         int(model_params['prestim_offset_start']), int(model_params['post_action_steps']),
+        bool(model_params.get('gs_outside_adaptation', False)),
     )
 
     if not finite_ok:
@@ -1731,6 +1739,7 @@ def _run_model_torch(model_type, stimuli, trial_strengths, trial_sides, block_si
     post_action_steps = int(model_params['post_action_steps'])
     baseline = float(model_params['baseline'])
     direct_offset = bool(model_params.get('direct_offset', False))
+    gs_outside_adap = bool(model_params.get('gs_outside_adaptation', False))
     prestim_offset_start = int(model_params.get('prestim_offset_start', 0))
 
     dt_tensor = torch.tensor(float(dt), dtype=dtype, device=device)
@@ -1918,20 +1927,19 @@ def _run_model_torch(model_type, stimuli, trial_strengths, trial_sides, block_si
 
                 action_threshold_tensor = torch.where(conc_indicator, theta_conc_tensor, theta_disc_tensor)
 
+                if gs_outside_adap:
+                    _ff_s = a * (J @ S0_delayed) + (g_s * P_gain) @ S0_delayed
+                else:
+                    _ff_s = a * ((J + g_s * P_gain) @ S0_delayed)
                 if direct_offset:
                     delta_S_latent = dt_tensor / tau_s * nonlin(
-                        -S_latent + W_ss * (J @ S_latent)
-                        + a * ((J + g_s * P_gain) @ S0_delayed),
-                        nonlin_type
+                        -S_latent + W_ss * (J @ S_latent) + _ff_s, nonlin_type
                     )
                     S_latent = S_latent + cont * delta_S_latent
                     S = S_latent + d_s * P_offset
                 else:
                     delta_S = dt_tensor / tau_s * nonlin(
-                        -S + W_ss * (J @ S)
-                        + d_s * P_offset
-                        + a * ((J + g_s * P_gain) @ S0_delayed),
-                        nonlin_type
+                        -S + W_ss * (J @ S) + d_s * P_offset + _ff_s, nonlin_type
                     )
                     S = S + cont * delta_S
                     S_latent = S

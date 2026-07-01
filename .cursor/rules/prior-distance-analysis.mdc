@@ -1,0 +1,34 @@
+---
+description: Canonical prior-distance analysis defaults for simulate_recovery experiments
+globs: simulate_recovery.py,scripts/**/*.py,null_shuffle_worker.py
+alwaysApply: true
+---
+
+# Prior-distance analysis conventions
+
+Read `AGENTS.md` before running or changing analysis experiments.
+
+## Required defaults (since 2026-06-19)
+
+- **S:** 80 ms post-stim window (`S_DURINGSTIM_WINDOW_S`), via `build_population_b_for_split`
+- **I/M:** 150 ms post-stim window
+- **Truncation:** fill-from-next-ITI in `build_population_b_for_split` — never zero-pad
+- **Null:** contrast-matched label shuffle (default)
+- **Outputs:** `<ONE cache>/manifold_sim` (omit `--output-dir` or use default)
+- **Runs:** `conda activate iblenv`, outside sandbox on macOS
+
+## Phase 4b regression check
+
+Split-conditioned Phase 4b at seed 123 must give S curve_mean ≈ 0.012, p ≈ 0.78:
+
+```bash
+python simulate_recovery.py --phase4-no-prior-mod --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8
+```
+
+If S is significant with large curve_mean, the analysis path is wrong (likely zero-pad, 150 ms S window, or pooling L+R stim without side splits).
+
+## Unsplit experiments
+
+`--unsplit-prior` = no f1/f2 splits, but **still stim_l + stim_r** (see `UNSPLIT_PRIOR_SPLITS`). Do not use a single pool of all trials for S distance.
+
+`--unsplit-mode fully` = diagnostic only (L+R mixed); reproduces spurious S signal even under Phase 4b.
