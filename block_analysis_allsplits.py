@@ -200,11 +200,26 @@ for split in splits_new:
         align[split] = 'stimOn_times'
         pre_post[split] = [0.4,-0.1]
 
+# Goal-3 contrast conditioning. CONTRASTS are the IBL stimulus contrasts; 0.0 is
+# the fully prior-driven (0% contrast) stratum.
+CONTRASTS = [1.0, 0.25, 0.125, 0.0625, 0.0]
+
+# Contrast-stratified prior-modulation splits (block L vs R within one contrast
+# level), reusing the existing get_d_vars / d_var_stacked pipeline. ITI window as
+# for the base block_only split. Split name: 'block_only_c{contrast}'.
+block_only_contrast_splits = [
+    f'{s}_c{c:g}' for s in ('block_only', 'act_block_only') for c in CONTRASTS
+]
+for split in block_only_contrast_splits:
+    align[split] = 'stimOn_times'
+    pre_post[split] = [0.4, -0.1]
+
 
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
 #           base_url='https://openalyx.internationalbrainlab.org',
 #           password='international', silent=True)  # (mode='local')
-one = ONE(base_url='https://alyx.internationalbrainlab.org')
+# one = ONE(base_url='https://alyx.internationalbrainlab.org')
+one = ONE()
 ba = AllenAtlas()
 br = BrainRegions()
 
@@ -293,43 +308,90 @@ def generate_pseudo_blocks(
     return np.array([0.5] * first5050 + block_ids[:n_trials - first5050])
 
 
+def saturation_for_split(split):
+    '''Saturation-interval key used to load/mask trials for a split's alignment.'''
+    if 'duringstim' in split:
+        return 'saturation_stim_plus04'
+    if 'duringchoice' in split:
+        return 'saturation_move_minus02'
+    if 'fback' in split:
+        return 'saturation_feedback_plus04'
+    return 'saturation_stim_plus04'
+
+
+SATURATION_TYPES = (
+    'saturation_stim_plus04',
+    'saturation_move_minus02',
+    'saturation_feedback_plus04',
+)
+
+
+def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
+    '''
+    Load an insertion's raw data ONCE (the expensive step) and cache it so every
+    split reuses it instead of re-loading per split.
+
+    Caches: spikes (times, clusters), clusters (cluster_id, atlas_id), and the
+    bad-trial-masked trials table for each saturation type (one per alignment
+    event: stim / move / feedback). Saved to manifold/insertion_cache/{eid_probe}.npy.
+    '''
+    eid, probe = one.pid2eid(pid)
+    eid_probe = f'{eid}_{probe}'
+    cpath = Path(one.cache_dir, 'manifold', 'insertion_cache', f'{eid_probe}.npy')
+    if restart and cpath.exists():
+        return np.load(cpath, allow_pickle=True).item()
+
+    spikes, clusters = load_good_units(one, pid)
+    trials_by_satur = {}
+    for st in satur_types:
+        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=st)
+        trials_by_satur[st] = trials[mask]
+
+    cache = {
+        'pid': pid,
+        'eid': eid,
+        'probe': probe,
+        'spikes': {'times': spikes['times'], 'clusters': spikes['clusters']},
+        'clusters': {'cluster_id': clusters['cluster_id'], 'atlas_id': clusters['atlas_id']},
+        'trials': trials_by_satur,
+    }
+    if save:
+        cpath.parent.mkdir(parents=True, exist_ok=True)
+        np.save(cpath, cache, allow_pickle=True)
+    return cache
+
+
 def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
-               control=True, nrand = 2000, bycontrast=False):
+               control=True, nrand = 2000, bycontrast=False, cached=None):
 
     '''
     for a given session, probe, bin neural activity
     cut into trials, compute d_var per region
+
+    ``cached``: optional per-insertion cache from build_insertion_cache. When
+    provided, spikes/clusters/trials are reused (no per-split reload), which is
+    the time-efficient path. When None, loads from ONE as before (identical result).
     '''
     
     
     eid,probe = one.pid2eid(pid)
-    
-    # load in spikes
-    spikes, clusters = load_good_units(one, pid)    
 
-    if 'duringstim' in split:
-        saturation_intervals = 'saturation_stim_plus04'
-            
-    elif 'duringchoice' in split:
-         saturation_intervals = 'saturation_move_minus02'
-            
-    elif 'fback' in split:
-        saturation_intervals = 'saturation_feedback_plus04'
-    
+    saturation_intervals = saturation_for_split(split)
+
+    if cached is not None:
+        # Reuse the once-loaded insertion data (spikes/clusters/masked trials).
+        spikes = cached['spikes']
+        clusters = cached['clusters']
+        trials = cached['trials'][saturation_intervals].copy()
     else:
-        saturation_intervals='saturation_stim_plus04'
-                              # 'saturation_feedback_plus04',
-                              # 'saturation_move_minus02',
-                              # 'saturation_stim_minus04_minus01',
-                              # 'saturation_stim_plus06',
-                              # 'saturation_stim_minus06_plus06']
+        # load in spikes
+        spikes, clusters = load_good_units(one, pid)
 
-
-    # Load in trials data and mask bad trials (False if bad)
-    trials, mask = load_trials_and_mask(one, eid, 
-                   saturation_intervals = saturation_intervals)        
-    # remove certain trials
-    trials = trials[mask]
+        # Load in trials data and mask bad trials (False if bad)
+        trials, mask = load_trials_and_mask(one, eid,
+                       saturation_intervals = saturation_intervals)
+        # remove certain trials
+        trials = trials[mask]
     if 'block' in split:
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
     # rs_range = [0.08, 2]  # discard [long/short] reaction time trials
@@ -508,6 +570,20 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                    trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
     
     elif 'block_only' in split:
+        # Optional contrast stratification: 'block_only_c{contrast}' restricts to
+        # trials whose |contrast| equals the requested value (0.0 => 0% contrast,
+        # where behavior is fully prior-driven) before the block L vs R split.
+        if '_c' in split:
+            tail = split.rsplit('_c', 1)[-1]
+            try:
+                cval = float(tail)
+            except ValueError:
+                cval = None
+            if cval is not None:
+                cmag = np.nanmax(
+                    np.c_[trials['contrastLeft'].values,
+                          trials['contrastRight'].values], axis=1)
+                trials = trials[np.isclose(cmag, cval)]
         for pleft in [0.8, 0.2]:
             events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
             trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
@@ -920,6 +996,295 @@ def get_all_d_vars_badsession(split, eids_plus = None, control = True,
     print(Fs)
 
     
+def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
+                             mapping='Beryl', bycontrast=False, restart=True,
+                             use_cache=True, save_cache=True):
+    '''
+    Time-efficient driver: iterate insertions in the OUTER loop, load each
+    insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
+    for that insertion from the cached data. Replaces calling get_all_d_vars per
+    split (which reloaded spikes/trials for every split).
+
+    Output layout is unchanged: manifold/{split}/{eid_probe}.npy per insertion.
+    ``restart``: skip a (split, insertion) whose output already exists.
+    '''
+    time00 = time.perf_counter()
+    print('splits', splits_list, 'control', control, 'use_cache', use_cache)
+
+    if eids_plus is None:
+        df = bwm_query(one)
+        eids_plus = df[['eid', 'probe_name', 'pid']].values
+
+    # ensure per-split output dirs exist
+    for split in splits_list:
+        Path(one.cache_dir, 'manifold', split).mkdir(parents=True, exist_ok=True)
+
+    Fs = []
+    k = 0
+    print(f'Processing {len(eids_plus)} insertions x {len(splits_list)} splits')
+    for eid, probe, pid in eids_plus:
+        k += 1
+        eid_probe = f'{eid}_{probe}'
+        time0 = time.perf_counter()
+
+        # which splits still need computing for this insertion?
+        pending = []
+        for split in splits_list:
+            outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
+            if restart and outp.exists():
+                continue
+            pending.append(split)
+        if not pending:
+            print(k, 'of', len(eids_plus), 'all splits cached, skip')
+            continue
+
+        try:
+            cache = build_insertion_cache(pid, save=save_cache, restart=restart) if use_cache else None
+        except Exception as exc:
+            Fs.append(pid)
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'fail (load)', pid, exc)
+            continue
+
+        n_ok = 0
+        for split in pending:
+            outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
+            try:
+                D_ = get_d_vars(split, pid, control=control, mapping=mapping,
+                                bycontrast=bycontrast, cached=cache)
+                np.save(outp, D_, allow_pickle=True)
+                n_ok += 1
+            except Exception as exc:
+                print('   split fail', split, pid, exc)
+        del cache
+        gc.collect()
+        time1 = time.perf_counter()
+        print(k, 'of', len(eids_plus), f'ok {n_ok}/{len(pending)} splits', round(time1 - time0, 1), 'sec')
+
+    time11 = time.perf_counter()
+    print((time11 - time00) / 60, f'min for {len(eids_plus)} insertions x {len(splits_list)} splits')
+    print(f'{len(Fs)} load failures:')
+    print(Fs)
+
+
+def cache_all_insertions(eids_plus=None, restart=True):
+    '''Build (and persist) the per-insertion raw-data cache for all BWM insertions.'''
+    if eids_plus is None:
+        df = bwm_query(one)
+        eids_plus = df[['eid', 'probe_name', 'pid']].values
+    Fs = []
+    for k, (eid, probe, pid) in enumerate(eids_plus, 1):
+        t0 = time.perf_counter()
+        try:
+            build_insertion_cache(pid, restart=restart)
+            print(k, 'of', len(eids_plus), 'cached', round(time.perf_counter() - t0, 1), 'sec')
+        except Exception as exc:
+            Fs.append(pid)
+            print(k, 'of', len(eids_plus), 'fail', pid, exc)
+        gc.collect()
+    print(f'{len(Fs)} cache failures:', Fs)
+
+
+def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
+                  contrasts=CONTRASTS, nrand=1000, min_reg=min_reg):
+    '''
+    Goal 3: contrast-response function (CRF) per region, split by block prior,
+    and a test of whether the prior modulates the CRF slope (gain).
+
+    For each stimulus side (L/R) and |contrast| in ``contrasts`` we compute the
+    mean post-stim population response per neuron over ``window`` (single time
+    bin from stimOn), then average within region. The CRF is response vs contrast.
+
+    "concordant" prior = block favors the stimulus side (high prior for that side),
+    "discordant" = block favors the opposite side. At 0% contrast behavior is fully
+    prior-driven, so it anchors the low end of the CRF.
+
+    Prior modulation of gain = slope(concordant) - slope(discordant), averaged over
+    sides. Significance via a null that shuffles block (concordant/discordant)
+    labels *within* each (side, contrast) cell, preserving side/contrast structure.
+
+    Returns per region: {'nclus', 'contrasts', 'crf_conc', 'crf_disc',
+    'slope_conc', 'slope_disc', 'slope_mod', 'p_slope_mod'}.
+    '''
+    eid, probe = one.pid2eid(pid)
+    satur = 'saturation_stim_plus04'
+    if cached is not None:
+        spikes = cached['spikes']
+        clusters = cached['clusters']
+        trials = cached['trials'][satur].copy()
+    else:
+        spikes, clusters = load_good_units(one, pid)
+        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=satur)
+        trials = trials[mask]
+    trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
+
+    acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
+    good = ~np.bitwise_or.reduce([acs == r for r in ['void', 'root']])
+    acs = acs[good]
+
+    contrasts = sorted(set(float(c) for c in contrasts))
+    pre_t = 0.0
+    post_t = float(window[1] - window[0])
+
+    # Per (side, contrast): single-bin response (ntr, n_good_neurons) + conc mask.
+    cond = {}
+    stim_on = trials['stimOn_times'].values
+    pl = trials['probabilityLeft'].values
+    for side, cside in (('L', 'contrastLeft'), ('R', 'contrastRight')):
+        conc_pleft = 0.8 if side == 'L' else 0.2
+        cvals = trials[cside].values
+        for c in contrasts:
+            sel = np.isclose(cvals, c)
+            if sel.sum() == 0:
+                continue
+            ev = stim_on[sel]
+            bi, _ = bin_spikes2D(
+                spikes['times'],
+                clusters['cluster_id'][spikes['clusters']],
+                clusters['cluster_id'],
+                np.array(ev), pre_t, post_t, post_t)
+            R = bi[:, :, 0][:, good]  # (ntr, n_good)
+            cond[(side, c)] = {'R': R, 'conc': pl[sel] == conc_pleft}
+
+    def _slope_mod(reg_mask, perm=None):
+        side_mods = []
+        for side in ('L', 'R'):
+            xs, rc, rd = [], [], []
+            for c in contrasts:
+                key = (side, c)
+                if key not in cond:
+                    continue
+                R = cond[key]['R'][:, reg_mask]
+                conc = cond[key]['conc'] if perm is None else perm[key]
+                if conc.sum() == 0 or (~conc).sum() == 0:
+                    continue
+                xs.append(c)
+                rc.append(float(R[conc].mean()))
+                rd.append(float(R[~conc].mean()))
+            if len(xs) >= 2:
+                xs = np.array(xs)
+                side_mods.append(np.polyfit(xs, rc, 1)[0] - np.polyfit(xs, rd, 1)[0])
+        return float(np.mean(side_mods)) if side_mods else np.nan
+
+    def _crf(reg_mask, which):
+        out = []
+        for c in contrasts:
+            vals = []
+            for side in ('L', 'R'):
+                key = (side, c)
+                if key not in cond:
+                    continue
+                R = cond[key]['R'][:, reg_mask]
+                m = cond[key]['conc'] if which == 'conc' else ~cond[key]['conc']
+                if m.sum():
+                    vals.append(float(R[m].mean()))
+            out.append(np.mean(vals) if vals else np.nan)
+        return out
+
+    regs = Counter(acs)
+    D = {}
+    for reg, n in regs.items():
+        if n < min_reg:
+            continue
+        rm = (acs == reg)
+        true_mod = _slope_mod(rm)
+        if np.isnan(true_mod):
+            continue
+        null = np.array([
+            _slope_mod(rm, perm={k: np.random.permutation(v['conc']) for k, v in cond.items()})
+            for _ in range(nrand)
+        ])
+        null = null[~np.isnan(null)]
+        p = float(np.mean(np.abs(null) >= abs(true_mod))) if null.size else np.nan
+        crf_c = _crf(rm, 'conc')
+        crf_d = _crf(rm, 'disc')
+        D[reg] = {
+            'nclus': int(n),
+            'contrasts': list(contrasts),
+            'crf_conc': crf_c,
+            'crf_disc': crf_d,
+            'slope_conc': (np.polyfit(contrasts, crf_c, 1)[0]
+                           if not np.any(np.isnan(crf_c)) else np.nan),
+            'slope_disc': (np.polyfit(contrasts, crf_d, 1)[0]
+                           if not np.any(np.isnan(crf_d)) else np.nan),
+            'slope_mod': true_mod,
+            'p_slope_mod': p,
+        }
+    return {'pid': pid, 'eid': eid, 'D': D, 'contrasts': list(contrasts)}
+
+
+def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
+                      nrand=1000, restart=True, use_cache=True):
+    '''Driver: per-insertion CRF slope + prior-modulation test; save per insertion.'''
+    if eids_plus is None:
+        df = bwm_query(one)
+        eids_plus = df[['eid', 'probe_name', 'pid']].values
+    pth = Path(one.cache_dir, 'manifold', 'crf_slope')
+    pth.mkdir(parents=True, exist_ok=True)
+    Fs = []
+    for k, (eid, probe, pid) in enumerate(eids_plus, 1):
+        eid_probe = f'{eid}_{probe}'
+        outp = Path(pth, f'{eid_probe}.npy')
+        if restart and outp.exists():
+            continue
+        t0 = time.perf_counter()
+        try:
+            cache = build_insertion_cache(pid, restart=restart) if use_cache else None
+            D_ = get_crf_slope(pid, cached=cache, mapping=mapping, nrand=nrand)
+            np.save(outp, D_, allow_pickle=True)
+            del cache
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'ok', round(time.perf_counter() - t0, 1), 'sec')
+        except Exception as exc:
+            Fs.append(pid)
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'fail', pid, exc)
+    print(f'{len(Fs)} failures:', Fs)
+
+
+def crf_slope_stacked(min_reg=min_reg, alpha_sig=0.05):
+    '''
+    Pool CRF-slope prior modulation across insertions per region.
+
+    Aggregates slope_mod (concordant-discordant CRF slope) by nanmean across
+    insertions, averages the per-insertion p-values, and reports the mean CRF
+    curves. Writes manifold/res/crf_slope_stacked.npy.
+    '''
+    pth = Path(one.cache_dir, 'manifold', 'crf_slope')
+    files = [f for f in os.listdir(pth) if f.endswith('.npy')]
+    agg = {}
+    for f in files:
+        D_ = np.load(Path(pth, f), allow_pickle=True).item()
+        contrasts = D_.get('contrasts')
+        for reg, r in D_['D'].items():
+            a = agg.setdefault(reg, {'slope_mod': [], 'p': [], 'nclus': [],
+                                     'crf_conc': [], 'crf_disc': [], 'contrasts': contrasts})
+            a['slope_mod'].append(r['slope_mod'])
+            a['p'].append(r['p_slope_mod'])
+            a['nclus'].append(r['nclus'])
+            a['crf_conc'].append(r['crf_conc'])
+            a['crf_disc'].append(r['crf_disc'])
+    res = {}
+    for reg, a in agg.items():
+        if np.nansum(a['nclus']) < min_reg or len(a['slope_mod']) == 0:
+            continue
+        res[reg] = {
+            'n_insertions': len(a['slope_mod']),
+            'nclus_total': int(np.nansum(a['nclus'])),
+            'slope_mod_mean': float(np.nanmean(a['slope_mod'])),
+            'p_slope_mod_mean': float(np.nanmean(a['p'])),
+            'frac_sig': float(np.nanmean(np.array(a['p']) < alpha_sig)),
+            'crf_conc_mean': np.nanmean(np.array(a['crf_conc'], dtype=float), axis=0).tolist(),
+            'crf_disc_mean': np.nanmean(np.array(a['crf_disc'], dtype=float), axis=0).tolist(),
+            'contrasts': a['contrasts'],
+        }
+    outp = Path(one.cache_dir, 'manifold', 'res', 'crf_slope_stacked.npy')
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    np.save(outp, res, allow_pickle=True)
+    print(f'crf_slope_stacked: {len(res)} regions -> {outp}')
+    return res
+
+
 def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
                   
     time0 = time.perf_counter()
@@ -1524,18 +1889,20 @@ run_align = {
                             ],
 }
 
-restart = True
+if __name__ == '__main__':
+    restart = True
 
-# Intertrial analysis
-for split in ['block_only', 'act_block_only']:
-    get_all_d_vars(split, bycontrast=False, restart=restart)
-    d_var_stacked(split)
+    # All active splits. Loaded ONCE per insertion via the reordered driver
+    # (outer loop = insertions), instead of reloading spikes/trials per split.
+    intertrial_splits = ['block_only', 'act_block_only']
+    duringtrial_splits = [s for splits in run_align.values() for s in splits]
+    all_splits = intertrial_splits + duringtrial_splits
 
-# During trial analysis
-for timeframe, splits in run_align.items():
-# for timeframe in ['stimOn_times']:
-    # splits = run_align[timeframe]
-    for split in splits:
-        get_all_d_vars(split, bycontrast=False, restart=restart)
-    d_var_stacked_multi(splits)
+    get_all_d_vars_allsplits(all_splits, bycontrast=False, restart=restart)
+
+    # Pool across insertions per split / split-group (unchanged).
+    for split in intertrial_splits:
+        d_var_stacked(split)
+    for timeframe, splits in run_align.items():
+        d_var_stacked_multi(splits)
 
