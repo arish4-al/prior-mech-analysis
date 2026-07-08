@@ -32,7 +32,7 @@ N_CACHE_PIDS="${N_CACHE_PIDS:-2}"
 N_RAND="${N_RAND:-50}"
 SEED="${SEED:-123}"
 
-# module load miniforge
+module load miniforge
 conda activate ~/conda_envs/ibl
 
 cd "$REPO_DIR"

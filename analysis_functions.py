@@ -274,17 +274,25 @@ def compute_amp_slope(timeframe, n=20):
         r = np.load(Path(pth_res, f'{combined_regde_name}.npy'), allow_pickle=True).flatten()[0][reg][0]
         slope = np.polyfit(np.linspace(0, 0.15, len(r)), r, 1)[0]
         d[reg]['amp_slope'] = slope
-        
-        slope_last = np.polyfit(np.arange(n), r[-n:], 1)[0]
+
+        # Clamp fit windows to available points: short (e.g. 80 ms duringstim)
+        # curves can have fewer than n bins, which otherwise breaks np.polyfit.
+        def _last_slope(curve, k):
+            k = min(k, len(curve))
+            if k < 2:
+                return np.nan
+            return np.polyfit(np.arange(k), curve[-k:], 1)[0]
+
+        slope_last = _last_slope(r, n)
         d[reg]['slope_last'] = slope_last
 
         amp_loc = np.argmax(r)
         d[reg]['amp_loc'] = amp_loc
 
-        slope_last_5 = np.polyfit(np.arange(5), r[-5:], 1)[0]
+        slope_last_5 = _last_slope(r, 5)
         d[reg]['slope_last_5'] = slope_last_5
 
-        slope_last_10 = np.polyfit(np.arange(10), r[-10:], 1)[0]
+        slope_last_10 = _last_slope(r, 10)
         d[reg]['slope_last_10'] = slope_last_10
 
         # --- moving 5-bin amplitude check ---
@@ -551,6 +559,17 @@ def manifold_to_csv_old(meta_split, sigl, p_type):
 
 # Plotting functions
 
+def _time_axis_for_plot(timeframe, n_bins):
+    """Plot time axis (ms) from timeframe name and actual curve length."""
+    if "duringchoice" in timeframe:
+        return np.linspace(-150, 0, n_bins)
+    if "duringstim1" in timeframe or "short" in timeframe:
+        return np.linspace(0, 80, n_bins)
+    if "duringstim" in timeframe:
+        return np.linspace(0, 150, n_bins)
+    return np.linspace(-400, -100, n_bins)
+
+
 def plot_regional_distance(reg, time, combined=True, ptype='p_mean_c', dist='de', alpha=0.05, plot_p_per_time=True, 
                            plot_gain=True, plot_offset=True, show_y=False, ylim=None, yticks=None, p_mean_early=False):
     """
@@ -565,16 +584,6 @@ def plot_regional_distance(reg, time, combined=True, ptype='p_mean_c', dist='de'
         plot_gain: bool, whether to plot gain effect as a second curve and histogram
     """
 
-    # Get times for x axis
-    if 'duringchoice' in time:
-        times = np.linspace(-150, 0, 72)
-    elif 'duringstim1' in time or 'short' in time:
-        times = np.linspace(0, 80, 42)
-    elif 'duringstim' in time:
-        times = np.linspace(0, 150, 72)
-    else:
-        times = np.linspace(-400, -100, 144)
-
     # Load data and plot trajectories
     if combined:
         d_all, r_all, _, _ = load_combined_data(time, dist=dist)
@@ -587,6 +596,8 @@ def plot_regional_distance(reg, time, combined=True, ptype='p_mean_c', dist='de'
     else:
         r = np.load(Path(pth_res, f'{time}_reg{dist}.npy'), allow_pickle=True).flatten()[0][reg]
         d = np.load(Path(pth_res, f'{time}.npy'), allow_pickle=True).flatten()[0][reg]
+
+    times = _time_axis_for_plot(time, r.shape[1])
 
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=(6, 4), dpi=250,
                             gridspec_kw={'width_ratios': [6, 1]})
@@ -736,16 +747,8 @@ def plot_average_distance_over_regions(regs, timewindow, name, alpha=0.05,
                                        ptype='p_mean_c', plot_p_per_time=True, plot_gain=True, show_y=False,
                                        ylim=None, yticks=None, return_mean=False):
     
-    # get times for x axis
-    if 'duringchoice' in timewindow:
-        times = np.linspace(-150, 0, 72)
-    elif 'short' in timewindow:
-        times = np.linspace(0, 80, 42)
-    elif 'duringstim' in timewindow:
-        times = np.linspace(0, 150, 72)
-    else:
-        times = np.linspace(-400, -100, 144)
-       
+    # load data
+    d_all, r_all, _, _ = load_combined_data(timewindow)
     # color for the mean curve
     if 'move' in name:
         c = 'tomato'
@@ -754,8 +757,6 @@ def plot_average_distance_over_regions(regs, timewindow, name, alpha=0.05,
     else:
         c = 'blue'
 
-    # load data
-    d_all, r_all, _, _ = load_combined_data(timewindow)
     # get cell count from the first split
     splits = run_align[timewindow]
     split = splits[0] 
@@ -784,6 +785,8 @@ def plot_average_distance_over_regions(regs, timewindow, name, alpha=0.05,
     # average across regions (shape: [n_samples, time])
     r_avg = all_regs_r / all_regs_cell_num
     # r_avg = (all_regs_r / all_regs_cell_num) ** 0.5
+
+    times = _time_axis_for_plot(timewindow, r_avg.shape[1])
 
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=(6, 4), dpi=250,
                             gridspec_kw={'width_ratios': [6, 1]})

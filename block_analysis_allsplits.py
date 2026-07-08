@@ -32,15 +32,15 @@ import matplotlib as mpl
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 # from adjustText import adjust_text
-import matplotlib.image as mpimg
-from matplotlib.gridspec import GridSpec
-from matplotlib import colors
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d import proj3d
-from PIL import Image
-import io
-import matplotlib.patches as mpatches
-import matplotlib.ticker as ticker
+# import matplotlib.image as mpimg
+# from matplotlib.gridspec import GridSpec
+# from matplotlib import colors
+# from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d import proj3d
+# from PIL import Image
+# import io
+# import matplotlib.patches as mpatches
+# import matplotlib.ticker as ticker
 
 import random
 from random import shuffle
