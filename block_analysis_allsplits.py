@@ -5,7 +5,8 @@ This script is used to analyze prior sensitivity of all splits (e.g. different a
 from one.api import ONE
 from brainbox.singlecell import bin_spikes2D
 from brainwidemap import (bwm_query, load_good_units, 
-                          load_trials_and_mask, bwm_units)
+                          load_trials_and_mask, bwm_units,
+                          download_aggregate_tables)
 from iblatlas.atlas import AllenAtlas
 from iblatlas.regions import BrainRegions
 import iblatlas
@@ -30,7 +31,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-from adjustText import adjust_text
+# from adjustText import adjust_text
 import matplotlib.image as mpimg
 from matplotlib.gridspec import GridSpec
 from matplotlib import colors
@@ -326,6 +327,41 @@ SATURATION_TYPES = (
 )
 
 
+def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
+    '''
+    Saturation exclusion on top of load_trials_and_mask base mask.
+
+    load_trials_and_mask(..., saturation_intervals=st) can assert when
+    truncate_to_pass shortens trials vs the aggregate table; we apply saturation
+    here with row alignment instead.
+    '''
+    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    sess_trials = all_trials[all_trials['eid'] == eid].copy()
+    sess_trials.reset_index(drop=True, inplace=True)
+    n_sess = trials.shape[0]
+    if len(sess_trials) > n_sess:
+        sess_trials = sess_trials.iloc[:n_sess]
+    elif len(sess_trials) < n_sess:
+        raise AssertionError(
+            f'Trials table ({len(sess_trials)}) shorter than session ({n_sess}) for {eid}.'
+        )
+    intervals = (
+        [saturation_intervals]
+        if isinstance(saturation_intervals, str)
+        else list(saturation_intervals)
+    )
+    mask = base_mask.to_numpy().copy()
+    for interval in intervals:
+        mask[sess_trials[interval].to_numpy() == True] = False
+    return trials, mask
+
+
+def load_trials_for_saturation(one, eid, saturation_intervals):
+    '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
+    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
+
+
 def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
     '''
     Load an insertion's raw data ONCE (the expensive step) and cache it so every
@@ -342,9 +378,10 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
         return np.load(cpath, allow_pickle=True).item()
 
     spikes, clusters = load_good_units(one, pid)
+    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
     trials_by_satur = {}
     for st in satur_types:
-        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=st)
+        _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
         trials_by_satur[st] = trials[mask]
 
     cache = {
@@ -388,8 +425,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         spikes, clusters = load_good_units(one, pid)
 
         # Load in trials data and mask bad trials (False if bad)
-        trials, mask = load_trials_and_mask(one, eid,
-                       saturation_intervals = saturation_intervals)
+        trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
         # remove certain trials
         trials = trials[mask]
     if 'block' in split:
@@ -1114,7 +1150,7 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
         trials = cached['trials'][satur].copy()
     else:
         spikes, clusters = load_good_units(one, pid)
-        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=satur)
+        trials, mask = load_trials_for_saturation(one, eid, satur)
         trials = trials[mask]
     trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
 
