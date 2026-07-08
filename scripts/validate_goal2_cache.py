@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import block_analysis_allsplits as ba  # noqa: E402
-from brainwidemap import bwm_query, load_trials_and_mask  # noqa: E402
+from brainwidemap import bwm_query  # noqa: E402
 
 DEFAULT_SPLITS = [
     'block_only',
@@ -83,9 +83,7 @@ def validate_cache_trials(pids, n_cache_pids):
         cache = ba.build_insertion_cache(pid, save=False, restart=False)
         eid, _ = ba.one.pid2eid(pid)
         for st in ba.SATURATION_TYPES:
-            t_direct, mask = load_trials_and_mask(
-                ba.one, eid, saturation_intervals=st,
-            )
+            t_direct, mask = ba.load_trials_for_saturation(ba.one, eid, st)
             t_direct = t_direct[mask]
             t_cached = cache['trials'][st]
             if len(t_direct) != len(t_cached):
