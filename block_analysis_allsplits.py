@@ -327,23 +327,31 @@ SATURATION_TYPES = (
 )
 
 
-def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
+def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
+                           all_trials=None):
     '''
     Saturation exclusion on top of load_trials_and_mask base mask.
 
     load_trials_and_mask(..., saturation_intervals=st) can assert when
     truncate_to_pass shortens trials vs the aggregate table; we apply saturation
-    here with row alignment instead.
+    here with row alignment instead. If the aggregate table has no rows for this
+    eid, raises so the insertion is skipped (same as the old pipeline).
     '''
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    if all_trials is None:
+        all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     sess_trials = all_trials[all_trials['eid'] == eid].copy()
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
+    if len(sess_trials) == 0:
+        raise ValueError(
+            f'No aggregate trials rows for eid {eid}; skipping insertion.'
+        )
     if len(sess_trials) > n_sess:
         sess_trials = sess_trials.iloc[:n_sess]
     elif len(sess_trials) < n_sess:
-        raise AssertionError(
-            f'Trials table ({len(sess_trials)}) shorter than session ({n_sess}) for {eid}.'
+        raise ValueError(
+            f'Aggregate trials ({len(sess_trials)}) shorter than session '
+            f'({n_sess}) for eid {eid}; skipping insertion.'
         )
     intervals = (
         [saturation_intervals]
@@ -352,14 +360,18 @@ def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
     )
     mask = base_mask.to_numpy().copy()
     for interval in intervals:
+        if interval not in sess_trials.columns:
+            continue
         mask[sess_trials[interval].to_numpy() == True] = False
     return trials, mask
 
 
-def load_trials_for_saturation(one, eid, saturation_intervals):
+def load_trials_for_saturation(one, eid, saturation_intervals, all_trials=None):
     '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
     trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
+    return _apply_saturation_mask(
+        trials, base_mask, one, eid, saturation_intervals, all_trials=all_trials,
+    )
 
 
 def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
@@ -379,9 +391,12 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
 
     spikes, clusters = load_good_units(one, pid)
     trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     trials_by_satur = {}
     for st in satur_types:
-        _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
+        _, mask = _apply_saturation_mask(
+            trials, base_mask, one, eid, st, all_trials=all_trials,
+        )
         trials_by_satur[st] = trials[mask]
 
     cache = {
