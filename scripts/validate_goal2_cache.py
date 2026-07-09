@@ -77,10 +77,49 @@ def compare_d(D_ref, D_test, label):
     return errs
 
 
+def _skip_insertion(exc):
+    '''True if this insertion should be skipped (same as bulk drivers).'''
+    if isinstance(exc, ValueError) and 'skipping insertion' in str(exc):
+        return True
+    if isinstance(exc, AssertionError):
+        msg = str(exc)
+        if 'does not pass performance' in msg:
+            return True
+        if 'Trials table does not match' in msg:
+            return True
+    return False
+
+
+def iter_usable_pids(pids, n_want, label):
+    '''
+    Yield up to n_want insertions that build a cache; skip failures like
+    get_all_d_vars_allsplits (missing aggregate, case B, load errors).
+    '''
+    skipped = []
+    n_ok = 0
+    for pid in pids:
+        if n_ok >= n_want:
+            break
+        try:
+            cache = ba.build_insertion_cache(pid, save=False, restart=False)
+        except Exception as exc:
+            skipped.append((pid, exc))
+            print(f'  skip {label}', pid, exc)
+            continue
+        n_ok += 1
+        yield pid, cache
+    if n_ok < n_want:
+        raise RuntimeError(
+            f'Only {n_ok}/{n_want} usable insertions for {label} '
+            f'({len(skipped)} skipped in scan).'
+        )
+    if skipped:
+        print(f'  ({len(skipped)} insertion(s) skipped for {label})')
+
+
 def validate_cache_trials(pids, n_cache_pids):
     print(f'=== (A) insertion cache trials == direct ONE load ({n_cache_pids} pids) ===')
-    for pid in pids[:n_cache_pids]:
-        cache = ba.build_insertion_cache(pid, save=False, restart=False)
+    for pid, cache in iter_usable_pids(pids, n_cache_pids, 'cache trials'):
         eid, _ = ba.one.pid2eid(pid)
         for st in ba.SATURATION_TYPES:
             t_direct, mask = ba.load_trials_for_saturation(ba.one, eid, st)
@@ -98,23 +137,28 @@ def validate_cache_trials(pids, n_cache_pids):
         print('  cache trials OK', pid)
 
 
-def validate_get_d_vars(pids, splits, control, nrand, seed):
+def validate_get_d_vars(pids, n_pids, splits, control, nrand, seed):
     label = 'control=False (true split)' if not control else f'control=True nrand={nrand} seed={seed}'
     print(f'=== (B) get_d_vars cached vs uncached — {label} ===')
     failures = []
-    for pid in pids:
-        cache = ba.build_insertion_cache(pid, save=False, restart=False)
+    for pid, cache in iter_usable_pids(pids, n_pids, 'parity'):
         for split in splits:
-            if control:
-                random.seed(seed)
-            D_unc = ba.get_d_vars(
-                split, pid, control=control, nrand=nrand, cached=None,
-            )
-            if control:
-                random.seed(seed)
-            D_cached = ba.get_d_vars(
-                split, pid, control=control, nrand=nrand, cached=cache,
-            )
+            try:
+                if control:
+                    random.seed(seed)
+                D_unc = ba.get_d_vars(
+                    split, pid, control=control, nrand=nrand, cached=None,
+                )
+                if control:
+                    random.seed(seed)
+                D_cached = ba.get_d_vars(
+                    split, pid, control=control, nrand=nrand, cached=cache,
+                )
+            except Exception as exc:
+                if _skip_insertion(exc):
+                    print('  skip', pid, split, exc)
+                    continue
+                raise
             errs = compare_d(D_unc, D_cached, f'{pid}/{split}')
             if errs:
                 failures.extend(errs)
@@ -154,7 +198,8 @@ def main():
         validate_cache_trials(pids, args.n_cache_pids)
 
     failures = validate_get_d_vars(
-        pids[: args.n_pids],
+        pids,
+        args.n_pids,
         args.splits,
         control=not args.control_only,
         nrand=args.nrand,
