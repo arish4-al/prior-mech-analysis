@@ -326,6 +326,32 @@ SATURATION_TYPES = (
     'saturation_feedback_plus04',
 )
 
+_AGG_TRIALS_TABLE = None
+
+
+def get_aggregate_trials_table(one):
+    '''Load BWM aggregate trials parquet once (shared across insertions).'''
+    global _AGG_TRIALS_TABLE
+    if _AGG_TRIALS_TABLE is None:
+        path = download_aggregate_tables(one, type='trials')
+        _AGG_TRIALS_TABLE = pd.read_parquet(path)
+    return _AGG_TRIALS_TABLE
+
+
+def aggregate_trial_eids(one):
+    return set(get_aggregate_trials_table(one)['eid'].unique())
+
+
+def filter_pids_with_aggregate(pids, one):
+    '''Keep insertions whose session eid appears in the aggregate trials table.'''
+    eids_ok = aggregate_trial_eids(one)
+    out = []
+    for pid in pids:
+        eid, _ = one.pid2eid(pid)
+        if eid in eids_ok:
+            out.append(pid)
+    return np.array(out)
+
 
 def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
                            all_trials=None):
@@ -338,7 +364,7 @@ def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
     eid, raises so the insertion is skipped (same as the old pipeline).
     '''
     if all_trials is None:
-        all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+        all_trials = get_aggregate_trials_table(one)
     sess_trials = all_trials[all_trials['eid'] == eid].copy()
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
@@ -389,15 +415,17 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     if restart and cpath.exists():
         return np.load(cpath, allow_pickle=True).item()
 
-    spikes, clusters = load_good_units(one, pid)
+    all_trials = get_aggregate_trials_table(one)
     trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     trials_by_satur = {}
     for st in satur_types:
         _, mask = _apply_saturation_mask(
             trials, base_mask, one, eid, st, all_trials=all_trials,
         )
         trials_by_satur[st] = trials[mask]
+
+    # Spikes are expensive; load only after trials + aggregate checks pass.
+    spikes, clusters = load_good_units(one, pid)
 
     cache = {
         'pid': pid,
