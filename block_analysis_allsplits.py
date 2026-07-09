@@ -5,8 +5,7 @@ This script is used to analyze prior sensitivity of all splits (e.g. different a
 from one.api import ONE
 from brainbox.singlecell import bin_spikes2D
 from brainwidemap import (bwm_query, load_good_units, 
-                          load_trials_and_mask, bwm_units,
-                          download_aggregate_tables)
+                          load_trials_and_mask, bwm_units)
 from iblatlas.atlas import AllenAtlas
 from iblatlas.regions import BrainRegions
 import iblatlas
@@ -326,79 +325,6 @@ SATURATION_TYPES = (
     'saturation_feedback_plus04',
 )
 
-_AGG_TRIALS_TABLE = None
-
-
-def get_aggregate_trials_table(one):
-    '''Load BWM aggregate trials parquet once (shared across insertions).'''
-    global _AGG_TRIALS_TABLE
-    if _AGG_TRIALS_TABLE is None:
-        path = download_aggregate_tables(one, type='trials')
-        _AGG_TRIALS_TABLE = pd.read_parquet(path)
-    return _AGG_TRIALS_TABLE
-
-
-def aggregate_trial_eids(one):
-    return set(get_aggregate_trials_table(one)['eid'].unique())
-
-
-def filter_pids_with_aggregate(pids, one):
-    '''Keep insertions whose session eid appears in the aggregate trials table.'''
-    eids_ok = aggregate_trial_eids(one)
-    out = []
-    for pid in pids:
-        eid, _ = one.pid2eid(pid)
-        if eid in eids_ok:
-            out.append(pid)
-    return np.array(out)
-
-
-def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
-                           all_trials=None):
-    '''
-    Saturation exclusion on top of load_trials_and_mask base mask.
-
-    load_trials_and_mask(..., saturation_intervals=st) can assert when
-    truncate_to_pass shortens trials vs the aggregate table; we apply saturation
-    here with row alignment instead. If the aggregate table has no rows for this
-    eid, raises so the insertion is skipped (same as the old pipeline).
-    '''
-    if all_trials is None:
-        all_trials = get_aggregate_trials_table(one)
-    sess_trials = all_trials[all_trials['eid'] == eid].copy()
-    sess_trials.reset_index(drop=True, inplace=True)
-    n_sess = trials.shape[0]
-    if len(sess_trials) == 0:
-        raise ValueError(
-            f'No aggregate trials rows for eid {eid}; skipping insertion.'
-        )
-    if len(sess_trials) > n_sess:
-        sess_trials = sess_trials.iloc[:n_sess]
-    elif len(sess_trials) < n_sess:
-        raise ValueError(
-            f'Aggregate trials ({len(sess_trials)}) shorter than session '
-            f'({n_sess}) for eid {eid}; skipping insertion.'
-        )
-    intervals = (
-        [saturation_intervals]
-        if isinstance(saturation_intervals, str)
-        else list(saturation_intervals)
-    )
-    mask = base_mask.to_numpy().copy()
-    for interval in intervals:
-        if interval not in sess_trials.columns:
-            continue
-        mask[sess_trials[interval].to_numpy() == True] = False
-    return trials, mask
-
-
-def load_trials_for_saturation(one, eid, saturation_intervals, all_trials=None):
-    '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    return _apply_saturation_mask(
-        trials, base_mask, one, eid, saturation_intervals, all_trials=all_trials,
-    )
-
 
 def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
     '''
@@ -415,17 +341,11 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     if restart and cpath.exists():
         return np.load(cpath, allow_pickle=True).item()
 
-    all_trials = get_aggregate_trials_table(one)
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    spikes, clusters = load_good_units(one, pid)
     trials_by_satur = {}
     for st in satur_types:
-        _, mask = _apply_saturation_mask(
-            trials, base_mask, one, eid, st, all_trials=all_trials,
-        )
+        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=st)
         trials_by_satur[st] = trials[mask]
-
-    # Spikes are expensive; load only after trials + aggregate checks pass.
-    spikes, clusters = load_good_units(one, pid)
 
     cache = {
         'pid': pid,
@@ -468,7 +388,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         spikes, clusters = load_good_units(one, pid)
 
         # Load in trials data and mask bad trials (False if bad)
-        trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
+        trials, mask = load_trials_and_mask(one, eid,
+                       saturation_intervals=saturation_intervals)
         # remove certain trials
         trials = trials[mask]
     if 'block' in split:
@@ -1193,7 +1114,7 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
         trials = cached['trials'][satur].copy()
     else:
         spikes, clusters = load_good_units(one, pid)
-        trials, mask = load_trials_for_saturation(one, eid, satur)
+        trials, mask = load_trials_and_mask(one, eid, saturation_intervals=satur)
         trials = trials[mask]
     trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
 

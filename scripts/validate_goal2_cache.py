@@ -11,8 +11,8 @@ With control=True (default), random.seed is reset before each paired call so
 null shuffles match. Use --control-only for a faster deterministic check
 (true split only, no null loop).
 
-Only insertions whose eid appears in the BWM aggregate trials table are
-considered (same pool the old saturation path could use).
+Trial loading uses the same load_trials_and_mask(..., saturation_intervals=...)
+path as the pre-Goal-2 code.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import block_analysis_allsplits as ba  # noqa: E402
-from brainwidemap import bwm_query  # noqa: E402
+from brainwidemap import bwm_query, load_trials_and_mask  # noqa: E402
 
 DEFAULT_SPLITS = [
     'block_only',
@@ -81,24 +81,8 @@ def compare_d(D_ref, D_test, label):
     return errs
 
 
-def _skip_insertion(exc):
-    '''True if this insertion should be skipped (same as bulk drivers).'''
-    if isinstance(exc, ValueError) and 'skipping insertion' in str(exc):
-        return True
-    if isinstance(exc, AssertionError):
-        msg = str(exc)
-        if 'does not pass performance' in msg:
-            return True
-        if 'Trials table does not match' in msg:
-            return True
-    return False
-
-
 def collect_usable_caches(pids, n_want):
-    '''
-    Build up to n_want insertion caches. Skips case B / load errors without
-    loading spikes when eid is missing from aggregate (pre-filtered pids).
-    '''
+    '''Build up to n_want insertion caches; skip failures like get_all_d_vars.'''
     usable = []
     skipped = []
     for pid in pids:
@@ -108,7 +92,7 @@ def collect_usable_caches(pids, n_want):
             cache = ba.build_insertion_cache(pid, save=False, restart=False)
         except Exception as exc:
             skipped.append((pid, exc))
-            print(f'  skip cache build', pid, exc)
+            print('  skip cache build', pid, exc)
             gc.collect()
             continue
         usable.append((pid, cache))
@@ -116,10 +100,10 @@ def collect_usable_caches(pids, n_want):
     if len(usable) < n_want:
         raise RuntimeError(
             f'Only {len(usable)}/{n_want} usable insertions '
-            f'({len(skipped)} skipped after aggregate pre-filter).'
+            f'({len(skipped)} skipped).'
         )
     if skipped:
-        print(f'  ({len(skipped)} additional skip(s) during cache build)')
+        print(f'  ({len(skipped)} skip(s) before finding {n_want} usable)')
     return usable
 
 
@@ -128,7 +112,9 @@ def validate_cache_trials(usable):
     for pid, cache in usable:
         eid, _ = ba.one.pid2eid(pid)
         for st in ba.SATURATION_TYPES:
-            t_direct, mask = ba.load_trials_for_saturation(ba.one, eid, st)
+            t_direct, mask = load_trials_and_mask(
+                ba.one, eid, saturation_intervals=st,
+            )
             t_direct = t_direct[mask]
             t_cached = cache['trials'][st]
             if len(t_direct) != len(t_cached):
@@ -149,22 +135,16 @@ def validate_get_d_vars(usable, splits, control, nrand, seed):
     failures = []
     for pid, cache in usable:
         for split in splits:
-            try:
-                if control:
-                    random.seed(seed)
-                D_unc = ba.get_d_vars(
-                    split, pid, control=control, nrand=nrand, cached=None,
-                )
-                if control:
-                    random.seed(seed)
-                D_cached = ba.get_d_vars(
-                    split, pid, control=control, nrand=nrand, cached=cache,
-                )
-            except Exception as exc:
-                if _skip_insertion(exc):
-                    print('  skip', pid, split, exc)
-                    continue
-                raise
+            if control:
+                random.seed(seed)
+            D_unc = ba.get_d_vars(
+                split, pid, control=control, nrand=nrand, cached=None,
+            )
+            if control:
+                random.seed(seed)
+            D_cached = ba.get_d_vars(
+                split, pid, control=control, nrand=nrand, cached=cache,
+            )
             errs = compare_d(D_unc, D_cached, f'{pid}/{split}')
             if errs:
                 failures.extend(errs)
@@ -196,20 +176,12 @@ def main():
     args = p.parse_args()
 
     df = bwm_query(ba.one)
-    all_pids = df['pid'].values
-    agg_eids = ba.aggregate_trial_eids(ba.one)
-    pids = ba.filter_pids_with_aggregate(all_pids, ba.one)
+    pids = df['pid'].values
     n_need = max(args.n_pids, args.n_cache_pids)
 
     print('ONE cache:', ba.one.cache_dir)
-    print('BWM insertions:', len(all_pids))
-    print('With aggregate trials:', len(pids), f'({len(agg_eids)} unique eids in table)')
+    print('BWM insertions:', len(pids))
     print('Test splits:', args.splits)
-
-    if len(pids) < n_need:
-        raise RuntimeError(
-            f'Need {n_need} insertions with aggregate trials, only {len(pids)} available.'
-        )
 
     usable = collect_usable_caches(pids, n_need)
 
