@@ -393,6 +393,148 @@ Plots: `.../absence/cm_full/figs/sim_duringstim_stim_choice_d_euc_SIM.png`, `bwm
 
 **Example plots (2026-07-08):** `run_presence_unsplit_examples.sh` → `presence_unsplit_sweep/seed_123/examples/` (session cache HIT). Key figures per case (`presence_g_s{1200,1800}_d_s0_unsplit/figs/`): `s_prior_curve.png`, `s_shuffle_control.png`, `presence_*_curve_mean_comparison.png`, `presence_*_shuffle_controls.png`, `block_confounds/p_block_s_trajectory_*.png`.
 
+### 2026-07-09 — Goal 2 VALIDATED locally (ibllib 4.0.1 / ONE-api 3.5.2)
+
+**Env fix:** upgraded `ibllib` 2.38 → 4.0.1 (adds `SessionLoader(..., revision=)`). Also patched `str(eid)` when filtering aggregate trials table (ONE-api 3.x returns `uuid.UUID` from `pid2eid`).
+
+**Parity (`scripts/validate_goal2_cache.py`):** 5 insertions × 4 splits × cached vs uncached, `nrand=20`, with null shuffles — **all passed** (~4.6 min). Cache trials table check OK on 3 insertions.
+
+**Speed benchmark (`scripts/benchmark_goal2_10splits.py`, 5 insertions, 10 splits, `control=False`):**
+
+| insertion | old (10 reloads) | new (1 load + 10 splits) | speedup |
+|-----------|-----------------:|-------------------------:|--------:|
+| 1 | 47s | 10.5s | 4.5× |
+| 2 | 51s | 12.8s | 4.0× |
+| 3 | 51s | 11.8s | 4.5× |
+| 4 | 68s | 16.9s | 4.1× |
+| 5 | 86s | 27.6s | 3.1× |
+| **mean** | **61s** | **15.9s** | **3.8×** |
+
+Extrapolation to full BWM (699 insertions, 10 splits): **~12 h → ~3 h** wall time. Load component drops from ~55 s to ~5 s per insertion (~90% redundant I/O removed).
+
+**Storage:** one insertion cache ≈ **30 MB** (`manifold/insertion_cache/{eid_probe}.npy`); full BWM cache ≈ **22 GB** one-time. Per-split outputs (`manifold/{split}/*.npy`) unchanged. Tradeoff: +22 GB cache vs ~4× faster multi-split runs; adding splits 11–20 is nearly free once cache exists (`restart=True` skips existing outputs).
+
+**Caveat:** benchmark used `control=False` (no 2000-shuffle null). Production `control=True` adds per-split compute that is identical in old/new paths — speedup on full runs will be **load-dominated** (still ~N_splits× on reload, but smaller fraction of total when null loop is on).
+
+### 2026-07-10 — Goal 2: null-loop fix + nrand=2000 validation
+
+**Bug:** batched-null refactor briefly used **region-outer × null-inner** loop order, recomputing `b[ys].mean()` per region per null (~60 regions × 2000 nulls). That inflated one `block_only` call to **~147 s** at nrand=2000.
+
+**Fix:** restored original order — **null-outer × region-inner** in `_compute_control_D()` / `_append_perm()`. One full-tensor mean/var per null, then regional metrics.
+
+**nrand=2000 parity (`validate_goal2_cache.py`, 5 pids × 4 splits):** **all 20 pairs passed** (~71 min wall). Cached vs uncached outputs match bit-for-bit (with seed reset).
+
+**nrand=2000 timing (1 pid, `block_only`):**
+
+| path | time |
+|------|-----:|
+| uncached | ~64 s |
+| cached (after 8 s load) | ~61 s |
+
+Scaling: nrand=100 → 3.8 s, nrand=500 → 15.7 s, nrand=2000 → 60 s (~linear in nrand). **No regression vs pre-refactor** — user's "<1 min per insertion" holds for a single split.
+
+**3-split bench (`test_goal2_nrand2000.py`):** uncached 155 s, cached 149 s (load 8 s) → **1.04× speedup**. At nrand=2000 the null loop (~50 s/split) dominates; cache only saves reload I/O (~8 s once). Multi-split speedup from Goal 2 is **load-dominated when control=False**; with control=True the win is smaller per insertion but still ~8 s × (N_splits−1) saved across splits.
+
+**Scripts:** `scripts/test_goal2_nrand2000.py` (parity + bench + optional storage); import fix for `validate_goal2_cache.compare_d`.
+
+### 2026-07-10b — Goal 2 end-to-end comparison (alyx ONE cache, 5 insertions, nrand=2000)
+
+**Test ONE root:** `https://alyx.internationalbrainlab.org` → `/Users/ariliu/Downloads/ONE/alyx.internationalbrainlab.org`. (Earlier openalyx runs used a different cache root; alyx chosen for apples-to-apples comparison with pre-Goal-2 baseline.)
+
+**Scripts:** `scripts/_original_pipeline_worker.py` (isolated ee849e0 pipeline), `scripts/compare_alyx_pipeline.py` (new vs original + 2-split aggregate).
+
+#### Storage test (stream_pool, openalyx reference, 5 insertions, 1 split)
+
+| metric | value |
+|--------|------:|
+| Wall time | 404.5 s (~6.7 min) |
+| Peak RSS | 2429.8 MB |
+| Insertion cache | 322.4 MB (5 files) |
+| Stream acc checkpoint | 135.0 MB |
+| Final res | 24.1 MB |
+| **Total disk** | **481.5 MB** |
+| Per-split insertion files | **0** (stream_pool skips `manifold/{split}/*.npy`) |
+
+#### Original baseline (`block_only`, ee849e0, uncached)
+
+5 insertions → per-insertion `manifold/block_only/{eid_probe}.npy` + `d_var_stacked` → `manifold/res/block_only*.npy`.
+
+| metric | value |
+|--------|------:|
+| Wall time | 415.1 s (~6.9 min) |
+| Per-insertion mean | 82.8 s |
+| `d_var_stacked` | 0.7 s |
+| Peak RSS | 3735.4 MB |
+| Per-ins files | 231.2 MB (5 × ~46 MB) |
+| Final res | 24.1 MB |
+
+#### Split 1: `block_only` — original vs new (stream_pool + insertion cache)
+
+Final outputs (`res/` vs `res/_compare_stream/`): **OK — 10 regions match**.
+
+| | Original | New |
+|--|--:|--:|
+| Wall time | 415.1 s | 488.8 s |
+| Peak RSS | 3735 MB | 2423 MB |
+| Disk (intermediates + final) | 255 MB | 482 MB |
+
+Split 1 new path **slower** — pays one-time insertion-cache build (~322 MB). **~1.3 GB less peak RAM** (no materialised `ws` tensor for 2000 nulls).
+
+#### Split 2: `block_duringstim_l_choice_l_f1` — same 5 insertions, cache reused (`restart=True`)
+
+Final outputs: **OK — 10 regions match**.
+
+| | Original | New |
+|--|--:|--:|
+| Wall time | 283.9 s | **75.8 s** |
+| Per-insertion mean | 56.6 s | **15.1 s** |
+| Cache load mean | (full reload) | **0.0 s** |
+| Peak RSS | 2972 MB | 1457 MB |
+| Per-ins files | 120.6 MB | 0 (stream_pool) |
+
+Split 2 new path **3.7× faster** with cache hit.
+
+#### Two-split aggregate (same 5 insertions)
+
+| metric | Original | New (stream_pool) |
+|--------|----------:|------------------:|
+| **Total wall time** | **699 s (11.7 min)** | **565 s (9.4 min)** → **1.24× faster** |
+| Peak RSS (max of runs) | 3735 MB | 2422 MB |
+| Total disk | 388 MB | 561 MB |
+| Per-split insertion files | 10 (5×2) | 5 (split1 orig only; new writes 0) |
+
+Per-split timing: `block_only` orig 415 s / new 489 s; `duringstim_l_f1` orig 284 s / new **76 s**.
+
+#### Stream acc checkpoints (`manifold/res/_stream_acc/{split}.npy`)
+
+Incremental pool state saved after each insertion (replaces per-insertion `manifold/{split}/*.npy` + separate `d_var_stacked` pass). Contents: `pooled_keys`, `acs`/`acs1`, `ws`, `regdv0`/`regde0`, `uperms`. `finalize()` writes `manifold/res/{split}*.npy`.
+
+**Size vs per-insertion files (5 insertions, excluding insertion cache):**
+
+| split | per-ins files | stream acc | ratio |
+|-------|-------------:|-----------:|------:|
+| `block_only` | 231 MB | 135 MB | 0.58× |
+| `block_duringstim_l_choice_l_f1` | 121 MB | 68 MB | 0.56× |
+
+Stream acc **~55–60%** the size of per-split insertion files for the same insertions.
+
+#### Storage break-even (full BWM, 699 insertions)
+
+Formula (intermediates kept): `N × (P − S) = C` where `C` = cache bytes/insertion, `P` = per-ins file bytes/insertion/split, `S` = stream_acc bytes/insertion/split.
+
+| cache estimate | avg P, S from test | **N_splits to break even** |
+|----------------|-------------------|-----------------------------|
+| ~30 MB/ins (~22 GB total) | 35 / 20 MB | **~2 splits** |
+| ~64.5 MB/ins (alyx test avg) | 35 / 20 MB | **~4 splits** |
+| 64.5 MB/ins, `block_only`-like only | 46 / 27 MB | **~3 splits** |
+| 64.5 MB/ins, small splits only | 24 / 14 MB | **~6 splits** |
+
+If stream acc deleted after `finalize()`, persistent new storage ≈ cache + final res only → break-even **~1–2 splits**. Insertion cache is one-time; splits beyond break-even add mainly stream_acc (during run) + small final res.
+
 ## Next steps
 
-1. Goals 2 & 3 validation in working env (BWM `SessionLoader` compat).
+1. ~~Goals 2 validation in working env~~ DONE (07-09).
+2. ~~nrand=2000 parity + timing~~ DONE (07-10).
+3. ~~End-to-end original vs new pipeline comparison (alyx)~~ DONE (07-10b).
+4. Goal 3: contrast-conditioned prior mod + CRF slope on cached pipeline.
+5. Optional: `cache_all_insertions()` then `get_all_d_vars_allsplits(all_splits)` full BWM run (stream_pool=True, alyx or openalyx).

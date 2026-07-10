@@ -107,11 +107,13 @@ def validate_get_d_vars(pids, splits, control, nrand, seed):
         for split in splits:
             if control:
                 random.seed(seed)
+                np.random.seed(seed)
             D_unc = ba.get_d_vars(
                 split, pid, control=control, nrand=nrand, cached=None,
             )
             if control:
                 random.seed(seed)
+                np.random.seed(seed)
             D_cached = ba.get_d_vars(
                 split, pid, control=control, nrand=nrand, cached=cache,
             )

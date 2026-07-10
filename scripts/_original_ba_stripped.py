@@ -1,12 +1,10 @@
-'''
-This script is used to analyze prior sensitivity of all splits (e.g. different alignment times, choice/stim conditions).
-'''
+## not discarding cells with 0 or nan for all bins; 
+## but only included goodcells for counting/normalization (acs1)
 
 from one.api import ONE
 from brainbox.singlecell import bin_spikes2D
 from brainwidemap import (bwm_query, load_good_units, 
-                          load_trials_and_mask, bwm_units,
-                          download_aggregate_tables)
+                          load_trials_and_mask, bwm_units)
 from iblatlas.atlas import AllenAtlas
 from iblatlas.regions import BrainRegions
 import iblatlas
@@ -31,16 +29,16 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-# from adjustText import adjust_text
-# import matplotlib.image as mpimg
-# from matplotlib.gridspec import GridSpec
-# from matplotlib import colors
-# from mpl_toolkits.mplot3d import Axes3D
-# from mpl_toolkits.mplot3d import proj3d
-# from PIL import Image
-# import io
-# import matplotlib.patches as mpatches
-# import matplotlib.ticker as ticker
+from adjustText import adjust_text
+import matplotlib.image as mpimg
+from matplotlib.gridspec import GridSpec
+from matplotlib import colors
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import proj3d
+from PIL import Image
+import io
+import matplotlib.patches as mpatches
+import matplotlib.ticker as ticker
 
 import random
 from random import shuffle
@@ -138,8 +136,6 @@ align_old = {
          'act_block_stim_l_duringchoice_r_f2':'firstMovement_times',
          'act_block_stim_r_duringchoice_l_f2':'firstMovement_times',
          'act_block_only':'stimOn_times',
-         'act_block_stim_l':'stimOn_times',
-         'act_block_stim_r':'stimOn_times',
         }
 
 # align_act = {
@@ -203,136 +199,17 @@ for split in splits_new:
         align[split] = 'stimOn_times'
         pre_post[split] = [0.4,-0.1]
 
-# Goal-3 contrast conditioning. CONTRASTS are the IBL stimulus contrasts; 0.0 is
-# the fully prior-driven (0% contrast) stratum.
-CONTRASTS = [1.0, 0.25, 0.125, 0.0625, 0.0]
-
-# Contrast-stratified prior-modulation splits (block L vs R within one contrast
-# level), reusing the existing get_d_vars / d_var_stacked pipeline. ITI window as
-# for the base block_only split. Split name: 'block_only_c{contrast}'.
-block_only_contrast_splits = [
-    f'{s}_c{c:g}' for s in ('block_only', 'act_block_only') for c in CONTRASTS
-]
-for split in block_only_contrast_splits:
-    align[split] = 'stimOn_times'
-    pre_post[split] = [0.4, -0.1]
-
 
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
 #           base_url='https://openalyx.internationalbrainlab.org',
 #           password='international', silent=True)  # (mode='local')
-# one = ONE(base_url='https://alyx.internationalbrainlab.org')
-one = ONE()
+one = ONE(base_url='https://alyx.internationalbrainlab.org')
 ba = AllenAtlas()
 br = BrainRegions()
 
 # save results for plotting here
 pth_res = Path(one.cache_dir, 'manifold', 'res') 
 pth_res.mkdir(parents=True, exist_ok=True)
-pth_stream_acc = pth_res / '_stream_acc'
-pth_stream_acc.mkdir(parents=True, exist_ok=True)
-
-# null shuffles processed in batches inside get_d_vars (control=True) to cap RAM
-NULL_BATCH_SIZE = 100
-
-
-def _stream_acc_path(split):
-    return pth_stream_acc / f'{split}.npy'
-
-
-def _null_labels(split, ntr, dx):
-    '''One boolean trial label vector for a null draw.'''
-    if 'block_only' in split:
-        return generate_pseudo_blocks(ntr, first5050=0) == 0.8
-    tr_c = dx[np.argsort(dx[:, 1])][:, 0]
-    tr_c2 = np.array(random.sample(list(tr_c), len(tr_c)))
-    return tr_c2 == 1
-
-
-def _region_perm_metrics(m0, m1, v0, v1, b, half1, half2, ys, reg_mask):
-    '''
-    Regional distance curves for one (true or null) label split.
-    Returns region-summed (d_var_m, d_euc_m, d_xnobis) each shape (nbins,).
-    '''
-    m0_r = m0[reg_mask]
-    m1_r = m1[reg_mask]
-    v0_r = v0[reg_mask]
-    v1_r = v1[reg_mask]
-    d_var = (((m0_r - m1_r) / ((v0_r + v1_r) ** 0.5)) ** 2)
-    d_euc = (m0_r - m1_r) ** 2
-
-    m1_h1 = b[half1 & ys][:, reg_mask, :].mean(axis=0)
-    m0_h1 = b[half1 & ~ys][:, reg_mask, :].mean(axis=0)
-    m1_h2 = b[half2 & ys][:, reg_mask, :].mean(axis=0)
-    m0_h2 = b[half2 & ~ys][:, reg_mask, :].mean(axis=0)
-    dmu_h1 = m1_h1 - m0_h1
-    dmu_h2 = m1_h2 - m0_h2
-    var_pooled = 0.5 * (v0_r + v1_r)
-    inv_var = 1.0 / (var_pooled + 1e-12)
-    d_xcv_bins = np.nansum(dmu_h1 * inv_var * dmu_h2, axis=0)
-
-    return np.nansum(d_var, axis=0), np.sum(d_euc, axis=0), d_xcv_bins
-
-
-def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
-                       null_batch_size=NULL_BATCH_SIZE):
-    '''
-    Batched null loop: one full-tensor mean/var per null, then regional metrics.
-    Matches original loop order (perm outer, region inner) without materialising
-    ws of shape (2*(nrand+1), n_neurons, nbins).
-    '''
-    m0_true = bins[0].mean(axis=0)
-    m1_true = bins[1].mean(axis=0)
-    v0_true = bins[0].var(axis=0)
-    v1_true = bins[1].var(axis=0)
-    ys_true = dx[np.argsort(dx[:, 1])][:, 0].astype(bool)
-
-    regs = list(Counter(acs).keys())
-    reg_masks = {reg: (acs == reg) for reg in regs}
-    D = {
-        reg: {
-            'nclus': int(np.sum(acs1 == reg)),
-            'd_vars': [],
-            'd_eucs': [],
-            'd_xnobis': [],
-        }
-        for reg in regs
-    }
-    label_perms = [ys_true]
-
-    def _append_perm(m0, m1, v0, v1, ys):
-        for reg in regs:
-            dv, de, dxn = _region_perm_metrics(
-                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
-            D[reg]['d_vars'].append(dv)
-            D[reg]['d_eucs'].append(de)
-            D[reg]['d_xnobis'].append(dxn)
-
-    # j=0: true condition means from bins (not label-shuffled on b)
-    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
-
-    for batch_start in range(0, nrand, null_batch_size):
-        batch_end = min(batch_start + null_batch_size, nrand)
-        for _ in range(batch_start, batch_end):
-            ys = _null_labels(split, ntr, dx)
-            label_perms.append(ys)
-            _append_perm(
-                b[ys].mean(axis=0), b[~ys].mean(axis=0),
-                b[ys].var(axis=0), b[~ys].var(axis=0),
-                ys,
-            )
-
-    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
-    d_euc = (m0_true - m1_true) ** 2
-    return {
-        'acs': acs,
-        'acs1': acs1,
-        'd_vars': d_var,
-        'd_eucs': d_euc,
-        'ws': np.array([m0_true, m1_true])[:ntravis],
-        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
-        'D': D,
-    }
 
 
 # Function to calculate action kernel
@@ -415,126 +292,43 @@ def generate_pseudo_blocks(
     return np.array([0.5] * first5050 + block_ids[:n_trials - first5050])
 
 
-def saturation_for_split(split):
-    '''Saturation-interval key used to load/mask trials for a split's alignment.'''
-    if 'duringstim' in split:
-        return 'saturation_stim_plus04'
-    if 'duringchoice' in split:
-        return 'saturation_move_minus02'
-    if 'fback' in split:
-        return 'saturation_feedback_plus04'
-    return 'saturation_stim_plus04'
-
-
-SATURATION_TYPES = (
-    'saturation_stim_plus04',
-    'saturation_move_minus02',
-    'saturation_feedback_plus04',
-)
-
-
-def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
-    '''
-    Saturation exclusion on top of load_trials_and_mask base mask.
-
-    load_trials_and_mask(..., saturation_intervals=st) can assert when
-    truncate_to_pass shortens trials vs the aggregate table; we apply saturation
-    here with row alignment instead.
-    '''
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
-    sess_trials = all_trials[all_trials['eid'] == str(eid)].copy()
-    sess_trials.reset_index(drop=True, inplace=True)
-    n_sess = trials.shape[0]
-    if len(sess_trials) > n_sess:
-        sess_trials = sess_trials.iloc[:n_sess]
-    elif len(sess_trials) < n_sess:
-        raise AssertionError(
-            f'Trials table ({len(sess_trials)}) shorter than session ({n_sess}) for {eid}.'
-        )
-    intervals = (
-        [saturation_intervals]
-        if isinstance(saturation_intervals, str)
-        else list(saturation_intervals)
-    )
-    mask = base_mask.to_numpy().copy()
-    for interval in intervals:
-        mask[sess_trials[interval].to_numpy() == True] = False
-    return trials, mask
-
-
-def load_trials_for_saturation(one, eid, saturation_intervals):
-    '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
-
-
-def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
-    '''
-    Load an insertion's raw data ONCE (the expensive step) and cache it so every
-    split reuses it instead of re-loading per split.
-
-    Caches: spikes (times, clusters), clusters (cluster_id, atlas_id), and the
-    bad-trial-masked trials table for each saturation type (one per alignment
-    event: stim / move / feedback). Saved to manifold/insertion_cache/{eid_probe}.npy.
-    '''
-    eid, probe = one.pid2eid(pid)
-    eid_probe = f'{eid}_{probe}'
-    cpath = Path(one.cache_dir, 'manifold', 'insertion_cache', f'{eid_probe}.npy')
-    if restart and cpath.exists():
-        return np.load(cpath, allow_pickle=True).item()
-
-    spikes, clusters = load_good_units(one, pid)
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    trials_by_satur = {}
-    for st in satur_types:
-        _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
-        trials_by_satur[st] = trials[mask]
-
-    cache = {
-        'pid': pid,
-        'eid': eid,
-        'probe': probe,
-        'spikes': {'times': spikes['times'], 'clusters': spikes['clusters']},
-        'clusters': {'cluster_id': clusters['cluster_id'], 'atlas_id': clusters['atlas_id']},
-        'trials': trials_by_satur,
-    }
-    if save:
-        cpath.parent.mkdir(parents=True, exist_ok=True)
-        np.save(cpath, cache, allow_pickle=True)
-    return cache
-
-
 def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
-               control=True, nrand=2000, bycontrast=False, cached=None,
-               null_batch_size=NULL_BATCH_SIZE):
+               control=True, nrand = 2000, bycontrast=False):
 
     '''
     for a given session, probe, bin neural activity
     cut into trials, compute d_var per region
-
-    ``cached``: optional per-insertion cache from build_insertion_cache. When
-    provided, spikes/clusters/trials are reused (no per-split reload), which is
-    the time-efficient path. When None, loads from ONE as before (identical result).
     '''
     
     
     eid,probe = one.pid2eid(pid)
+    
+    # load in spikes
+    spikes, clusters = load_good_units(one, pid)    
 
-    saturation_intervals = saturation_for_split(split)
-
-    if cached is not None:
-        # Reuse the once-loaded insertion data (spikes/clusters/masked trials).
-        spikes = cached['spikes']
-        clusters = cached['clusters']
-        trials = cached['trials'][saturation_intervals].copy()
+    if 'duringstim' in split:
+        saturation_intervals = 'saturation_stim_plus04'
+            
+    elif 'duringchoice' in split:
+         saturation_intervals = 'saturation_move_minus02'
+            
+    elif 'fback' in split:
+        saturation_intervals = 'saturation_feedback_plus04'
+    
     else:
-        # load in spikes
-        spikes, clusters = load_good_units(one, pid)
+        saturation_intervals='saturation_stim_plus04'
+                              # 'saturation_feedback_plus04',
+                              # 'saturation_move_minus02',
+                              # 'saturation_stim_minus04_minus01',
+                              # 'saturation_stim_plus06',
+                              # 'saturation_stim_minus06_plus06']
 
-        # Load in trials data and mask bad trials (False if bad)
-        trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
-        # remove certain trials
-        trials = trials[mask]
+
+    # Load in trials data and mask bad trials (False if bad)
+    trials, mask = load_trials_and_mask(one, eid, 
+                   saturation_intervals = saturation_intervals)        
+    # remove certain trials
+    trials = trials[mask]
     if 'block' in split:
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
     # rs_range = [0.08, 2]  # discard [long/short] reaction time trials
@@ -562,17 +356,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                     np.arange(len(trials['stimOn_times']))[trials[f'contrast{side}']==contrast])
 
     if 'stim_l' in split:
-        if split in ('act_block_stim_l', 'block_stim_l'):
-            # L vs R block trajectories within left-stimulus trials (no choice filter).
-            trials = trials[~np.isnan(trials['contrastLeft'])]
-            for pleft in [0.8, 0.2]:
-                events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
-                trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
-        elif 'choice_l' in split and 'f1' in split: # correct trials, f1
-            if bycontrast:
-                trials = trials[trials[f'contrastLeft']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastLeft'])]
+        if bycontrast:
+            trials = trials[trials[f'contrastLeft']==contrast]
+        else:
+            trials = trials[~np.isnan(trials[f'contrastLeft'])]
+        if 'choice_l' in split and 'f1' in split: # correct trials, f1
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -581,10 +369,6 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                         trials['feedbackType'] == 1, trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f2' in split: 
             # choice_r trials, stim_l so these are incorrect trials, f2
-            if bycontrast:
-                trials = trials[trials[f'contrastLeft']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastLeft'])]
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -596,17 +380,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             return
         
     elif 'stim_r' in split:
-        if split in ('act_block_stim_r', 'block_stim_r'):
-            # L vs R block trajectories within right-stimulus trials (no choice filter).
-            trials = trials[~np.isnan(trials['contrastRight'])]
-            for pleft in [0.8, 0.2]:
-                events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
-                trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
-        elif 'choice_l' in split and 'f2' in split: # incorrect trials, f2
-            if bycontrast:  
-                trials = trials[trials[f'contrastRight']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastRight'])]
+        if bycontrast:  
+            trials = trials[trials[f'contrastRight']==contrast]
+        else:
+            trials = trials[~np.isnan(trials[f'contrastRight'])]
+        if 'choice_l' in split and 'f2' in split: # incorrect trials, f2
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -614,10 +392,6 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
                         trials['feedbackType'] == -1,trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f1' in split: # choice_r trials, correct, f1
-            if bycontrast:  
-                trials = trials[trials[f'contrastRight']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastRight'])]
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -733,20 +507,6 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                    trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
     
     elif 'block_only' in split:
-        # Optional contrast stratification: 'block_only_c{contrast}' restricts to
-        # trials whose |contrast| equals the requested value (0.0 => 0% contrast,
-        # where behavior is fully prior-driven) before the block L vs R split.
-        if '_c' in split:
-            tail = split.rsplit('_c', 1)[-1]
-            try:
-                cval = float(tail)
-            except ValueError:
-                cval = None
-            if cval is not None:
-                cmag = np.nanmax(
-                    np.c_[trials['contrastLeft'].values,
-                          trials['contrastRight'].values], axis=1)
-                trials = trials[np.isclose(cmag, cval)]
         for pleft in [0.8, 0.2]:
             events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
             trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
@@ -832,164 +592,139 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     bins = bins2
 
     if control:
-        return _compute_control_D(
-            b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
-            null_batch_size=null_batch_size,
-        )
+        # get mean and var across trials
+        w0 = [bi.mean(axis=0) for bi in bins]  
+        s0 = [bi.var(axis=0) for bi in bins]
+        
+        perms = []  # keep track of random trial splits to test sig
+        
+        # nrand times random impostor/pseudo split of trials 
+        for i in range(nrand):
+            
+            if 'block_only' in split: # 'block' pseudo sessions
+                ys = generate_pseudo_blocks(ntr, first5050=0) == 0.8
+        
+            else:
+                # simply shuffle the two labels (block l vs r)                
+                tr_c = dx[np.argsort(dx[:,1])][:,0]  # true labels
+                tr_c2 = deepcopy(tr_c)
+                
+                tr_c2 = np.array(random.sample(list(tr_c), len(tr_c)))
+                ys = tr_c2 == 1 # boolean shuffled labels
+                
+            w0.append(b[ys].mean(axis=0))
+            s0.append(b[ys].var(axis=0))
+            
+            w0.append(b[~ys].mean(axis=0))
+            s0.append(b[~ys].var(axis=0))                      
 
-    # average trials per condition (no null)
-    print('all trials')
-    w0 = [bi.mean(axis=0) for bi in bins]
-    s0 = [bi.var(axis=0) for bi in bins]
+            perms.append(ys)
+
+    else: # average trials per condition
+        print('all trials')
+        w0 = [bi.mean(axis=0) for bi in bins] 
+        s0 = [bi.var(axis=0) for bi in bins]
 
     ws = np.array(w0)
     ss = np.array(s0)
 
-    # strictly standardized mean difference (single-cell, true split only)
-    d_var = (((ws[0] - ws[1]) / ((ss[0] + ss[1]) ** 0.5)) ** 2)
-    d_euc = (ws[0] - ws[1]) ** 2
+    # --- align permutations list with a "true labels" entry first (for crossnobis) ---
+    ys_true = dx[np.argsort(dx[:, 1])][:, 0].astype(bool)
+    perms = [ys_true] + perms  # now perms[j] matches ws_[2*j], ws_[2*j+1]
+    
+    regs = Counter(acs)
 
-    return {
-        'acs': acs,
-        'acs1': acs1,
-        'd_vars': d_var,
-        'd_eucs': d_euc,
-        'ws': ws[:ntravis],
-    }
+    # Keep single cell d_var in extra file for computation of mean
+    # Can't be done with control data as files become too large 
+    # strictly standardized mean difference
+    d_var = (((ws[0] - ws[1])/
+              ((ss[0] + ss[1])**0.5))**2)
+              
+    d_euc = (ws[0] - ws[1])**2          
+              
+    D_ = {}
+    D_['acs'] = acs
+    D_['acs1'] = acs1
+    D_['d_vars'] = d_var
+    D_['d_eucs'] = d_euc
+    D_['ws'] = ws[:ntravis]
 
+    if not control:
+        return D_
 
-def _pool_scale():
-    return 1.0 / b_size if b_size else 1.0
-
-
-class SplitPoolAccumulator:
-    '''
-    Streaming pool across insertions for one split (replaces per-insertion
-    manifold/{split}/*.npy + separate d_var_stacked pass).
-    '''
-
-    def __init__(self, split, min_reg=min_reg):
-        self.split = split
-        self.min_reg = min_reg
-        self.pooled_keys = set()
-        self.acs = []
-        self.acs1 = []
-        self.ws = []
-        self.regdv0 = {}
-        self.regde0 = {}
-        self.uperms = {}
-
-    @classmethod
-    def load(cls, split, min_reg=min_reg):
-        path = _stream_acc_path(split)
-        if path.exists():
-            state = np.load(path, allow_pickle=True).item()
-            acc = cls(split, min_reg=min_reg)
-            acc.pooled_keys = set(state['pooled_keys'])
-            acc.acs = state['acs']
-            acc.acs1 = state['acs1']
-            acc.ws = state['ws']
-            acc.regdv0 = state['regdv0']
-            acc.regde0 = state['regde0']
-            acc.uperms = state['uperms']
-            return acc
-        return cls(split, min_reg=min_reg)
-
-    def add(self, eid_probe, D_):
-        if eid_probe in self.pooled_keys:
-            return False
-        if 'uperms' in D_:
-            self.uperms[eid_probe] = D_['uperms']
-        self.acs.append(D_['acs'])
-        self.acs1.append(D_['acs1'])
-        self.ws.append(D_['ws'])
-        scale = _pool_scale()
-        if 'D' not in D_:
-            raise ValueError('stream_pool requires control=True (regional null curves in D_)')
-        for reg in D_['D']:
-            self.regdv0.setdefault(reg, []).append(
-                np.array(D_['D'][reg]['d_vars']) * scale)
-            self.regde0.setdefault(reg, []).append(
-                np.array(D_['D'][reg]['d_eucs']) * scale)
-        self.pooled_keys.add(eid_probe)
-        return True
-
-    def save(self):
-        np.save(_stream_acc_path(self.split), {
-            'pooled_keys': list(self.pooled_keys),
-            'acs': self.acs,
-            'acs1': self.acs1,
-            'ws': self.ws,
-            'regdv0': self.regdv0,
-            'regde0': self.regde0,
-            'uperms': self.uperms,
-        }, allow_pickle=True)
-
-    def finalize(self, save=True):
-        '''Write manifold/res/{split}*.npy (same layout as d_var_stacked).'''
-        return _finalize_pooled_split(
-            self.split, self.acs, self.acs1, self.ws,
-            self.regdv0, self.regde0, self.min_reg, save=save,
-        )
-
-
-def _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key):
-    '''Add one insertion result into pool lists (used by d_var_stacked).'''
-    if 'uperms' in D_:
-        uperms[key] = D_['uperms']
-    acs.append(D_['acs'])
-    acs1.append(D_['acs1'])
-    ws.append(D_['ws'])
-    scale = _pool_scale()
-    for reg in D_.get('D', {}):
-        regdv0.setdefault(reg, []).append(np.array(D_['D'][reg]['d_vars']) * scale)
-        regde0.setdefault(reg, []).append(np.array(D_['D'][reg]['d_eucs']) * scale)
-
-
-def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg,
-                         save=True):
-    if not acs:
-        return {}, {}
-    acs_cat = np.concatenate(acs)
-    acs1_cat = np.concatenate(acs1)
-    ws_cat = np.concatenate(ws, axis=1)
-    regs0 = Counter(acs1_cat)
-    regs = {reg: regs0[reg] for reg in regs0 if regs0[reg] > min_reg}
-
-    regdv = {reg: (np.nansum(regdv0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
-    regde = {reg: (np.nansum(regde0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
-
-    r = {}
+    #  Sum together cells in same region to save memory
+    D = {}
+    
     for reg in regs:
+    
         res = {}
-        dat = ws_cat[:, acs_cat == reg, :]
-        res['nclus'] = regs[reg]
-        res['ws'] = dat[:2]
-        ampse = [np.max(x) - np.min(x) for x in regde[reg]]
-        res['p_euc'] = np.mean(np.array(ampse) >= ampse[0])
-        d_euc = regde[reg][0] - np.mean(regde[reg][1:], axis=0)
-        res['d_euc'] = d_euc - min(d_euc)
-        res['amp_euc'] = max(res['d_euc'])
-        loc = np.where(res['d_euc'] > 0.7 * (np.max(res['d_euc'])))[0]
-        if len(loc):
-            res['lat_euc'] = np.linspace(
-                -pre_post[split][0], pre_post[split][1], len(res['d_euc']))[loc[0]]
-        else:
-            res['lat_euc'] = np.nan
-        res['nclus'] = regs[reg]
-        r[reg] = res
 
-    if save:
-        np.save(Path(pth_res, f'{split}.npy'), r, allow_pickle=True)
-        np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
-    return r, regde
+        ws_ = [y[acs == reg] for y in ws]
+        ss_ = [y[acs == reg] for y in ss]
+     
+        res['nclus'] = sum(acs1 == reg)
+        d_vars = []
+        d_eucs = []
+        d_xnobis = []
+        # precompute region mask once for xnobis
+        reg_mask = (acs == reg)
+                
+        for j in range(len(ws_)//2):
+
+            # strictly standardized mean difference
+            d_var = (((ws_[2*j] - ws_[2*j + 1])/
+                      ((ss_[2*j] + ss_[2*j + 1])**0.5))**2)
+            
+            # Euclidean distance          
+            d_euc = (ws_[2*j] - ws_[2*j + 1])**2
+
+            # --- crossnobis (diagonal Σ): (Δμ_1)^T Σ^{-1} (Δμ_2) ---
+            ys = perms[j]  # boolean labels for condition 1 in this (true/permuted) split
+
+            # means per half & condition, restricted to region
+            # half 1
+            m1_h1 = b[half1 & ys][:, reg_mask, :].mean(axis=0)
+            m0_h1 = b[half1 & ~ys][:, reg_mask, :].mean(axis=0)
+            # half 2
+            m1_h2 = b[half2 & ys][:, reg_mask, :].mean(axis=0)
+            m0_h2 = b[half2 & ~ys][:, reg_mask, :].mean(axis=0)
+
+            # Δμ per half
+            dmu_h1 = (m1_h1 - m0_h1)           # shape: (n_reg_neurons, nbins)
+            dmu_h2 = (m1_h2 - m0_h2)
+
+            # diagonal Σ estimate: pooled variance across conditions for this pair
+            # (use ss_ entries, already per-condition variances)
+            var_pooled = 0.5 * (ss_[2*j] + ss_[2*j + 1])
+            inv_var = 1.0 / (var_pooled + 1e-12)
+
+            # crossnobis per time bin: sum over neurons of Δμ_h1 * Σ^{-1} * Δμ_h2
+            d_xcv_bins = np.nansum(dmu_h1 * inv_var * dmu_h2, axis=0)  # shape (nbins,)
+
+            # sum over cells, divide by #neu later
+            d_var_m = np.nansum(d_var,axis=0)
+            d_euc_m = np.sum(d_euc,axis=0)
+            
+            d_vars.append(d_var_m)
+            d_eucs.append(d_euc_m)
+            d_xnobis.append(d_xcv_bins)
+            
+        res['d_vars'] = d_vars
+        res['d_eucs'] = d_eucs
+        res['d_xnobis'] = d_xnobis
+        
+        D[reg] = res
+        
+    D_['uperms'] = len(np.unique([str(x.astype(int)) for x in perms]))
+    D_['D'] = D    
+    return D_    
 
 
 def identify_good_session(eid):
     #sess_loader = SessionLoader(one, eid)
     #sess_loader.load_trials()
     #trials = sess_loader.trials
-    trials, mask = load_trials_and_mask(one, eid)
+    trials, mask = bwm_loading.load_trials_and_mask(one, eid)
     
     #remove sessions with less than 400 trials
     if len(trials) < 400:
@@ -1184,323 +919,6 @@ def get_all_d_vars_badsession(split, eids_plus = None, control = True,
     print(Fs)
 
     
-def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
-                             mapping='Beryl', bycontrast=False, restart=True,
-                             use_cache=True, save_cache=True,
-                             stream_pool=False, save_per_insertion=None,
-                             null_batch_size=NULL_BATCH_SIZE, nrand=nrand):
-    '''
-    Time-efficient driver: iterate insertions in the OUTER loop, load each
-    insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
-    for that insertion from the cached data. Replaces calling get_all_d_vars per
-    split (which reloaded spikes/trials for every split).
-
-    When ``stream_pool=True``, results are accumulated into
-    ``manifold/res/_stream_acc/{split}.npy`` and finalized to
-    ``manifold/res/{split}*.npy`` without writing per-insertion
-    ``manifold/{split}/{eid_probe}.npy`` (major disk savings).
-
-  ``save_per_insertion``: write manifold/{split}/{eid_probe}.npy (default False
-    when stream_pool else True). ``restart``: skip (split, insertion) already done.
-    '''
-    if save_per_insertion is None:
-        save_per_insertion = not stream_pool
-
-    time00 = time.perf_counter()
-    print('splits', splits_list, 'control', control, 'use_cache', use_cache,
-          'stream_pool', stream_pool, 'null_batch_size', null_batch_size)
-
-    if eids_plus is None:
-        df = bwm_query(one)
-        eids_plus = df[['eid', 'probe_name', 'pid']].values
-
-    accumulators = {}
-    if stream_pool:
-        for split in splits_list:
-            accumulators[split] = SplitPoolAccumulator.load(split)
-    elif save_per_insertion:
-        for split in splits_list:
-            Path(one.cache_dir, 'manifold', split).mkdir(parents=True, exist_ok=True)
-
-    Fs = []
-    k = 0
-    print(f'Processing {len(eids_plus)} insertions x {len(splits_list)} splits')
-    for eid, probe, pid in eids_plus:
-        k += 1
-        eid_probe = f'{eid}_{probe}'
-        time0 = time.perf_counter()
-
-        pending = []
-        for split in splits_list:
-            if stream_pool:
-                if restart and eid_probe in accumulators[split].pooled_keys:
-                    continue
-            elif restart and save_per_insertion:
-                outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
-                if outp.exists():
-                    continue
-            pending.append(split)
-        if not pending:
-            print(k, 'of', len(eids_plus), 'all splits done, skip')
-            continue
-
-        try:
-            cache = build_insertion_cache(pid, save=save_cache, restart=restart) if use_cache else None
-        except Exception as exc:
-            Fs.append(pid)
-            gc.collect()
-            print(k, 'of', len(eids_plus), 'fail (load)', pid, exc)
-            continue
-
-        n_ok = 0
-        for split in pending:
-            try:
-                D_ = get_d_vars(split, pid, control=control, mapping=mapping,
-                                bycontrast=bycontrast, cached=cache,
-                                null_batch_size=null_batch_size, nrand=nrand)
-                if stream_pool:
-                    accumulators[split].add(eid_probe, D_)
-                    accumulators[split].save()
-                if save_per_insertion:
-                    outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
-                    np.save(outp, D_, allow_pickle=True)
-                n_ok += 1
-            except Exception as exc:
-                print('   split fail', split, pid, exc)
-        del cache
-        gc.collect()
-        time1 = time.perf_counter()
-        print(k, 'of', len(eids_plus), f'ok {n_ok}/{len(pending)} splits', round(time1 - time0, 1), 'sec')
-
-    if stream_pool:
-        for split in splits_list:
-            print('finalize stream pool', split, f'({len(accumulators[split].pooled_keys)} insertions)')
-            accumulators[split].finalize()
-
-    time11 = time.perf_counter()
-    print((time11 - time00) / 60, f'min for {len(eids_plus)} insertions x {len(splits_list)} splits')
-    print(f'{len(Fs)} load failures:')
-    print(Fs)
-
-
-def cache_all_insertions(eids_plus=None, restart=True):
-    '''Build (and persist) the per-insertion raw-data cache for all BWM insertions.'''
-    if eids_plus is None:
-        df = bwm_query(one)
-        eids_plus = df[['eid', 'probe_name', 'pid']].values
-    Fs = []
-    for k, (eid, probe, pid) in enumerate(eids_plus, 1):
-        t0 = time.perf_counter()
-        try:
-            build_insertion_cache(pid, restart=restart)
-            print(k, 'of', len(eids_plus), 'cached', round(time.perf_counter() - t0, 1), 'sec')
-        except Exception as exc:
-            Fs.append(pid)
-            print(k, 'of', len(eids_plus), 'fail', pid, exc)
-        gc.collect()
-    print(f'{len(Fs)} cache failures:', Fs)
-
-
-def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
-                  contrasts=CONTRASTS, nrand=1000, min_reg=min_reg):
-    '''
-    Goal 3: contrast-response function (CRF) per region, split by block prior,
-    and a test of whether the prior modulates the CRF slope (gain).
-
-    For each stimulus side (L/R) and |contrast| in ``contrasts`` we compute the
-    mean post-stim population response per neuron over ``window`` (single time
-    bin from stimOn), then average within region. The CRF is response vs contrast.
-
-    "concordant" prior = block favors the stimulus side (high prior for that side),
-    "discordant" = block favors the opposite side. At 0% contrast behavior is fully
-    prior-driven, so it anchors the low end of the CRF.
-
-    Prior modulation of gain = slope(concordant) - slope(discordant), averaged over
-    sides. Significance via a null that shuffles block (concordant/discordant)
-    labels *within* each (side, contrast) cell, preserving side/contrast structure.
-
-    Returns per region: {'nclus', 'contrasts', 'crf_conc', 'crf_disc',
-    'slope_conc', 'slope_disc', 'slope_mod', 'p_slope_mod'}.
-    '''
-    eid, probe = one.pid2eid(pid)
-    satur = 'saturation_stim_plus04'
-    if cached is not None:
-        spikes = cached['spikes']
-        clusters = cached['clusters']
-        trials = cached['trials'][satur].copy()
-    else:
-        spikes, clusters = load_good_units(one, pid)
-        trials, mask = load_trials_for_saturation(one, eid, satur)
-        trials = trials[mask]
-    trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
-
-    acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
-    good = ~np.bitwise_or.reduce([acs == r for r in ['void', 'root']])
-    acs = acs[good]
-
-    contrasts = sorted(set(float(c) for c in contrasts))
-    pre_t = 0.0
-    post_t = float(window[1] - window[0])
-
-    # Per (side, contrast): single-bin response (ntr, n_good_neurons) + conc mask.
-    cond = {}
-    stim_on = trials['stimOn_times'].values
-    pl = trials['probabilityLeft'].values
-    for side, cside in (('L', 'contrastLeft'), ('R', 'contrastRight')):
-        conc_pleft = 0.8 if side == 'L' else 0.2
-        cvals = trials[cside].values
-        for c in contrasts:
-            sel = np.isclose(cvals, c)
-            if sel.sum() == 0:
-                continue
-            ev = stim_on[sel]
-            bi, _ = bin_spikes2D(
-                spikes['times'],
-                clusters['cluster_id'][spikes['clusters']],
-                clusters['cluster_id'],
-                np.array(ev), pre_t, post_t, post_t)
-            R = bi[:, :, 0][:, good]  # (ntr, n_good)
-            cond[(side, c)] = {'R': R, 'conc': pl[sel] == conc_pleft}
-
-    def _slope_mod(reg_mask, perm=None):
-        side_mods = []
-        for side in ('L', 'R'):
-            xs, rc, rd = [], [], []
-            for c in contrasts:
-                key = (side, c)
-                if key not in cond:
-                    continue
-                R = cond[key]['R'][:, reg_mask]
-                conc = cond[key]['conc'] if perm is None else perm[key]
-                if conc.sum() == 0 or (~conc).sum() == 0:
-                    continue
-                xs.append(c)
-                rc.append(float(R[conc].mean()))
-                rd.append(float(R[~conc].mean()))
-            if len(xs) >= 2:
-                xs = np.array(xs)
-                side_mods.append(np.polyfit(xs, rc, 1)[0] - np.polyfit(xs, rd, 1)[0])
-        return float(np.mean(side_mods)) if side_mods else np.nan
-
-    def _crf(reg_mask, which):
-        out = []
-        for c in contrasts:
-            vals = []
-            for side in ('L', 'R'):
-                key = (side, c)
-                if key not in cond:
-                    continue
-                R = cond[key]['R'][:, reg_mask]
-                m = cond[key]['conc'] if which == 'conc' else ~cond[key]['conc']
-                if m.sum():
-                    vals.append(float(R[m].mean()))
-            out.append(np.mean(vals) if vals else np.nan)
-        return out
-
-    regs = Counter(acs)
-    D = {}
-    for reg, n in regs.items():
-        if n < min_reg:
-            continue
-        rm = (acs == reg)
-        true_mod = _slope_mod(rm)
-        if np.isnan(true_mod):
-            continue
-        null = np.array([
-            _slope_mod(rm, perm={k: np.random.permutation(v['conc']) for k, v in cond.items()})
-            for _ in range(nrand)
-        ])
-        null = null[~np.isnan(null)]
-        p = float(np.mean(np.abs(null) >= abs(true_mod))) if null.size else np.nan
-        crf_c = _crf(rm, 'conc')
-        crf_d = _crf(rm, 'disc')
-        D[reg] = {
-            'nclus': int(n),
-            'contrasts': list(contrasts),
-            'crf_conc': crf_c,
-            'crf_disc': crf_d,
-            'slope_conc': (np.polyfit(contrasts, crf_c, 1)[0]
-                           if not np.any(np.isnan(crf_c)) else np.nan),
-            'slope_disc': (np.polyfit(contrasts, crf_d, 1)[0]
-                           if not np.any(np.isnan(crf_d)) else np.nan),
-            'slope_mod': true_mod,
-            'p_slope_mod': p,
-        }
-    return {'pid': pid, 'eid': eid, 'D': D, 'contrasts': list(contrasts)}
-
-
-def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
-                      nrand=1000, restart=True, use_cache=True):
-    '''Driver: per-insertion CRF slope + prior-modulation test; save per insertion.'''
-    if eids_plus is None:
-        df = bwm_query(one)
-        eids_plus = df[['eid', 'probe_name', 'pid']].values
-    pth = Path(one.cache_dir, 'manifold', 'crf_slope')
-    pth.mkdir(parents=True, exist_ok=True)
-    Fs = []
-    for k, (eid, probe, pid) in enumerate(eids_plus, 1):
-        eid_probe = f'{eid}_{probe}'
-        outp = Path(pth, f'{eid_probe}.npy')
-        if restart and outp.exists():
-            continue
-        t0 = time.perf_counter()
-        try:
-            cache = build_insertion_cache(pid, restart=restart) if use_cache else None
-            D_ = get_crf_slope(pid, cached=cache, mapping=mapping, nrand=nrand)
-            np.save(outp, D_, allow_pickle=True)
-            del cache
-            gc.collect()
-            print(k, 'of', len(eids_plus), 'ok', round(time.perf_counter() - t0, 1), 'sec')
-        except Exception as exc:
-            Fs.append(pid)
-            gc.collect()
-            print(k, 'of', len(eids_plus), 'fail', pid, exc)
-    print(f'{len(Fs)} failures:', Fs)
-
-
-def crf_slope_stacked(min_reg=min_reg, alpha_sig=0.05):
-    '''
-    Pool CRF-slope prior modulation across insertions per region.
-
-    Aggregates slope_mod (concordant-discordant CRF slope) by nanmean across
-    insertions, averages the per-insertion p-values, and reports the mean CRF
-    curves. Writes manifold/res/crf_slope_stacked.npy.
-    '''
-    pth = Path(one.cache_dir, 'manifold', 'crf_slope')
-    files = [f for f in os.listdir(pth) if f.endswith('.npy')]
-    agg = {}
-    for f in files:
-        D_ = np.load(Path(pth, f), allow_pickle=True).item()
-        contrasts = D_.get('contrasts')
-        for reg, r in D_['D'].items():
-            a = agg.setdefault(reg, {'slope_mod': [], 'p': [], 'nclus': [],
-                                     'crf_conc': [], 'crf_disc': [], 'contrasts': contrasts})
-            a['slope_mod'].append(r['slope_mod'])
-            a['p'].append(r['p_slope_mod'])
-            a['nclus'].append(r['nclus'])
-            a['crf_conc'].append(r['crf_conc'])
-            a['crf_disc'].append(r['crf_disc'])
-    res = {}
-    for reg, a in agg.items():
-        if np.nansum(a['nclus']) < min_reg or len(a['slope_mod']) == 0:
-            continue
-        res[reg] = {
-            'n_insertions': len(a['slope_mod']),
-            'nclus_total': int(np.nansum(a['nclus'])),
-            'slope_mod_mean': float(np.nanmean(a['slope_mod'])),
-            'p_slope_mod_mean': float(np.nanmean(a['p'])),
-            'frac_sig': float(np.nanmean(np.array(a['p']) < alpha_sig)),
-            'crf_conc_mean': np.nanmean(np.array(a['crf_conc'], dtype=float), axis=0).tolist(),
-            'crf_disc_mean': np.nanmean(np.array(a['crf_disc'], dtype=float), axis=0).tolist(),
-            'contrasts': a['contrasts'],
-        }
-    outp = Path(one.cache_dir, 'manifold', 'res', 'crf_slope_stacked.npy')
-    outp.parent.mkdir(parents=True, exist_ok=True)
-    np.save(outp, res, allow_pickle=True)
-    print(f'crf_slope_stacked: {len(res)} regions -> {outp}')
-    return res
-
-
 def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
                   
     time0 = time.perf_counter()
@@ -1509,12 +927,14 @@ def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
     average d_var_m via nanmean across insertions,
     remove regions with too few neurons (min_reg)
     compute maxes, latencies and p-values
-  '''
+    '''
     
     print(split)
     pth = Path(one.cache_dir, 'manifold', split) 
     ss = os.listdir(pth)  # get insertions
     
+
+    # pool data for illustrative PCA
     acs = []
     acs1 = []
     ws = [] 
@@ -1522,19 +942,103 @@ def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
     regde0 = {}
     uperms = {}
     
+    # group results across insertions
     for s in ss:
-        D_ = np.load(Path(pth, s), allow_pickle=True).flat[0]
-        key = s.split('.')[0]
-        if 'uperms' in D_:
-            uperms[key] = D_['uperms']
+    
+        D_ = np.load(Path(pth,s), 
+                    allow_pickle=True).flat[0]
+                       
+        uperms[s.split('.')[0]] = D_['uperms']
         if uperms_:
             continue
-        _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key)
+        acs.append(D_['acs'])
+        acs1.append(D_['acs1'])
+        ws.append(D_['ws'])        
+        
+        for reg in D_['D']:
+            if reg not in regdv0:
+                regdv0[reg] = []
+            regdv0[reg].append(np.array(D_['D'][reg]['d_vars'])/b_size)
+            if reg not in regde0:
+                regde0[reg] = []            
+            regde0[reg].append(np.array(D_['D'][reg]['d_eucs'])/b_size)
     
     if uperms_:
         return uperms
 
-    _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg, save=True)
+    acs = np.concatenate(acs)
+    acs1 = np.concatenate(acs1)
+    ws = np.concatenate(ws, axis=1)
+    regs0 = Counter(acs1)
+    regs = {reg: regs0[reg] for reg in regs0 if regs0[reg] > min_reg}
+        
+    # nansum across insertions and take sqrt
+    regdv = {reg: (np.nansum(regdv0[reg],axis=0)/regs[reg])**0.5 
+                  for reg in regs }         
+    regde = {reg: (np.nansum(regde0[reg],axis=0)/regs[reg])**0.5
+                  for reg in regs}
+        
+    r = {}
+    for reg in regs:         
+        res = {}        
+    
+        # # get PCA for 3d trajectories
+        dat = ws[:,acs == reg,:]
+        # pca = PCA(n_components = 3)
+        # wsc = pca.fit_transform(np.concatenate(dat,axis=1).T).T
+
+        # res['pcs'] = wsc
+        res['nclus'] = regs[reg]
+        res['ws'] = dat[:2] #first two are real trajectories
+
+        '''
+        var
+        '''        
+        # amplitudes
+#        ampsv = [np.max(x) - np.min(x) for x in regdv[reg]]                
+
+        # p value
+#        res['p_var'] = np.mean(np.array(ampsv) >= ampsv[0])      
+
+        # full curve, subtract null-d mean
+#        d_var = regdv[reg][0] - np.mean(regdv[reg][1:], axis=0)
+#        res['d_var'] = d_var - min(d_var)
+#        res['amp_var'] = max(res['d_var'])
+    
+        # latency  
+#        if np.max(res['d_var']) == np.inf:
+#            loc = np.where(res['d_var'] == np.inf)[0]  
+#        else:
+#            loc = np.where(res['d_var'] > 0.7*(np.max(res['d_var'])))[0]
+        
+#        res['lat_var'] = np.linspace(-pre_post[split][0], 
+#                        pre_post[split][1], len(res['d_var']))[loc[0]]
+                      
+        '''
+        euc
+        '''          
+        # amplitudes
+        ampse = [np.max(x) - np.min(x) for x in regde[reg]]                
+
+        # p value
+        res['p_euc'] = np.mean(np.array(ampse) >= ampse[0])      
+
+        # full curve, subtract null-d mean
+        d_euc = regde[reg][0] - np.mean(regde[reg][1:], axis=0)
+        res['d_euc'] = d_euc - min(d_euc)
+        res['amp_euc'] = max(res['d_euc'])
+    
+        # latency  
+        loc = np.where(res['d_euc'] > 0.7*(np.max(res['d_euc'])))[0]
+        
+        res['lat_euc'] = np.linspace(-pre_post[split][0], 
+                        pre_post[split][1], len(res['d_euc']))[loc[0]]   
+
+        res['nclus'] = regs[reg]
+        r[reg] = res        
+    
+    np.save(Path(pth_res,f'{split}.npy'), r, allow_pickle=True)
+    np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
            
     time1 = time.perf_counter()    
     print('total time:', time1 - time0, 'sec')
@@ -1707,7 +1211,641 @@ def d_var_stacked_single_session(eid, split, min_reg = 10):
     time1 = time.perf_counter()    
     print('total time:', time1 - time0, 'sec')
               
+'''    
+#####################################################
+### plotting 
+#####################################################    
+'''
 
+def get_allen_info():
+    dfa = pd.read_csv(Path(pth_res,'allen_structure_tree.csv'))
+    
+    # get colors per acronym and transfomr into RGB
+    dfa['color_hex_triplet'] = dfa['color_hex_triplet'].fillna('FFFFFF')
+    dfa['color_hex_triplet']  = dfa['color_hex_triplet'
+                                    ].replace('19399','19399a')
+    dfa['color_hex_triplet']  = dfa['color_hex_triplet'] .replace('0','FFFFFF')
+    dfa['color_hex_triplet'] = '#' + dfa['color_hex_triplet'].astype(str)
+    dfa['color_hex_triplet'] = dfa['color_hex_triplet'
+                                ].apply(lambda x: 
+                                mpl.colors.to_rgba(x))
+                                
+    palette = dict(zip(dfa.acronym, dfa.color_hex_triplet))
+
+    return dfa, palette           
+
+
+def put_panel_label(ax, k):                    
+        ax.annotate(string.ascii_lowercase[k],(-0.05, 1.15),
+                        xycoords='axes fraction',
+                        fontsize=f_size*1.5, va='top', 
+                        ha='right', weight='bold')
+
+
+def plot_all(exs_reg, curve='euc', amp_number=False, intro = False, 
+             sigl=0.01, only3d = False, onlyScat = False, 
+             single_scat=False, auto_label_adjust = False,
+             ga_pcs=True, lowcontrast=False):
+
+    '''
+    main figure: show example trajectories,
+    d_var_m for select regions and scatter all sigificant regions
+    curve in [var, euc]
+    sigl: significance level, default 0.05
+    intro: if False, don't plot schematics of method and contrast
+    only3d: only 3d plots 
+    '''
+
+    
+    nrows = 12
+        
+    fig = plt.figure(figsize=(10, 10*(2**.5)))  #10, 15
+    gs = fig.add_gridspec(nrows, len(align))
+    
+    dfa, palette = get_allen_info()
+                   
+
+    axs = []
+    k = 0  # panel counter
+    row = 0  # row counter
+    
+
+    '''
+    get significant regions
+    '''           
+    tops = {}
+    regsa = []
+
+    for split in align: 
+        
+        if lowcontrast:
+            d = np.load(Path(pth_res,f'{split}_lowcontrast.npy'),
+                    allow_pickle=True).flat[0]
+        else:
+            d = np.load(Path(pth_res,f'{split}.npy'),
+                    allow_pickle=True).flat[0]              
+             
+        maxs = np.array([d[x][f'amp_{curve}'] for x in d])
+        acronyms = np.array(list(d.keys()))
+        order = list(reversed(np.argsort(maxs)))
+        maxs = maxs[order]
+        acronyms = acronyms[order] 
+             
+        tops[split] = [acronyms, 
+                      [d[reg][f'p_{curve}'] for reg in acronyms], maxs]
+
+            
+        maxs = np.array([d[reg][f'amp_{curve}'] for reg in acronyms
+                         if d[reg][f'p_{curve}'] < sigl])
+                         
+        maxsf = [v for v in maxs if not (math.isinf(v) or math.isnan(v))] 
+
+        print(split, curve)
+        print(f'{len(maxsf)}/{len(d)} are significant')
+        tops[split+'_s'] = f'{len(maxsf)}/{len(d)}'
+        regs_a = [tops[split][0][j] for j in range(len(tops[split][0]))
+                if tops[split][1][j] < sigl]
+        
+        
+        regsa.append(regs_a)
+        print(regs_a)
+        print(' ')
+
+
+    #  get Cosmos parent region for yellow color adjustment
+    regsa.append([exs_reg])
+    regsa = np.unique(np.concatenate(regsa))
+    cosregs_ = [dfa[dfa['id'] == int(dfa[dfa['acronym']==reg]['structure_id_path']
+           .values[0].split('/')[4])]['acronym']
+           #.values[0] for reg in regsa]
+           .values[0] for reg in list(d.keys())]
+    
+    cosregs = dict(zip(regsa,cosregs_)) 
+
+    v = 0 if intro else 3  # indexing rows
+    vv = 1 if v == 0 else 0  # indexing columns
+
+    
+    if not onlyScat:
+
+        
+        '''
+        load schematic intro and contrast trajectory plot (convert from svg)
+        '''
+
+        if intro:
+    
+            axs.append(fig.add_subplot(gs[:3,:]))
+      
+            pdf = fitz.open(Path(pth_res,'intro2.pdf'))
+            rgb = pdf[0].get_pixmap(dpi=600)
+            pil_image = Image.open(io.BytesIO(rgb.tobytes()))
+                    
+            imgplot = axs[k].imshow(pil_image.convert('RGB'))
+            axs[k].axis('off')
+            put_panel_label(axs[k], k)
+            k += 1
+            row += 1
+
+           
+        '''
+        Trajectories for example regions in PCA embedded 3d space
+        '''
+                         
+        c = 0
+        for split in align:
+        
+            # pick example region
+            reg = exs_reg
+            
+            if ga_pcs:
+                d = np.load(Path(pth_res,'grand_averages.npy'),
+                  allow_pickle=True).flat[0][split]
+                #d = np.load(Path(pth_res, f'{split}_grand_averages.npy'),
+                #        allow_pickle=True).flat[0]
+            else:
+                if lowcontrast:
+                    d = np.load(Path(pth_res,f'{split}_lowcontrast.npy'),
+                            allow_pickle=True).flat[0][reg] 
+                else:
+                    d = np.load(Path(pth_res,f'{split}.npy'),
+                            allow_pickle=True).flat[0][reg] 
+
+            if only3d:
+                axs.append(fig.add_subplot(gs[:,c],
+                                           projection='3d'))             
+            else:
+                axs.append(fig.add_subplot(gs[3-v:6-v,c],
+                                           projection='3d'))           
+
+            npcs, allnobs = d['pcs'].shape
+            nobs = allnobs // ntravis
+
+            for j in range(2): 
+            #for j in range(ntravis):
+            
+                # 3d trajectory
+                cs = d['pcs'][:,nobs * j: nobs * (j+1)].T
+        
+
+                if j == 0:
+                    col = grad('Blues_r', nobs)
+                elif j == 1:
+                    col = grad('Reds_r', nobs)
+                else:
+                    col = grad('Greys_r', nobs)
+                        
+                axs[k].plot(cs[:,0],cs[:,1],cs[:,2], color=col[len(col)//2],
+                        linewidth = 5 if j in [0,1] else 1,
+                        label=trial_split[split][j] if j in range(3)
+                                  else '_nolegend_', alpha = 0.5)
+                              
+                p = axs[k].scatter(cs[:,0],cs[:,1],cs[:,2], color=col,
+                               edgecolors = col, 
+                               s=20 if j in [0,1] else 1,
+                               depthshade=False)
+
+            
+            axs[k].set_title(f"{split}, {reg} {d['nclus']}" if not ga_pcs
+                             else split)   
+            axs[k].grid(False)
+            axs[k].axis('off')
+
+            if c == 0:
+                put_panel_label(axs[k], row)
+
+            c += 1
+            k += 1
+            
+        row += 1
+        
+                   
+        if only3d:
+            fig.savefig(Path(pth_res,f'trajectories_{curve}.pdf'), dpi=400)
+            plt.show()
+            return
+                 
+        '''
+        line plot per 5 example regions per split
+        '''
+        c = 0  # column index
+
+        for split in align:
+            if c == 0:
+                axs.append(fig.add_subplot(gs[6-v:8-v,c]))
+                #axs[-1].set_ylim(0, 4.5/b_size)
+            else:  # to share y axis
+                axs.append(fig.add_subplot(gs[6-v:8-v,c]))
+                           #,sharey=axs[len(axs)-1]))
+            
+            if lowcontrast:
+                d = np.load(Path(pth_res,f'{split}_lowcontrast.npy'),
+                            allow_pickle=True).flat[0] 
+            else:
+                d = np.load(Path(pth_res,f'{split}.npy'),
+                            allow_pickle=True).flat[0] 
+                       
+            # example regions to illustrate line plots              
+            #regs = exs[split]
+            regs = regsa # use significant regions only + the exs region for 3d plot
+            
+            texts = []          
+            for reg in regs:
+                if reg not in list(d.keys()):
+                    print(f'{reg} not in {split}')
+                    continue
+                if any(np.isinf(d[reg][f'd_{curve}'])):
+                    print(f'inf in {curve} of {reg}')
+                    continue
+
+
+                xx = np.linspace(-pre_post[split][0], 
+                                  pre_post[split][1], 
+                                  len(d[reg][f'd_{curve}']))       
+      
+                # get units in Hz          
+                yy = d[reg][f'd_{curve}']
+                
+                
+                axs[k].plot(xx,yy, linewidth = 2,
+                              color=palette[reg], 
+                              label=f"{reg} {d[reg]['nclus']}")
+                
+
+#                # plot stderror bars on lines
+#                axs[k].fill_between(xx,    
+#                                 yy + d[reg][f'stde_{curve}'],
+#                                 yy - d[reg][f'stde_{curve}'],
+#                                 color=palette[reg],
+#                                 alpha = 0.2)
+                                 
+                # put region labels                 
+                y = yy[-1]
+                x = xx[-1]
+                ss = f"{reg} {d[reg]['nclus']}" 
+
+                if cosregs[reg] in ['CBX', 'CBN']:  # darken yellow
+                    texts.append(axs[k].text(x, y, ss, 
+                                             color = 'k',
+                                             fontsize=8))             
+                                               
+                texts.append(axs[k].text(x, y, ss, 
+                                         color = palette[reg],
+                                         fontsize=8))                 
+
+
+
+
+            axs[k].axvline(x=0, lw=0.5, linestyle='--', c='k')
+            
+            if split in ['block', 'choice']:
+                ha = 'left'
+            else:
+                ha = 'right'              
+
+            axs[k].spines['top'].set_visible(False)
+            axs[k].spines['right'].set_visible(False)
+            if c == 0:        
+                axs[k].set_ylabel(f'distance [Hz]')
+            axs[k].set_xlabel('time [sec]')
+
+            if c == 0:
+                put_panel_label(axs[k], row)
+            
+            c += 1        
+            k += 1
+            
+        row += 1
+                   
+    if onlyScat:
+        v = 8
+
+    '''
+    scatter latency versus max amplitude for significant regions
+    '''   
+ 
+    fsize = 20 if single_scat else 9 if onlyScat else 7
+    dsize = 120 if single_scat else 9 if onlyScat else 4 # was 1
+    
+
+    if amp_number: 
+        fig2 = plt.figure()
+        axss = []
+        fig2.suptitle(f'distance metric: {curve}')
+    
+    if single_scat:
+        figs = [plt.subplots(figsize=(10,10)) 
+                for split in align]
+           
+            
+    c = 0  
+    for split in align:
+
+        if not single_scat:
+            
+            if c == 0:
+                axs.append(fig.add_subplot(gs[8-v:,c]))
+            else:
+                axs.append(fig.add_subplot(gs[8-v:,c]))
+                           #,sharey=axs[len(axs)-1]
+                                  
+            axs[-1].set_ylim(0, 4.5)
+        
+        else:   
+            axs.append(figs[c][1])
+            axs[-1].set_ylim(0, 7.5/b_size if split == 'fback' else 4.5/b_size)
+            axs[-1].xaxis.set_major_locator(ticker.MultipleLocator(0.05))
+
+
+        if lowcontrast:
+            d = np.load(Path(pth_res,f'{split}_lowcontrast.npy'),
+                        allow_pickle=True).flat[0] 
+        else:
+            d = np.load(Path(pth_res,f'{split}.npy'),
+                        allow_pickle=True).flat[0] 
+
+        acronyms = [tops[split][0][j] for j in range(len(tops[split][0]))] 
+        ac_sig = np.array([True if tops[split][1][j] < sigl 
+                        else False for j in range(len(tops[split][0]))])
+
+        maxes = np.array([d[x][f'amp_{curve}'] for x in acronyms])
+        lats = np.array([d[x][f'lat_{curve}'] for x in acronyms])
+        #stdes = np.array([d[x][f'stde_{curve}'] for x in acronyms])
+        cols = [palette[reg] for reg in acronyms]
+
+
+        if amp_number:  # supp figure for correlation of nclus and maxes
+            axss.append(fig2.add_subplot(int(f'1{len(align)}{c+1}')))
+            nums = [1/d[reg]['nclus'] for reg in np.array(acronyms)[ac_sig]]
+
+            l = list(zip(nums, np.array(maxes)[ac_sig], 
+                               np.array(cols)[ac_sig]))
+            df = pd.DataFrame(l, columns=['1/nclus', 'maxes', 'cols'])
+                  
+            sns.regplot(ax=axss[c], x="1/nclus", y="maxes", data=df)
+            axss[c].set_title(split)
+        
+        # yerr = 100*maxes/d[reg]['nclus']
+        axs[k].errorbar(lats, maxes, yerr=None, fmt='None', 
+                        ecolor=cols, ls = 'None', elinewidth = 0.5)
+        
+        # plot significant regions               
+        axs[k].scatter(np.array(lats)[ac_sig], 
+                       np.array(maxes)[ac_sig], 
+                       color = np.array(cols)[ac_sig], 
+                       marker='D',s=dsize)
+        
+        # plot insignificant regions               
+        axs[k].scatter(np.array(lats)[~ac_sig], 
+                       np.array(maxes)[~ac_sig], 
+                       color = np.array(cols)[~ac_sig], 
+                       marker='o',s=dsize/10)                       
+                
+        # put extra marker for highlighted regions
+        #exs_i = [i for i in range(len(acronyms)) 
+        #         if acronyms[i] in exs[split]]
+        exs_i = [i for i in range(len(acronyms)) 
+                 if acronyms[i] in regsa]
+                 
+#        axs[k].scatter(np.array(lats)[exs_i], np.array(maxes)[exs_i], 
+#                       color=np.array(cols)[exs_i], marker='x',s=10*dsize)
+         
+        texts = []
+        alw = 0.1
+        for i in range(len(acronyms)):
+            if ac_sig[i]:  # only decorate marker with label if sig
+                reg = acronyms[i]
+                
+                if cosregs[reg] in ['CBX', 'CBN']:
+                        texts.append(axs[k].annotate('  ' + reg, 
+                                    (lats[i], maxes[i]),
+                                    fontsize=fsize,color='k',
+                                    arrowprops=dict(arrowstyle="-", 
+                                    color='k', 
+                                    lw=alw) if auto_label_adjust else None))
+
+#                        axs[k].annotate('  ' + reg, 
+#                                    (lats[i], maxes[i]),
+#                        fontsize=fsize,color=palette[acronyms[i]],
+#                        arrowprops=dict(arrowstyle=" ", 
+#                                    color=palette[acronyms[i]], 
+#                                    lw=alw) if auto_label_adjust else None))
+                else:
+                    texts.append(axs[k].annotate('  ' + reg, 
+                    # f"{reg} {f[reg]['nclus']}" ,
+                        (lats[i], maxes[i]),
+                        fontsize=fsize,color=palette[acronyms[i]],
+                        arrowprops=dict(arrowstyle=" ", 
+                                    color=palette[acronyms[i]], 
+                                    lw=alw) if auto_label_adjust else None))
+                                    
+        if auto_label_adjust:        
+            adjust_text(texts,force_text=(3, 6),ax=axs[k])
+
+        axs[k].axvline(x=0, lw=0.5, linestyle='--', c='k')
+        
+        ha = 'left'   
+        
+        axs[k].text(0, 0.95, align[split],
+                      transform=axs[k].get_xaxis_transform(),
+                      horizontalalignment = ha, rotation=90,
+                      fontsize = f_size*0.8)
+                                
+        axs[k].spines['top'].set_visible(False)
+        axs[k].spines['right'].set_visible(False)        
+        if c == 0:   
+            axs[k].set_ylabel(f'max dist. [Hz]')
+        axs[k].set_xlabel('latency [sec]')
+        axs[k].set_title(f"{tops[split+'_s']} sig")
+        
+        if c == 0:
+            put_panel_label(axs[k], row)        
+
+        
+        if single_scat:
+            figs[c][0].tight_layout()
+            figs[c][0].savefig(Path(pth_res, 
+                               f'scat_{split}.pdf'), dpi=300)         
+            plt.close()
+        
+        c += 1     
+        k += 1
+
+
+    fig = plt.gcf()
+#    fig.tight_layout()
+#    
+    fig.subplots_adjust(top=0.98,
+                        bottom=0.051,
+                        left=0.06,
+                        right=0.98,
+                        hspace=5.1,
+                        wspace=0.62)
+
+    #fig.savefig(Path(pth_res,f'manifold_{curve}.pdf'), dpi=400)              
+    plt.show()
+
+    
+def plot_3d_all_splits(exs_reg, curve='euc', amp_number=False,
+             sigl=0.01, auto_label_adjust = False,
+             ga_pcs=False, lowcontrast=False):
+
+    '''
+    plot example 3d trajectories for all splits in the same space
+    d_var_m for select regions and scatter all sigificant regions
+    curve in [var, euc]
+    sigl: significance level, default 0.05
+    '''
+
+    
+    nrows = 12
+        
+    fig = plt.figure(figsize=(10, 10*(2**.5)))  #10, 15
+    gs = fig.add_gridspec(nrows, len(align))
+    
+    dfa, palette = get_allen_info()
+                   
+
+    axs = []
+    k = 0  # panel counter
+           
+    '''
+    Trajectories for example regions in PCA embedded 3d space
+    '''
+                         
+    c = 0
+    axs.append(fig.add_subplot(gs[:,c], projection='3d'))
+    idx = 0
+    for split in align:
+        
+            # pick example region
+            reg = exs_reg
+            if lowcontrast:
+                d = np.load(Path(pth_res,f'{split}_lowcontrast.npy'),
+                            allow_pickle=True).flat[0][reg]
+            else:
+                d = np.load(Path(pth_res,f'{split}.npy'),
+                            allow_pickle=True).flat[0][reg]
+
+            npcs, allnobs = d['pcs'].shape
+            nobs = allnobs // ntravis
+
+            for j in range(2):
+            
+                # 3d trajectory
+                cs = d['pcs'][:,nobs * j: nobs * (j+1)].T
+        
+                if idx == 0:
+                    if j == 0:
+                        col = grad('Blues_r', nobs)
+                    elif j == 1:
+                        col = grad('Reds_r', nobs)
+                    else:
+                        col = grad('Greys_r', nobs)
+                else:
+                    if j == 0:
+                        col = grad('Greens_r', nobs)
+                    elif j == 1:
+                        col = grad('Oranges_r', nobs)
+                    else:
+                        col = grad('Greys_r', nobs)
+                        
+                axs[k].plot(cs[:,0],cs[:,1],cs[:,2], color=col[len(col)//2],
+                        linewidth = 5 if j in [0,1] else 1,
+                        label=trial_split[split][j] if j in range(3)
+                                  else '_nolegend_', alpha = 0.5)
+                              
+                p = axs[k].scatter(cs[:,0],cs[:,1],cs[:,2], color=col,
+                               edgecolors = col, 
+                               s=20 if j in [0,1] else 1,
+                               depthshade=False)
+
+            
+            axs[k].set_title(f"{reg} {d['nclus']}")   
+            axs[k].grid(False)
+            axs[k].axis('off')
+            axs[k].legend()
+
+            put_panel_label(axs[k], 0)
+
+            #c += 1
+            #k += 1
+            idx += 1
+                    
+                   
+    plt.show()
+    return
+
+    
+def plot_grand_average():
+
+    fig, axs = plt.subplots(nrows=3,
+                            ncols=len(align))
+    
+    res = np.load(Path(pth_res,'grand_averages.npy'),
+                  allow_pickle=True).flat[0]
+    
+    cols = {'0':blue_left,
+            '1':red_right,
+            's': 'gray'}
+    
+    k = 0
+    for split in res:
+        r = 0
+        for t in ['0', '1', 's']:
+            yy = res[split][f'm{t}']
+            xx = np.linspace(-pre_post[split][0], 
+                      pre_post[split][1], 
+                      len(yy))
+                                          
+            axs[r,k].plot(xx,yy, c = cols[t])   
+            axs[r,k].fill_between(xx,    
+                         yy + res[split][f'v{t}']/2,
+                         yy - res[split][f'v{t}']/2,
+                         color=cols[t],
+                         alpha = 0.2)
+                                
+        axs[r,k].axvline(x=0, lw=0.5, linestyle='--', c='k')
+        axs[r,k].spines['top'].set_visible(False)
+        axs[r,k].spines['right'].set_visible(False)
+        if k == 0:        
+            axs[r,k].set_ylabel(f'average firing rate [Hz]')
+        axs[r,k].set_xlabel('time [sec]')
+        axs[r,k].set_title(split)    
+        
+        r = 1
+        
+        #yy = np.abs(res[split][f'm0'] - res[split][f'm1'])
+        yy = res[split]['euc']
+        xx = np.linspace(-pre_post[split][0], 
+                  pre_post[split][1], 
+                  len(yy))
+                                      
+        axs[r,k].plot(xx,yy, c = 'k')   
+
+                                
+        axs[r,k].axvline(x=0, lw=0.5, linestyle='--', c='k')
+        axs[r,k].spines['top'].set_visible(False)
+        axs[r,k].spines['right'].set_visible(False)
+        if k == 0:        
+            axs[r,k].set_ylabel(f'distance [Hz]')
+        axs[r,k].set_xlabel('time [sec]')
+        axs[r,k].set_title(split) 
+        
+        axs[0,k].sharex(axs[1,k])
+        
+        if k > 0:
+            axs[r,k].sharey(axs[r,k-1])
+  
+          
+        k +=1 
+          
+    axs[1,0].get_shared_y_axes().join(axs[1,0],axs[1,1])
+    axs[1,0].autoscale()
+    
+    fig.tight_layout()
+
+    
 def get_average_peth_by_reg(reg):
     
     for split in align:
@@ -1797,10 +1935,6 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
 
     # Process each split as before, and pool for combined
     for split in splits:
-        if (Path(pth_res, f'{split}.npy').exists()
-                and Path(pth_res, f'{split}_regde.npy').exists()):
-            print(f'Skipping {split}: already finalized in res/')
-            continue
         print(f"Processing split: {split}")
         pth = Path(one.cache_dir, 'manifold', split)
         ss = os.listdir(pth)
@@ -1967,10 +2101,6 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
     print('total time:', time1 - time0, 'sec')
 
 
-"""
-Usage
-"""
-
 # run_align = {
 #      'block_duringstim_r_choice_r_f1_1.0': 'stimOn_times',
 #      'block_duringstim_r_choice_r_f1_0.25': 'stimOn_times',
@@ -2007,14 +2137,14 @@ run_align = {
     # 'intertrial': ['act_block_stim_r_choice_r_f1', 'act_block_stim_l_choice_l_f1', 
     #                'act_block_stim_l_choice_r_f2', 'act_block_stim_r_choice_l_f2'
     #                ],
-    'stimOn_times': ['act_block_duringstim_r_choice_r_f1', 'act_block_duringstim_l_choice_l_f1', 
-                     'act_block_duringstim_l_choice_r_f2', 'act_block_duringstim_r_choice_l_f2'
-                     ],
-    'firstMovement_times': ['act_block_stim_r_duringchoice_r_f1', 'act_block_stim_l_duringchoice_l_f1', 
-                            'act_block_stim_l_duringchoice_r_f2', 'act_block_stim_r_duringchoice_l_f2'
-                            ],
-    'intertrial1': ['block_stim_r_choice_r_f1', 'block_stim_l_choice_l_f1', 
-                   ],
+    # 'stimOn_times': ['act_block_duringstim_r_choice_r_f1', 'act_block_duringstim_l_choice_l_f1', 
+    #                  'act_block_duringstim_l_choice_r_f2', 'act_block_duringstim_r_choice_l_f2'
+    #                  ],
+    # 'firstMovement_times': ['act_block_stim_r_duringchoice_r_f1', 'act_block_stim_l_duringchoice_l_f1', 
+    #                         'act_block_stim_l_duringchoice_r_f2', 'act_block_stim_r_duringchoice_l_f2'
+    #                         ],
+    # 'intertrial1': ['block_stim_r_choice_r_f1', 'block_stim_l_choice_l_f1', 
+    #                ],
     'stimOn_times1': ['block_duringstim_r_choice_r_f1', 'block_duringstim_l_choice_l_f1', 
                      'block_duringstim_l_choice_r_f2', 'block_duringstim_r_choice_l_f2'
                      ],
@@ -2023,22 +2153,26 @@ run_align = {
                             ],
 }
 
-if __name__ == '__main__':
-    restart = True
-
-    # All active splits. Loaded ONCE per insertion via the reordered driver
-    # (outer loop = insertions), instead of reloading spikes/trials per split.
-    intertrial_splits = ['block_only', 'act_block_only']
-    duringtrial_splits = [s for splits in run_align.values() for s in splits]
-    all_splits = intertrial_splits + duringtrial_splits
-
-    get_all_d_vars_allsplits(all_splits, bycontrast=False, restart=restart,
-                             stream_pool=True)
-
-    # Pool across insertions per split / split-group (skip splits already finalized).
-    for split in intertrial_splits:
-        if not Path(pth_res, f'{split}.npy').exists():
-            d_var_stacked(split)
-    for timeframe, splits in run_align.items():
-        d_var_stacked_multi(splits)
+# run_align = {
+#     'block_duringstim_r_choice_r_f1': ['block_duringstim_r_choice_r_f1_0.0',
+#     'block_duringstim_r_choice_r_f1_0.0625',
+#     'block_duringstim_r_choice_r_f1_0.125',
+#     'block_duringstim_r_choice_r_f1_0.25',
+#     'block_duringstim_r_choice_r_f1_1.0'],
+#     'block_duringstim_l_choice_l_f1': ['block_duringstim_l_choice_l_f1_0.0',
+#     'block_duringstim_l_choice_l_f1_0.0625',
+#     'block_duringstim_l_choice_l_f1_0.125',
+#     'block_duringstim_l_choice_l_f1_0.25',
+#     'block_duringstim_l_choice_l_f1_1.0'],
+#     'block_duringstim_l_choice_r_f2': ['block_duringstim_l_choice_r_f2_0.0',
+#     'block_duringstim_l_choice_r_f2_0.0625',
+#     'block_duringstim_l_choice_r_f2_0.125',
+#     'block_duringstim_l_choice_r_f2_0.25',
+#     'block_duringstim_l_choice_r_f2_1.0'],
+#     'block_duringstim_r_choice_l_f2': ['block_duringstim_r_choice_l_f2_0.0',
+#     'block_duringstim_r_choice_l_f2_0.0625',
+#     'block_duringstim_r_choice_l_f2_0.125',
+#     'block_duringstim_r_choice_l_f2_0.25',
+#     'block_duringstim_r_choice_l_f2_1.0']
+# }
 
