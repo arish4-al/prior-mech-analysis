@@ -117,7 +117,11 @@ def validate_cache_trials(usable):
     for pid, cache in usable:
         eid, _ = ba.one.pid2eid(pid)
         for st in ba.SATURATION_TYPES:
+<<<<<<< HEAD
             t_direct, mask = ba.load_trials_masked(ba.one, eid, st)
+=======
+            t_direct, mask = ba.load_trials_for_saturation(ba.one, eid, st)
+>>>>>>> 63687f6 (udated analysis pipeline)
             t_direct = t_direct[mask]
             t_cached = cache['trials'][st]
             if len(t_direct) != len(t_cached):
@@ -140,11 +144,13 @@ def validate_get_d_vars(usable, splits, control, nrand, seed):
         for split in splits:
             if control:
                 random.seed(seed)
+                np.random.seed(seed)
             D_unc = ba.get_d_vars(
                 split, pid, control=control, nrand=nrand, cached=None,
             )
             if control:
                 random.seed(seed)
+                np.random.seed(seed)
             D_cached = ba.get_d_vars(
                 split, pid, control=control, nrand=nrand, cached=cache,
             )

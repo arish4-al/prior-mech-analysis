@@ -32,6 +32,7 @@ import matplotlib as mpl
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 # from adjustText import adjust_text
+<<<<<<< HEAD
 import matplotlib.image as mpimg
 from matplotlib.gridspec import GridSpec
 from matplotlib import colors
@@ -41,6 +42,17 @@ from PIL import Image
 import io
 import matplotlib.patches as mpatches
 import matplotlib.ticker as ticker
+=======
+# import matplotlib.image as mpimg
+# from matplotlib.gridspec import GridSpec
+# from matplotlib import colors
+# from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d import proj3d
+# from PIL import Image
+# import io
+# import matplotlib.patches as mpatches
+# import matplotlib.ticker as ticker
+>>>>>>> 63687f6 (udated analysis pipeline)
 
 import random
 from random import shuffle
@@ -138,6 +150,8 @@ align_old = {
          'act_block_stim_l_duringchoice_r_f2':'firstMovement_times',
          'act_block_stim_r_duringchoice_l_f2':'firstMovement_times',
          'act_block_only':'stimOn_times',
+         'act_block_stim_l':'stimOn_times',
+         'act_block_stim_r':'stimOn_times',
         }
 
 # align_act = {
@@ -227,6 +241,110 @@ br = BrainRegions()
 # save results for plotting here
 pth_res = Path(one.cache_dir, 'manifold', 'res') 
 pth_res.mkdir(parents=True, exist_ok=True)
+pth_stream_acc = pth_res / '_stream_acc'
+pth_stream_acc.mkdir(parents=True, exist_ok=True)
+
+# null shuffles processed in batches inside get_d_vars (control=True) to cap RAM
+NULL_BATCH_SIZE = 100
+
+
+def _stream_acc_path(split):
+    return pth_stream_acc / f'{split}.npy'
+
+
+def _null_labels(split, ntr, dx):
+    '''One boolean trial label vector for a null draw.'''
+    if 'block_only' in split:
+        return generate_pseudo_blocks(ntr, first5050=0) == 0.8
+    tr_c = dx[np.argsort(dx[:, 1])][:, 0]
+    tr_c2 = np.array(random.sample(list(tr_c), len(tr_c)))
+    return tr_c2 == 1
+
+
+def _region_perm_metrics(m0, m1, v0, v1, b, half1, half2, ys, reg_mask):
+    '''
+    Regional distance curves for one (true or null) label split.
+    Returns region-summed (d_var_m, d_euc_m, d_xnobis) each shape (nbins,).
+    '''
+    m0_r = m0[reg_mask]
+    m1_r = m1[reg_mask]
+    v0_r = v0[reg_mask]
+    v1_r = v1[reg_mask]
+    d_var = (((m0_r - m1_r) / ((v0_r + v1_r) ** 0.5)) ** 2)
+    d_euc = (m0_r - m1_r) ** 2
+
+    m1_h1 = b[half1 & ys][:, reg_mask, :].mean(axis=0)
+    m0_h1 = b[half1 & ~ys][:, reg_mask, :].mean(axis=0)
+    m1_h2 = b[half2 & ys][:, reg_mask, :].mean(axis=0)
+    m0_h2 = b[half2 & ~ys][:, reg_mask, :].mean(axis=0)
+    dmu_h1 = m1_h1 - m0_h1
+    dmu_h2 = m1_h2 - m0_h2
+    var_pooled = 0.5 * (v0_r + v1_r)
+    inv_var = 1.0 / (var_pooled + 1e-12)
+    d_xcv_bins = np.nansum(dmu_h1 * inv_var * dmu_h2, axis=0)
+
+    return np.nansum(d_var, axis=0), np.sum(d_euc, axis=0), d_xcv_bins
+
+
+def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
+                       null_batch_size=NULL_BATCH_SIZE):
+    '''
+    Batched null loop: one full-tensor mean/var per null, then regional metrics.
+    Matches original loop order (perm outer, region inner) without materialising
+    ws of shape (2*(nrand+1), n_neurons, nbins).
+    '''
+    m0_true = bins[0].mean(axis=0)
+    m1_true = bins[1].mean(axis=0)
+    v0_true = bins[0].var(axis=0)
+    v1_true = bins[1].var(axis=0)
+    ys_true = dx[np.argsort(dx[:, 1])][:, 0].astype(bool)
+
+    regs = list(Counter(acs).keys())
+    reg_masks = {reg: (acs == reg) for reg in regs}
+    D = {
+        reg: {
+            'nclus': int(np.sum(acs1 == reg)),
+            'd_vars': [],
+            'd_eucs': [],
+            'd_xnobis': [],
+        }
+        for reg in regs
+    }
+    label_perms = [ys_true]
+
+    def _append_perm(m0, m1, v0, v1, ys):
+        for reg in regs:
+            dv, de, dxn = _region_perm_metrics(
+                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
+            D[reg]['d_vars'].append(dv)
+            D[reg]['d_eucs'].append(de)
+            D[reg]['d_xnobis'].append(dxn)
+
+    # j=0: true condition means from bins (not label-shuffled on b)
+    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
+
+    for batch_start in range(0, nrand, null_batch_size):
+        batch_end = min(batch_start + null_batch_size, nrand)
+        for _ in range(batch_start, batch_end):
+            ys = _null_labels(split, ntr, dx)
+            label_perms.append(ys)
+            _append_perm(
+                b[ys].mean(axis=0), b[~ys].mean(axis=0),
+                b[ys].var(axis=0), b[~ys].var(axis=0),
+                ys,
+            )
+
+    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
+    d_euc = (m0_true - m1_true) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': np.array([m0_true, m1_true])[:ntravis],
+        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
+        'D': D,
+    }
 
 
 # Function to calculate action kernel
@@ -327,6 +445,7 @@ SATURATION_TYPES = (
 )
 
 
+<<<<<<< HEAD
 def load_trials_masked(one, eid, saturation_intervals, all_trials=None):
     '''
     Same as load_trials_and_mask(..., saturation_intervals=st), except when
@@ -337,23 +456,57 @@ def load_trials_masked(one, eid, saturation_intervals, all_trials=None):
     if all_trials is None:
         all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     sess_trials = all_trials[all_trials['eid'] == eid].copy()
+=======
+def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
+    '''
+    Saturation exclusion on top of load_trials_and_mask base mask.
+
+    load_trials_and_mask(..., saturation_intervals=st) can assert when
+    truncate_to_pass shortens trials vs the aggregate table; we apply saturation
+    here with row alignment instead.
+    '''
+    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    sess_trials = all_trials[all_trials['eid'] == str(eid)].copy()
+>>>>>>> 63687f6 (udated analysis pipeline)
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
     if len(sess_trials) > n_sess:
         sess_trials = sess_trials.iloc[:n_sess]
+<<<<<<< HEAD
     elif len(sess_trials) != n_sess:
         raise AssertionError('Trials table does not match trials in session.')
+=======
+    elif len(sess_trials) < n_sess:
+        raise AssertionError(
+            f'Trials table ({len(sess_trials)}) shorter than session ({n_sess}) for {eid}.'
+        )
+>>>>>>> 63687f6 (udated analysis pipeline)
     intervals = (
         [saturation_intervals]
         if isinstance(saturation_intervals, str)
         else list(saturation_intervals)
     )
+<<<<<<< HEAD
     mask = base_mask.copy()
     for interval in intervals:
         mask[sess_trials[interval] == True] = False
     return trials, mask
 
 
+=======
+    mask = base_mask.to_numpy().copy()
+    for interval in intervals:
+        mask[sess_trials[interval].to_numpy() == True] = False
+    return trials, mask
+
+
+def load_trials_for_saturation(one, eid, saturation_intervals):
+    '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
+    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
+
+
+>>>>>>> 63687f6 (udated analysis pipeline)
 def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
     '''
     Load an insertion's raw data ONCE (the expensive step) and cache it so every
@@ -369,6 +522,7 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     if restart and cpath.exists():
         return np.load(cpath, allow_pickle=True).item()
 
+<<<<<<< HEAD
     all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
     sess_trials = all_trials[all_trials['eid'] == eid].copy()
@@ -383,6 +537,13 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     for st in satur_types:
         mask = base_mask.copy()
         mask[sess_trials[st] == True] = False
+=======
+    spikes, clusters = load_good_units(one, pid)
+    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    trials_by_satur = {}
+    for st in satur_types:
+        _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
+>>>>>>> 63687f6 (udated analysis pipeline)
         trials_by_satur[st] = trials[mask]
 
     spikes, clusters = load_good_units(one, pid)
@@ -402,7 +563,8 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
 
 
 def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
-               control=True, nrand = 2000, bycontrast=False, cached=None):
+               control=True, nrand=2000, bycontrast=False, cached=None,
+               null_batch_size=NULL_BATCH_SIZE):
 
     '''
     for a given session, probe, bin neural activity
@@ -428,7 +590,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         spikes, clusters = load_good_units(one, pid)
 
         # Load in trials data and mask bad trials (False if bad)
+<<<<<<< HEAD
         trials, mask = load_trials_masked(one, eid, saturation_intervals)
+=======
+        trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
+>>>>>>> 63687f6 (udated analysis pipeline)
         # remove certain trials
         trials = trials[mask]
     if 'block' in split:
@@ -458,11 +624,17 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                     np.arange(len(trials['stimOn_times']))[trials[f'contrast{side}']==contrast])
 
     if 'stim_l' in split:
-        if bycontrast:
-            trials = trials[trials[f'contrastLeft']==contrast]
-        else:
-            trials = trials[~np.isnan(trials[f'contrastLeft'])]
-        if 'choice_l' in split and 'f1' in split: # correct trials, f1
+        if split in ('act_block_stim_l', 'block_stim_l'):
+            # L vs R block trajectories within left-stimulus trials (no choice filter).
+            trials = trials[~np.isnan(trials['contrastLeft'])]
+            for pleft in [0.8, 0.2]:
+                events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
+                trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
+        elif 'choice_l' in split and 'f1' in split: # correct trials, f1
+            if bycontrast:
+                trials = trials[trials[f'contrastLeft']==contrast]
+            else:
+                trials = trials[~np.isnan(trials[f'contrastLeft'])]
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -471,6 +643,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                         trials['feedbackType'] == 1, trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f2' in split: 
             # choice_r trials, stim_l so these are incorrect trials, f2
+            if bycontrast:
+                trials = trials[trials[f'contrastLeft']==contrast]
+            else:
+                trials = trials[~np.isnan(trials[f'contrastLeft'])]
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -482,11 +658,17 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             return
         
     elif 'stim_r' in split:
-        if bycontrast:  
-            trials = trials[trials[f'contrastRight']==contrast]
-        else:
-            trials = trials[~np.isnan(trials[f'contrastRight'])]
-        if 'choice_l' in split and 'f2' in split: # incorrect trials, f2
+        if split in ('act_block_stim_r', 'block_stim_r'):
+            # L vs R block trajectories within right-stimulus trials (no choice filter).
+            trials = trials[~np.isnan(trials['contrastRight'])]
+            for pleft in [0.8, 0.2]:
+                events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
+                trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
+        elif 'choice_l' in split and 'f2' in split: # incorrect trials, f2
+            if bycontrast:  
+                trials = trials[trials[f'contrastRight']==contrast]
+            else:
+                trials = trials[~np.isnan(trials[f'contrastRight'])]
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -494,6 +676,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
                         trials['feedbackType'] == -1,trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f1' in split: # choice_r trials, correct, f1
+            if bycontrast:  
+                trials = trials[trials[f'contrastRight']==contrast]
+            else:
+                trials = trials[~np.isnan(trials[f'contrastRight'])]
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -708,139 +894,164 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     bins = bins2
 
     if control:
-        # get mean and var across trials
-        w0 = [bi.mean(axis=0) for bi in bins]  
-        s0 = [bi.var(axis=0) for bi in bins]
-        
-        perms = []  # keep track of random trial splits to test sig
-        
-        # nrand times random impostor/pseudo split of trials 
-        for i in range(nrand):
-            
-            if 'block_only' in split: # 'block' pseudo sessions
-                ys = generate_pseudo_blocks(ntr, first5050=0) == 0.8
-        
-            else:
-                # simply shuffle the two labels (block l vs r)                
-                tr_c = dx[np.argsort(dx[:,1])][:,0]  # true labels
-                tr_c2 = deepcopy(tr_c)
-                
-                tr_c2 = np.array(random.sample(list(tr_c), len(tr_c)))
-                ys = tr_c2 == 1 # boolean shuffled labels
-                
-            w0.append(b[ys].mean(axis=0))
-            s0.append(b[ys].var(axis=0))
-            
-            w0.append(b[~ys].mean(axis=0))
-            s0.append(b[~ys].var(axis=0))                      
+        return _compute_control_D(
+            b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
+            null_batch_size=null_batch_size,
+        )
 
-            perms.append(ys)
-
-    else: # average trials per condition
-        print('all trials')
-        w0 = [bi.mean(axis=0) for bi in bins] 
-        s0 = [bi.var(axis=0) for bi in bins]
+    # average trials per condition (no null)
+    print('all trials')
+    w0 = [bi.mean(axis=0) for bi in bins]
+    s0 = [bi.var(axis=0) for bi in bins]
 
     ws = np.array(w0)
     ss = np.array(s0)
 
-    # --- align permutations list with a "true labels" entry first (for crossnobis) ---
-    ys_true = dx[np.argsort(dx[:, 1])][:, 0].astype(bool)
-    perms = [ys_true] + perms  # now perms[j] matches ws_[2*j], ws_[2*j+1]
-    
-    regs = Counter(acs)
+    # strictly standardized mean difference (single-cell, true split only)
+    d_var = (((ws[0] - ws[1]) / ((ss[0] + ss[1]) ** 0.5)) ** 2)
+    d_euc = (ws[0] - ws[1]) ** 2
 
-    # Keep single cell d_var in extra file for computation of mean
-    # Can't be done with control data as files become too large 
-    # strictly standardized mean difference
-    d_var = (((ws[0] - ws[1])/
-              ((ss[0] + ss[1])**0.5))**2)
-              
-    d_euc = (ws[0] - ws[1])**2          
-              
-    D_ = {}
-    D_['acs'] = acs
-    D_['acs1'] = acs1
-    D_['d_vars'] = d_var
-    D_['d_eucs'] = d_euc
-    D_['ws'] = ws[:ntravis]
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': ws[:ntravis],
+    }
 
-    if not control:
-        return D_
 
-    #  Sum together cells in same region to save memory
-    D = {}
-    
+def _pool_scale():
+    return 1.0 / b_size if b_size else 1.0
+
+
+class SplitPoolAccumulator:
+    '''
+    Streaming pool across insertions for one split (replaces per-insertion
+    manifold/{split}/*.npy + separate d_var_stacked pass).
+    '''
+
+    def __init__(self, split, min_reg=min_reg):
+        self.split = split
+        self.min_reg = min_reg
+        self.pooled_keys = set()
+        self.acs = []
+        self.acs1 = []
+        self.ws = []
+        self.regdv0 = {}
+        self.regde0 = {}
+        self.uperms = {}
+
+    @classmethod
+    def load(cls, split, min_reg=min_reg):
+        path = _stream_acc_path(split)
+        if path.exists():
+            state = np.load(path, allow_pickle=True).item()
+            acc = cls(split, min_reg=min_reg)
+            acc.pooled_keys = set(state['pooled_keys'])
+            acc.acs = state['acs']
+            acc.acs1 = state['acs1']
+            acc.ws = state['ws']
+            acc.regdv0 = state['regdv0']
+            acc.regde0 = state['regde0']
+            acc.uperms = state['uperms']
+            return acc
+        return cls(split, min_reg=min_reg)
+
+    def add(self, eid_probe, D_):
+        if eid_probe in self.pooled_keys:
+            return False
+        if 'uperms' in D_:
+            self.uperms[eid_probe] = D_['uperms']
+        self.acs.append(D_['acs'])
+        self.acs1.append(D_['acs1'])
+        self.ws.append(D_['ws'])
+        scale = _pool_scale()
+        if 'D' not in D_:
+            raise ValueError('stream_pool requires control=True (regional null curves in D_)')
+        for reg in D_['D']:
+            self.regdv0.setdefault(reg, []).append(
+                np.array(D_['D'][reg]['d_vars']) * scale)
+            self.regde0.setdefault(reg, []).append(
+                np.array(D_['D'][reg]['d_eucs']) * scale)
+        self.pooled_keys.add(eid_probe)
+        return True
+
+    def save(self):
+        np.save(_stream_acc_path(self.split), {
+            'pooled_keys': list(self.pooled_keys),
+            'acs': self.acs,
+            'acs1': self.acs1,
+            'ws': self.ws,
+            'regdv0': self.regdv0,
+            'regde0': self.regde0,
+            'uperms': self.uperms,
+        }, allow_pickle=True)
+
+    def finalize(self, save=True):
+        '''Write manifold/res/{split}*.npy (same layout as d_var_stacked).'''
+        return _finalize_pooled_split(
+            self.split, self.acs, self.acs1, self.ws,
+            self.regdv0, self.regde0, self.min_reg, save=save,
+        )
+
+
+def _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key):
+    '''Add one insertion result into pool lists (used by d_var_stacked).'''
+    if 'uperms' in D_:
+        uperms[key] = D_['uperms']
+    acs.append(D_['acs'])
+    acs1.append(D_['acs1'])
+    ws.append(D_['ws'])
+    scale = _pool_scale()
+    for reg in D_.get('D', {}):
+        regdv0.setdefault(reg, []).append(np.array(D_['D'][reg]['d_vars']) * scale)
+        regde0.setdefault(reg, []).append(np.array(D_['D'][reg]['d_eucs']) * scale)
+
+
+def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg,
+                         save=True):
+    if not acs:
+        return {}, {}
+    acs_cat = np.concatenate(acs)
+    acs1_cat = np.concatenate(acs1)
+    ws_cat = np.concatenate(ws, axis=1)
+    regs0 = Counter(acs1_cat)
+    regs = {reg: regs0[reg] for reg in regs0 if regs0[reg] > min_reg}
+
+    regdv = {reg: (np.nansum(regdv0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
+    regde = {reg: (np.nansum(regde0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
+
+    r = {}
     for reg in regs:
-    
         res = {}
+        dat = ws_cat[:, acs_cat == reg, :]
+        res['nclus'] = regs[reg]
+        res['ws'] = dat[:2]
+        ampse = [np.max(x) - np.min(x) for x in regde[reg]]
+        res['p_euc'] = np.mean(np.array(ampse) >= ampse[0])
+        d_euc = regde[reg][0] - np.mean(regde[reg][1:], axis=0)
+        res['d_euc'] = d_euc - min(d_euc)
+        res['amp_euc'] = max(res['d_euc'])
+        loc = np.where(res['d_euc'] > 0.7 * (np.max(res['d_euc'])))[0]
+        if len(loc):
+            res['lat_euc'] = np.linspace(
+                -pre_post[split][0], pre_post[split][1], len(res['d_euc']))[loc[0]]
+        else:
+            res['lat_euc'] = np.nan
+        res['nclus'] = regs[reg]
+        r[reg] = res
 
-        ws_ = [y[acs == reg] for y in ws]
-        ss_ = [y[acs == reg] for y in ss]
-     
-        res['nclus'] = sum(acs1 == reg)
-        d_vars = []
-        d_eucs = []
-        d_xnobis = []
-        # precompute region mask once for xnobis
-        reg_mask = (acs == reg)
-                
-        for j in range(len(ws_)//2):
-
-            # strictly standardized mean difference
-            d_var = (((ws_[2*j] - ws_[2*j + 1])/
-                      ((ss_[2*j] + ss_[2*j + 1])**0.5))**2)
-            
-            # Euclidean distance          
-            d_euc = (ws_[2*j] - ws_[2*j + 1])**2
-
-            # --- crossnobis (diagonal Σ): (Δμ_1)^T Σ^{-1} (Δμ_2) ---
-            ys = perms[j]  # boolean labels for condition 1 in this (true/permuted) split
-
-            # means per half & condition, restricted to region
-            # half 1
-            m1_h1 = b[half1 & ys][:, reg_mask, :].mean(axis=0)
-            m0_h1 = b[half1 & ~ys][:, reg_mask, :].mean(axis=0)
-            # half 2
-            m1_h2 = b[half2 & ys][:, reg_mask, :].mean(axis=0)
-            m0_h2 = b[half2 & ~ys][:, reg_mask, :].mean(axis=0)
-
-            # Δμ per half
-            dmu_h1 = (m1_h1 - m0_h1)           # shape: (n_reg_neurons, nbins)
-            dmu_h2 = (m1_h2 - m0_h2)
-
-            # diagonal Σ estimate: pooled variance across conditions for this pair
-            # (use ss_ entries, already per-condition variances)
-            var_pooled = 0.5 * (ss_[2*j] + ss_[2*j + 1])
-            inv_var = 1.0 / (var_pooled + 1e-12)
-
-            # crossnobis per time bin: sum over neurons of Δμ_h1 * Σ^{-1} * Δμ_h2
-            d_xcv_bins = np.nansum(dmu_h1 * inv_var * dmu_h2, axis=0)  # shape (nbins,)
-
-            # sum over cells, divide by #neu later
-            d_var_m = np.nansum(d_var,axis=0)
-            d_euc_m = np.sum(d_euc,axis=0)
-            
-            d_vars.append(d_var_m)
-            d_eucs.append(d_euc_m)
-            d_xnobis.append(d_xcv_bins)
-            
-        res['d_vars'] = d_vars
-        res['d_eucs'] = d_eucs
-        res['d_xnobis'] = d_xnobis
-        
-        D[reg] = res
-        
-    D_['uperms'] = len(np.unique([str(x.astype(int)) for x in perms]))
-    D_['D'] = D    
-    return D_    
+    if save:
+        np.save(Path(pth_res, f'{split}.npy'), r, allow_pickle=True)
+        np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
+    return r, regde
 
 
 def identify_good_session(eid):
     #sess_loader = SessionLoader(one, eid)
     #sess_loader.load_trials()
     #trials = sess_loader.trials
-    trials, mask = bwm_loading.load_trials_and_mask(one, eid)
+    trials, mask = load_trials_and_mask(one, eid)
     
     #remove sessions with less than 400 trials
     if len(trials) < 400:
@@ -1037,26 +1248,41 @@ def get_all_d_vars_badsession(split, eids_plus = None, control = True,
     
 def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              mapping='Beryl', bycontrast=False, restart=True,
-                             use_cache=True, save_cache=True):
+                             use_cache=True, save_cache=True,
+                             stream_pool=False, save_per_insertion=None,
+                             null_batch_size=NULL_BATCH_SIZE, nrand=nrand):
     '''
     Time-efficient driver: iterate insertions in the OUTER loop, load each
     insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
     for that insertion from the cached data. Replaces calling get_all_d_vars per
     split (which reloaded spikes/trials for every split).
 
-    Output layout is unchanged: manifold/{split}/{eid_probe}.npy per insertion.
-    ``restart``: skip a (split, insertion) whose output already exists.
+    When ``stream_pool=True``, results are accumulated into
+    ``manifold/res/_stream_acc/{split}.npy`` and finalized to
+    ``manifold/res/{split}*.npy`` without writing per-insertion
+    ``manifold/{split}/{eid_probe}.npy`` (major disk savings).
+
+  ``save_per_insertion``: write manifold/{split}/{eid_probe}.npy (default False
+    when stream_pool else True). ``restart``: skip (split, insertion) already done.
     '''
+    if save_per_insertion is None:
+        save_per_insertion = not stream_pool
+
     time00 = time.perf_counter()
-    print('splits', splits_list, 'control', control, 'use_cache', use_cache)
+    print('splits', splits_list, 'control', control, 'use_cache', use_cache,
+          'stream_pool', stream_pool, 'null_batch_size', null_batch_size)
 
     if eids_plus is None:
         df = bwm_query(one)
         eids_plus = df[['eid', 'probe_name', 'pid']].values
 
-    # ensure per-split output dirs exist
-    for split in splits_list:
-        Path(one.cache_dir, 'manifold', split).mkdir(parents=True, exist_ok=True)
+    accumulators = {}
+    if stream_pool:
+        for split in splits_list:
+            accumulators[split] = SplitPoolAccumulator.load(split)
+    elif save_per_insertion:
+        for split in splits_list:
+            Path(one.cache_dir, 'manifold', split).mkdir(parents=True, exist_ok=True)
 
     Fs = []
     k = 0
@@ -1066,15 +1292,18 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
         eid_probe = f'{eid}_{probe}'
         time0 = time.perf_counter()
 
-        # which splits still need computing for this insertion?
         pending = []
         for split in splits_list:
-            outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
-            if restart and outp.exists():
-                continue
+            if stream_pool:
+                if restart and eid_probe in accumulators[split].pooled_keys:
+                    continue
+            elif restart and save_per_insertion:
+                outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
+                if outp.exists():
+                    continue
             pending.append(split)
         if not pending:
-            print(k, 'of', len(eids_plus), 'all splits cached, skip')
+            print(k, 'of', len(eids_plus), 'all splits done, skip')
             continue
 
         try:
@@ -1087,11 +1316,16 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
 
         n_ok = 0
         for split in pending:
-            outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
             try:
                 D_ = get_d_vars(split, pid, control=control, mapping=mapping,
-                                bycontrast=bycontrast, cached=cache)
-                np.save(outp, D_, allow_pickle=True)
+                                bycontrast=bycontrast, cached=cache,
+                                null_batch_size=null_batch_size, nrand=nrand)
+                if stream_pool:
+                    accumulators[split].add(eid_probe, D_)
+                    accumulators[split].save()
+                if save_per_insertion:
+                    outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
+                    np.save(outp, D_, allow_pickle=True)
                 n_ok += 1
             except Exception as exc:
                 print('   split fail', split, pid, exc)
@@ -1099,6 +1333,11 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
         gc.collect()
         time1 = time.perf_counter()
         print(k, 'of', len(eids_plus), f'ok {n_ok}/{len(pending)} splits', round(time1 - time0, 1), 'sec')
+
+    if stream_pool:
+        for split in splits_list:
+            print('finalize stream pool', split, f'({len(accumulators[split].pooled_keys)} insertions)')
+            accumulators[split].finalize()
 
     time11 = time.perf_counter()
     print((time11 - time00) / 60, f'min for {len(eids_plus)} insertions x {len(splits_list)} splits')
@@ -1153,7 +1392,11 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
         trials = cached['trials'][satur].copy()
     else:
         spikes, clusters = load_good_units(one, pid)
+<<<<<<< HEAD
         trials, mask = load_trials_masked(one, eid, satur)
+=======
+        trials, mask = load_trials_for_saturation(one, eid, satur)
+>>>>>>> 63687f6 (udated analysis pipeline)
         trials = trials[mask]
     trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
 
@@ -1332,14 +1575,12 @@ def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
     average d_var_m via nanmean across insertions,
     remove regions with too few neurons (min_reg)
     compute maxes, latencies and p-values
-    '''
+  '''
     
     print(split)
     pth = Path(one.cache_dir, 'manifold', split) 
     ss = os.listdir(pth)  # get insertions
     
-
-    # pool data for illustrative PCA
     acs = []
     acs1 = []
     ws = [] 
@@ -1347,103 +1588,19 @@ def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
     regde0 = {}
     uperms = {}
     
-    # group results across insertions
     for s in ss:
-    
-        D_ = np.load(Path(pth,s), 
-                    allow_pickle=True).flat[0]
-                       
-        uperms[s.split('.')[0]] = D_['uperms']
+        D_ = np.load(Path(pth, s), allow_pickle=True).flat[0]
+        key = s.split('.')[0]
+        if 'uperms' in D_:
+            uperms[key] = D_['uperms']
         if uperms_:
             continue
-        acs.append(D_['acs'])
-        acs1.append(D_['acs1'])
-        ws.append(D_['ws'])        
-        
-        for reg in D_['D']:
-            if reg not in regdv0:
-                regdv0[reg] = []
-            regdv0[reg].append(np.array(D_['D'][reg]['d_vars'])/b_size)
-            if reg not in regde0:
-                regde0[reg] = []            
-            regde0[reg].append(np.array(D_['D'][reg]['d_eucs'])/b_size)
+        _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key)
     
     if uperms_:
         return uperms
 
-    acs = np.concatenate(acs)
-    acs1 = np.concatenate(acs1)
-    ws = np.concatenate(ws, axis=1)
-    regs0 = Counter(acs1)
-    regs = {reg: regs0[reg] for reg in regs0 if regs0[reg] > min_reg}
-        
-    # nansum across insertions and take sqrt
-    regdv = {reg: (np.nansum(regdv0[reg],axis=0)/regs[reg])**0.5 
-                  for reg in regs }         
-    regde = {reg: (np.nansum(regde0[reg],axis=0)/regs[reg])**0.5
-                  for reg in regs}
-        
-    r = {}
-    for reg in regs:         
-        res = {}        
-    
-        # # get PCA for 3d trajectories
-        dat = ws[:,acs == reg,:]
-        # pca = PCA(n_components = 3)
-        # wsc = pca.fit_transform(np.concatenate(dat,axis=1).T).T
-
-        # res['pcs'] = wsc
-        res['nclus'] = regs[reg]
-        res['ws'] = dat[:2] #first two are real trajectories
-
-        '''
-        var
-        '''        
-        # amplitudes
-#        ampsv = [np.max(x) - np.min(x) for x in regdv[reg]]                
-
-        # p value
-#        res['p_var'] = np.mean(np.array(ampsv) >= ampsv[0])      
-
-        # full curve, subtract null-d mean
-#        d_var = regdv[reg][0] - np.mean(regdv[reg][1:], axis=0)
-#        res['d_var'] = d_var - min(d_var)
-#        res['amp_var'] = max(res['d_var'])
-    
-        # latency  
-#        if np.max(res['d_var']) == np.inf:
-#            loc = np.where(res['d_var'] == np.inf)[0]  
-#        else:
-#            loc = np.where(res['d_var'] > 0.7*(np.max(res['d_var'])))[0]
-        
-#        res['lat_var'] = np.linspace(-pre_post[split][0], 
-#                        pre_post[split][1], len(res['d_var']))[loc[0]]
-                      
-        '''
-        euc
-        '''          
-        # amplitudes
-        ampse = [np.max(x) - np.min(x) for x in regde[reg]]                
-
-        # p value
-        res['p_euc'] = np.mean(np.array(ampse) >= ampse[0])      
-
-        # full curve, subtract null-d mean
-        d_euc = regde[reg][0] - np.mean(regde[reg][1:], axis=0)
-        res['d_euc'] = d_euc - min(d_euc)
-        res['amp_euc'] = max(res['d_euc'])
-    
-        # latency  
-        loc = np.where(res['d_euc'] > 0.7*(np.max(res['d_euc'])))[0]
-        
-        res['lat_euc'] = np.linspace(-pre_post[split][0], 
-                        pre_post[split][1], len(res['d_euc']))[loc[0]]   
-
-        res['nclus'] = regs[reg]
-        r[reg] = res        
-    
-    np.save(Path(pth_res,f'{split}.npy'), r, allow_pickle=True)
-    np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
+    _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg, save=True)
            
     time1 = time.perf_counter()    
     print('total time:', time1 - time0, 'sec')
@@ -1706,6 +1863,10 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
 
     # Process each split as before, and pool for combined
     for split in splits:
+        if (Path(pth_res, f'{split}.npy').exists()
+                and Path(pth_res, f'{split}_regde.npy').exists()):
+            print(f'Skipping {split}: already finalized in res/')
+            continue
         print(f"Processing split: {split}")
         pth = Path(one.cache_dir, 'manifold', split)
         ss = os.listdir(pth)
@@ -1937,11 +2098,13 @@ if __name__ == '__main__':
     duringtrial_splits = [s for splits in run_align.values() for s in splits]
     all_splits = intertrial_splits + duringtrial_splits
 
-    get_all_d_vars_allsplits(all_splits, bycontrast=False, restart=restart)
+    get_all_d_vars_allsplits(all_splits, bycontrast=False, restart=restart,
+                             stream_pool=True)
 
-    # Pool across insertions per split / split-group (unchanged).
+    # Pool across insertions per split / split-group (skip splits already finalized).
     for split in intertrial_splits:
-        d_var_stacked(split)
+        if not Path(pth_res, f'{split}.npy').exists():
+            d_var_stacked(split)
     for timeframe, splits in run_align.items():
         d_var_stacked_multi(splits)
 

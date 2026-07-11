@@ -337,7 +337,7 @@ def load_trials_and_mask(
     # Remove trials where the signal shows saturation in an interval of interest
     if saturation_intervals is not None:
         all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
-        sess_trials = all_trials[all_trials['eid'] == eid]
+        sess_trials = all_trials[all_trials['eid'] == str(eid)]
         sess_trials.reset_index(inplace=True)
         assert sess_trials.shape[0] == sess_loader.trials.shape[0], 'Trials table does not match trials in session.'
         if isinstance(saturation_intervals, str):

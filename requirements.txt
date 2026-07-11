@@ -7,12 +7,10 @@ seaborn
 scikit-learn
 statsmodels
 
-one-api
-brainbox
-brainwidemap # adapted from IBL's paper-brain-wide-map repo
-iblatlas
-ibllib
-iblutil
+one-api>=3.5
+iblatlas>=1.1
+ibllib>=4.0
+iblutil>=1.20
 
 Pillow
 python-dateutil
