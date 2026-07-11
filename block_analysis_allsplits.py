@@ -32,17 +32,6 @@ import matplotlib as mpl
 import seaborn as sns
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 # from adjustText import adjust_text
-<<<<<<< HEAD
-import matplotlib.image as mpimg
-from matplotlib.gridspec import GridSpec
-from matplotlib import colors
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d import proj3d
-from PIL import Image
-import io
-import matplotlib.patches as mpatches
-import matplotlib.ticker as ticker
-=======
 # import matplotlib.image as mpimg
 # from matplotlib.gridspec import GridSpec
 # from matplotlib import colors
@@ -52,7 +41,6 @@ import matplotlib.ticker as ticker
 # import io
 # import matplotlib.patches as mpatches
 # import matplotlib.ticker as ticker
->>>>>>> 63687f6 (udated analysis pipeline)
 
 import random
 from random import shuffle
@@ -445,18 +433,6 @@ SATURATION_TYPES = (
 )
 
 
-<<<<<<< HEAD
-def load_trials_masked(one, eid, saturation_intervals, all_trials=None):
-    '''
-    Same as load_trials_and_mask(..., saturation_intervals=st), except when
-    truncate_to_pass shortens the session table we align aggregate rows to the
-    first n trials instead of asserting (vendored code asserts and skips).
-    '''
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    if all_trials is None:
-        all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
-    sess_trials = all_trials[all_trials['eid'] == eid].copy()
-=======
 def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
     '''
     Saturation exclusion on top of load_trials_and_mask base mask.
@@ -467,33 +443,19 @@ def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
     '''
     all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     sess_trials = all_trials[all_trials['eid'] == str(eid)].copy()
->>>>>>> 63687f6 (udated analysis pipeline)
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
     if len(sess_trials) > n_sess:
         sess_trials = sess_trials.iloc[:n_sess]
-<<<<<<< HEAD
-    elif len(sess_trials) != n_sess:
-        raise AssertionError('Trials table does not match trials in session.')
-=======
     elif len(sess_trials) < n_sess:
         raise AssertionError(
             f'Trials table ({len(sess_trials)}) shorter than session ({n_sess}) for {eid}.'
         )
->>>>>>> 63687f6 (udated analysis pipeline)
     intervals = (
         [saturation_intervals]
         if isinstance(saturation_intervals, str)
         else list(saturation_intervals)
     )
-<<<<<<< HEAD
-    mask = base_mask.copy()
-    for interval in intervals:
-        mask[sess_trials[interval] == True] = False
-    return trials, mask
-
-
-=======
     mask = base_mask.to_numpy().copy()
     for interval in intervals:
         mask[sess_trials[interval].to_numpy() == True] = False
@@ -506,7 +468,6 @@ def load_trials_for_saturation(one, eid, saturation_intervals):
     return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
 
 
->>>>>>> 63687f6 (udated analysis pipeline)
 def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
     '''
     Load an insertion's raw data ONCE (the expensive step) and cache it so every
@@ -522,31 +483,12 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     if restart and cpath.exists():
         return np.load(cpath, allow_pickle=True).item()
 
-<<<<<<< HEAD
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    sess_trials = all_trials[all_trials['eid'] == eid].copy()
-    sess_trials.reset_index(drop=True, inplace=True)
-    n_sess = trials.shape[0]
-    if len(sess_trials) > n_sess:
-        sess_trials = sess_trials.iloc[:n_sess]
-    elif len(sess_trials) != n_sess:
-        raise AssertionError('Trials table does not match trials in session.')
-
-    trials_by_satur = {}
-    for st in satur_types:
-        mask = base_mask.copy()
-        mask[sess_trials[st] == True] = False
-=======
     spikes, clusters = load_good_units(one, pid)
     trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
     trials_by_satur = {}
     for st in satur_types:
         _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
->>>>>>> 63687f6 (udated analysis pipeline)
         trials_by_satur[st] = trials[mask]
-
-    spikes, clusters = load_good_units(one, pid)
 
     cache = {
         'pid': pid,
@@ -590,11 +532,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         spikes, clusters = load_good_units(one, pid)
 
         # Load in trials data and mask bad trials (False if bad)
-<<<<<<< HEAD
-        trials, mask = load_trials_masked(one, eid, saturation_intervals)
-=======
         trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
->>>>>>> 63687f6 (udated analysis pipeline)
         # remove certain trials
         trials = trials[mask]
     if 'block' in split:
@@ -1392,11 +1330,7 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
         trials = cached['trials'][satur].copy()
     else:
         spikes, clusters = load_good_units(one, pid)
-<<<<<<< HEAD
-        trials, mask = load_trials_masked(one, eid, satur)
-=======
         trials, mask = load_trials_for_saturation(one, eid, satur)
->>>>>>> 63687f6 (udated analysis pipeline)
         trials = trials[mask]
     trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
 
