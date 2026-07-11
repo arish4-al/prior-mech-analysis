@@ -90,7 +90,18 @@ def main():
     p.add_argument('--no-save-cache', dest='save_cache', action='store_false')
     p.add_argument('--one-cache-dir', default=os.environ.get('ONE_CACHE_DIR'))
     p.add_argument('--one-base-url', default=os.environ.get('ONE_BASE_URL', 'https://alyx.internationalbrainlab.org'))
+    p.add_argument('--cache-only', action='store_true',
+                   help='Only build manifold/insertion_cache (no split analysis)')
     args = p.parse_args()
+
+    _configure_one(args.one_cache_dir, args.one_base_url)
+
+    if args.cache_only:
+        print('ONE cache:', ba.one.cache_dir)
+        print('cache_only restart:', args.restart)
+        ba.cache_all_insertions(restart=args.restart)
+        print('Done. Insertion cache under:', Path(ba.one.cache_dir, 'manifold', 'insertion_cache'))
+        return
 
     if args.preset:
         splits = PRESETS[args.preset]
@@ -99,7 +110,6 @@ def main():
     else:
         splits = PRESETS['stimOn_times_act']
 
-    _configure_one(args.one_cache_dir, args.one_base_url)
     splits = _validate_splits(splits)
 
     print('ONE cache:', ba.one.cache_dir)

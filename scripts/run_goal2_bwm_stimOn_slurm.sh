@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH -p mit_normal
-#SBATCH --time=72:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mail-user=arily
 #SBATCH --mail-type=FAIL
 #SBATCH -o goal2_stimOn_act_%j.out
