@@ -2,8 +2,8 @@
 #SBATCH --job-name=goal2_shard
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=12G
 #SBATCH -p mit_normal
 #SBATCH --time=12:00:00
 #SBATCH --mail-user=arily
@@ -11,6 +11,10 @@
 #SBATCH -o goal2_shard_%x_%j.out
 
 # One insertion shard for one split (no finalize).
+# Peak RSS (stream_pool, nrand=2000): ~1.5–2.5 GB (journal 07-10b); stream_acc
+# grows with insertions in the shard. Default 12G is ~4–5× headroom.
+# Submitters may override: sbatch --mem=8G ... scripts/run_goal2_shard_slurm.sh
+#
 #   SPLIT=act_block_stim_l SHARD_IDX=0 N_SHARDS=4 sbatch \
 #     --export=ALL,SPLIT,SHARD_IDX,N_SHARDS \
 #     --job-name=g2_stim_l_s0 scripts/run_goal2_shard_slurm.sh
@@ -37,6 +41,7 @@ cd "$REPO_DIR"
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
 echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
+echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
       --shard-idx "$SHARD_IDX" --n-shards "$N_SHARDS" --no-finalize)

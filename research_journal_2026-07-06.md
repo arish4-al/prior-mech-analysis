@@ -621,3 +621,23 @@ old assert that only rejected zero-trial sides.
 **Smoke (alyx insertion cache, 2 pids × 5 contrast splits, nrand=5):** ok=2, skip=8,
 fail=0. Examples: `…_f1_1.0` (13/7, 10/10) ran; `…_f1_0.125` (12/2), `…_f1_0.0` (4/1),
 `…_f2_1.0` (0/0) skipped.
+
+### 2026-07-12d — Lower Slurm mem for Goal 3 / Goal 2 shards
+
+**Problem:** shard workers requested **48G** each; Goal 3 default submit = 20 splits × 4
+shards = 80 jobs → **~3.8 TB** concurrent mem request → hit per-user mem limit → pend.
+
+**Evidence (peak RSS, stream_pool, nrand=2000; journal 07-10b):** ~1.5–2.5 GB.
+Goal 3 contrast + `min_trials_per_side=5` skips many insertions → smaller stream_acc.
+
+**New defaults:**
+| job | was | now |
+|-----|-----|-----|
+| shard (`run_goal2_shard_slurm.sh`) | 48G / 4 cpus | **12G** / 2 cpus |
+| finalize | 32G | **16G** / 2 cpus |
+| Goal 3 submit override | (inherit 48G) | **MEM_SHARD=8G**, **MEM_FIN=12G** |
+| Goal 2 submit override | (inherit) | **MEM_SHARD=12G**, **MEM_FIN=16G** |
+| unsharded `run_goal3_contrast_slurm.sh` | 48G | **16G** |
+
+Concurrent Goal 3 default: 80 × 8G = **640G** (~6× less). Override:
+`MEM_SHARD=6G MEM_FIN=10G bash scripts/submit_goal3_sharded.sh`.
