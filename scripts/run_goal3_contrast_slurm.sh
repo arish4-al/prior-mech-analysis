@@ -2,8 +2,8 @@
 #SBATCH --job-name=goal3_contrast
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=16G
 #SBATCH -p mit_normal
 #SBATCH --time=12:00:00
 #SBATCH --mail-user=arily
@@ -11,7 +11,7 @@
 #SBATCH -o goal3_%j.out
 
 # Goal 3: single-job (unsharded) contrast-conditioned run.
-# For full BWM on ORCD (12 h wall), use insertion sharding instead:
+# Peak RSS ~1.5–2.5 GB; default 16G. For full BWM use sharded submit instead:
 #   bash scripts/submit_goal3_sharded.sh
 #   PRESET=goal3_duringstim_act CONTRASTS="0.0 0.125 1.0" N_SHARDS=4 \
 #     bash scripts/submit_goal3_sharded.sh

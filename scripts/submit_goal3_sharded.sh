@@ -16,6 +16,12 @@
 #     bash scripts/submit_goal3_sharded.sh
 #   PRESET=goal3_all N_SHARDS=6 bash scripts/submit_goal3_sharded.sh
 #
+# Memory (override with MEM_SHARD / MEM_FIN):
+#   Peak RSS stream_pool nrand=2000 ≈ 1.5–2.5 GB (journal 07-10b). Goal 3
+#   contrast + min_trials_per_side=5 skips many insertions → smaller stream_acc.
+#   Defaults: MEM_SHARD=8G, MEM_FIN=12G (was 48G/32G via worker #SBATCH).
+#   Concurrent request: n_splits × N_SHARDS × 8G  (e.g. 20×4×8 = 640G vs 3.8T).
+#
 # Defaults: PRESET=goal3_duringstim_act, all CONTRASTS, N_SHARDS=4.
 # Job count ≈ n_splits × (N_SHARDS + 1 finalize). Example:
 #   goal3_duringstim_act = 4 bases × 5 contrasts = 20 splits → 80 shard + 20 fin.
@@ -29,6 +35,10 @@ PRESET="${PRESET:-goal3_duringstim_act}"
 N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
+MEM_SHARD="${MEM_SHARD:-8G}"
+MEM_FIN="${MEM_FIN:-12G}"
+CPUS_SHARD="${CPUS_SHARD:-2}"
+CPUS_FIN="${CPUS_FIN:-2}"
 
 # Expand preset → split names without importing block_analysis_allsplits (no ONE).
 SPLITS=()
@@ -82,8 +92,11 @@ if [[ ${#SPLITS[@]} -eq 0 ]]; then
   exit 1
 fi
 
+n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "contrasts: ${CONTRASTS:-all (default CONTRASTS)}"
+echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  CPUS_SHARD=$CPUS_SHARD  CPUS_FIN=$CPUS_FIN"
+echo "Concurrent mem if all shards run: ${n_shard_jobs} × $MEM_SHARD"
 
 job_tag() {
   # Slurm job-name safe: dots → p, truncate
@@ -97,6 +110,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g3_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART" \
       scripts/run_goal2_shard_slurm.sh)
@@ -105,6 +119,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g3_fin_${TAG}" \
     --export=ALL,SPLIT="$sp" \

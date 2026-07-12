@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
+#SBATCH --mem=16G
 #SBATCH -p mit_normal
 #SBATCH --time=2:00:00
 #SBATCH --mail-user=arily
@@ -11,6 +11,9 @@
 #SBATCH -o goal2_finalize_%x_%j.out
 
 # Merge stream_acc shards → manifold/res/{split}*.npy
+# Loads all shard checkpoints into memory; default 16G (was 32G). Override with
+#   sbatch --mem=12G ... if the split is contrast-sparse (Goal 3).
+#
 #   SPLIT=act_block_stim_l sbatch --export=ALL,SPLIT --job-name=g2_fin_stim_l \
 #     scripts/run_goal2_finalize_slurm.sh
 
@@ -30,5 +33,6 @@ conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
 echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT"
+echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 python3 -u scripts/run_goal2_splits.py --finalize-only --splits "$SPLIT"
 ls -lh "$ONE_CACHE_DIR/manifold/res/${SPLIT}"*.npy 2>/dev/null || true
