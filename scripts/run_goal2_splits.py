@@ -4,6 +4,7 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
 
   python scripts/run_goal2_splits.py --preset stimOn_times_act
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
+  python scripts/run_goal2_splits.py --preset goal3_duringstim_act --list-splits
   python scripts/run_goal2_splits.py --splits act_block_stim_l --shard-idx 0 --n-shards 4
   python scripts/run_goal2_splits.py --finalize-only --splits act_block_stim_l
   python scripts/run_goal2_splits.py --cache-only
@@ -123,9 +124,30 @@ def main():
                    help='Merge stream_acc shards and write res/{split}*.npy')
     p.add_argument('--no-finalize', dest='finalize', action='store_false', default=True,
                    help='Skip finalize (shard workers should use this)')
+    p.add_argument('--list-splits', action='store_true',
+                   help='Print resolved split names (one per line) and exit')
     args = p.parse_args()
 
+    presets = dict(PRESETS)
+    if args.contrasts is not None:
+        presets.update(_goal3_presets(args.contrasts))
+
+    if args.preset:
+        splits = presets[args.preset]
+    elif args.splits:
+        splits = args.splits
+    else:
+        splits = presets['stimOn_times_act']
+
+    if args.list_splits:
+        for sp in splits:
+            print(sp)
+        return
+
     _configure_one(args.one_cache_dir, args.one_base_url)
+
+    if args.contrasts is not None:
+        ba.register_contrast_splits(contrasts=args.contrasts)
 
     if args.cache_only:
         print('ONE cache:', ba.one.cache_dir)
@@ -134,17 +156,6 @@ def main():
               Path(ba.one.cache_dir, 'manifold', 'insertion_cache'))
         return
 
-    presets = dict(PRESETS)
-    if args.contrasts is not None:
-        presets.update(_goal3_presets(args.contrasts))
-        ba.register_contrast_splits(contrasts=args.contrasts)
-
-    if args.preset:
-        splits = presets[args.preset]
-    elif args.splits:
-        splits = args.splits
-    else:
-        splits = presets['stimOn_times_act']
     splits = _validate_splits(splits)
 
     if args.finalize_only:

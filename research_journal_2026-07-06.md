@@ -76,9 +76,14 @@ This makes adding/redoing splits cheap and directly enables Goal 3.
 
 ### Goal 3 — Prior modulation by contrast; contrast-response slope
 
-Redo the real-data prior-modulation analysis **separately for low- vs high-contrast trials**, and specifically at **0% contrast** (behavior fully prior-driven). Then **compute the slope of the contrast-response function** and test whether the prior modulates that slope.
+Redo the real-data prior-modulation analysis **separately per contrast** on
+**during-trial** splits (`*block_duringstim*`, `*block_stim*duringchoice*`), for
+both **act_*** and non-act, including **0% contrast**. Then optionally compute
+the CRF slope and test whether the prior modulates that slope.
 
-Scaffolding already present: `bycontrast`, `lowcontrast`, and a `stim_{contrast}` split in `get_d_vars`. Build the contrast-conditioned prior test + slope test on top of the Goal 2 cache.
+Names: `'{base}_{contrast}'` (e.g. `act_block_duringstim_l_choice_l_f1_0.125`).
+Contrast is parsed from the split name on the Goal-2 cached pipeline — no
+`bycontrast` flag needed. See 07-12.
 
 ### Goal 4 — Presence sweep on S prior-mod params (fitted I/M, stim-side unsplit)
 
@@ -531,10 +536,77 @@ Formula (intermediates kept): `N × (P − S) = C` where `C` = cache bytes/inser
 
 If stream acc deleted after `finalize()`, persistent new storage ≈ cache + final res only → break-even **~1–2 splits**. Insertion cache is one-time; splits beyond break-even add mainly stream_acc (during run) + small final res.
 
+### 2026-07-12b — Goal 2: insertion sharding for ORCD (`mit_normal` 12 h)
+
+**Problem:** Full BWM (~699 insertions) × nrand=2000 for one split is ~19 h wall (~100 s/ins) — exceeds `mit_normal` max **12 h**. Parallelizing across splits alone is not enough; jobs timed out mid-split (e.g. `act_block_stim_r` ~463/699). Kill mid-`np.save` also left truncated `_stream_acc/{split}.npy` (`pickle data was truncated` on restart).
+
+**Fixes / features:**
+1. **Atomic stream_acc save** — write `.{split}.tmp.{pid}.npy` then `os.replace`; corrupt load quarantines to `*.corrupt.{pid}` and starts empty.
+2. **Delete stream_acc after successful finalize** — once `manifold/res/{split}.npy` exists.
+3. **Insertion sharding** — `shard_idx` / `n_shards` on `get_all_d_vars_allsplits`: each job processes `eids_plus[k::N]`, writes `_stream_acc/{split}.shard{k}.npy` (no finalize). `finalize_stream_shards(split)` merges disjoint shards (+ optional leftover unsharded `{split}.npy`) → `res/{split}*.npy`, then cleans checkpoints. CLI: `--shard-idx` / `--n-shards` / `--finalize-only` / `--no-finalize`.
+
+**Scripts (promote to `main` for cluster):**
+- `scripts/run_goal2_shard_slurm.sh` — one shard
+- `scripts/run_goal2_finalize_slurm.sh` — merge + finalize
+- `scripts/submit_goal2_stimOn_act_sharded.sh` — default **N_SHARDS=4** × 6 stimOn_act splits + finalize deps
+- `scripts/run_goal2_cache_slurm.sh` — cache-only (restart skips existing)
+
+**Expected timing:** 4 shards → ~5 h/shard at ~100 s/ins (fits 12 h). Do **not** mix sharding with an existing good unsharded `{split}.npy` restart (duplicate keys); continue timed-out splits unsharded with `restart=True`, or delete corrupt checkpoints and shard from scratch.
+
+```bash
+# New / full redo (cache already built):
+bash scripts/submit_goal2_stimOn_act_sharded.sh
+# N_SHARDS=6 bash scripts/submit_goal2_stimOn_act_sharded.sh
+```
+
 ## Next steps
 
 1. ~~Goals 2 validation in working env~~ DONE (07-09).
 2. ~~nrand=2000 parity + timing~~ DONE (07-10).
 3. ~~End-to-end original vs new pipeline comparison (alyx)~~ DONE (07-10b).
-4. Goal 3: contrast-conditioned prior mod + CRF slope on cached pipeline.
-5. Optional: `cache_all_insertions()` then `get_all_d_vars_allsplits(all_splits)` full BWM run (stream_pool=True, alyx or openalyx).
+4. ~~Insertion sharding + atomic stream_acc~~ DONE (07-12b).
+5. Goal 3: contrast-conditioned **during-trial** prior mod on cached + **sharded** pipeline (see 07-12).
+6. Optional: CRF slope test (`get_crf_slope`) after contrast splits land.
+7. Optional: finish ORCD `stimOn_times_act` BWM with sharded submit (or unsharded restart where checkpoints are valid).
+
+### 2026-07-12 — Goal 3 corrected: during-trial contrast splits (not ITI block_only)
+
+**Clarification:** Goal 3 prior-modulation-by-contrast is for **during-trial** splits —
+`*block_duringstim*` and `*block_stim*duringchoice*` — both **act_*** (action-kernel
+prior) and non-act. The 07-06d `block_only_c*` ITI scaffolding was the wrong target.
+
+**Implementation (cached pipeline):**
+- `CONTRASTS = [1.0, 0.25, 0.125, 0.0625, 0.0]`
+- Bases: `GOAL3_DURINGSTIM_BASES` (8) + `GOAL3_DURINGCHOICE_BASES` (8) = 16 bases × 5
+  contrasts → **80** registered splits `'{base}_{contrast}'` (e.g.
+  `act_block_duringstim_l_choice_l_f1_0.125`).
+- `contrast_from_split(name)` auto-parses trailing `_{float}` / `_c{float}` (regex
+  anchored at EOS so `_choice` never false-matches).
+- `get_d_vars`: contrast filter applied via `_filter_stim_side` whenever the name
+  carries a contrast — **no** `bycontrast=True` flag required. Act vs non-act still
+  toggled by `'act' in split`. Windows copied from the base split (`[0,0.15]`
+  duringstim, `[0.15,0]` duringchoice).
+- Cached path skips remote `pid2eid` when the insertion cache already has eid/probe.
+- CLI presets in `scripts/run_goal2_splits.py`:
+  `goal3_duringstim`, `goal3_duringchoice`, `goal3_duringstim_act`,
+  `goal3_duringstim_block`, `goal3_duringchoice_act`, `goal3_duringchoice_block`,
+  `goal3_all`; optional `--contrasts 0.0 0.125 1.0`; `--list-splits` to print names.
+- **Sharding (same as Goal 2 / 07-12b):** contrast splits are ordinary split names, so
+  `run_goal2_shard_slurm.sh` + `run_goal2_finalize_slurm.sh` work unchanged
+  (`{split}.shard{k}.npy` tolerates dots in `0.125`). Submitter:
+  `scripts/submit_goal3_sharded.sh` (default `goal3_duringstim_act`, N_SHARDS=4).
+- Unsharded single-job smoke: `scripts/run_goal3_contrast_slurm.sh`.
+
+```bash
+# Full BWM on ORCD (recommended):
+bash scripts/submit_goal3_sharded.sh
+PRESET=goal3_duringstim_act CONTRASTS="0.0 0.125 1.0" N_SHARDS=4 \
+  bash scripts/submit_goal3_sharded.sh
+
+# Local / smoke (unsharded):
+conda activate iblenv
+python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
+```
+
+**Smoke (alyx insertion cache, 3 pids × 6 splits, nrand=10):** 18/18 OK — act+non-act,
+duringstim+duringchoice, contrasts 0/0.125/0.25/1.0; duringstim curves len=72.
