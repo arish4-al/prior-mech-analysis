@@ -610,3 +610,14 @@ python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0
 
 **Smoke (alyx insertion cache, 3 pids × 6 splits, nrand=10):** 18/18 OK — act+non-act,
 duringstim+duringchoice, contrasts 0/0.125/0.25/1.0; duringstim curves len=72.
+
+### 2026-07-12c — Min 5 trials per split side
+
+**Change:** `min_trials_per_side = 5` in `block_analysis_allsplits.py`. Both sides of a
+split must have ≥5 trials; otherwise `get_d_vars` raises `InsufficientTrials` and the
+cached driver logs `split skip` (no stream_acc / no per-insertion save). Replaces the
+old assert that only rejected zero-trial sides.
+
+**Smoke (alyx insertion cache, 2 pids × 5 contrast splits, nrand=5):** ok=2, skip=8,
+fail=0. Examples: `…_f1_1.0` (13/7, 10/10) ran; `…_f1_0.125` (12/2), `…_f1_0.0` (4/1),
+`…_f2_1.0` (0/0) skipped.

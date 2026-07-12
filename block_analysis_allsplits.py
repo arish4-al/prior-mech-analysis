@@ -77,7 +77,12 @@ sts = 0.002  # stride size in s for overlapping bins
 ntravis = 30  # number of trajectories for visualisation, first 2 real
 nrand = 2000  # number of random trial splits for null_d
 min_reg = 20  # 100, minimum number of neurons in pooled region
+min_trials_per_side = 5  # skip insertion if either split side has fewer trials
 alpha = 0.2 # inverse of time constant for action kernel calculation
+
+
+class InsufficientTrials(ValueError):
+    '''Raised when a split side has fewer than ``min_trials_per_side`` trials.'''
 
 # trial split types, see get_d_vars for details
 align_old = {
@@ -837,9 +842,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         print('what is the split?', split)
         return
     
-    print('#trials per condition: ',len(trn[0]), len(trn[1]))
-    assert (len(trn[0]) != 0) and (len(trn[1]) != 0), 'zero trials to average'
-           
+    print('#trials per condition: ', len(trn[0]), len(trn[1]))
+    if len(trn[0]) < min_trials_per_side or len(trn[1]) < min_trials_per_side:
+        raise InsufficientTrials(
+            f'need ≥{min_trials_per_side} trials/side, got {len(trn[0])}, {len(trn[1])}')
+
     assert len(spikes['times']) == len(spikes['clusters']), 'spikes != clusters'   
             
     # bin and cut into trials    
@@ -1487,6 +1494,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
             continue
 
         n_ok = 0
+        n_skip = 0
         for split in pending:
             try:
                 D_ = get_d_vars(split, pid, control=control, mapping=mapping,
@@ -1499,12 +1507,18 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                     outp = Path(one.cache_dir, 'manifold', split, f'{eid_probe}.npy')
                     np.save(outp, D_, allow_pickle=True)
                 n_ok += 1
+            except InsufficientTrials as exc:
+                n_skip += 1
+                print('   split skip', split, pid, exc)
             except Exception as exc:
                 print('   split fail', split, pid, exc)
         del cache
         gc.collect()
         time1 = time.perf_counter()
-        print(k, 'of', len(eids_plus), f'ok {n_ok}/{len(pending)} splits', round(time1 - time0, 1), 'sec')
+        print(k, 'of', len(eids_plus),
+              f'ok {n_ok}/{len(pending)} splits',
+              f'skip {n_skip}',
+              round(time1 - time0, 1), 'sec')
 
     if stream_pool and finalize:
         for split in splits_list:
