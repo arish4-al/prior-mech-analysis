@@ -47,6 +47,7 @@ from random import shuffle
 from copy import deepcopy
 import time
 import sys
+import re
 
 import math
 import string
@@ -207,15 +208,89 @@ for split in splits_new:
 # the fully prior-driven (0% contrast) stratum.
 CONTRASTS = [1.0, 0.25, 0.125, 0.0625, 0.0]
 
-# Contrast-stratified prior-modulation splits (block L vs R within one contrast
-# level), reusing the existing get_d_vars / d_var_stacked pipeline. ITI window as
-# for the base block_only split. Split name: 'block_only_c{contrast}'.
-block_only_contrast_splits = [
-    f'{s}_c{c:g}' for s in ('block_only', 'act_block_only') for c in CONTRASTS
+# During-trial prior-modulation bases (stim window + choice window), act and
+# non-act. Contrast-conditioned names are '{base}_{contrast}' (e.g. ..._f1_0.125).
+GOAL3_DURINGSTIM_BASES = [
+    'block_duringstim_r_choice_r_f1',
+    'block_duringstim_l_choice_l_f1',
+    'block_duringstim_l_choice_r_f2',
+    'block_duringstim_r_choice_l_f2',
+    'act_block_duringstim_r_choice_r_f1',
+    'act_block_duringstim_l_choice_l_f1',
+    'act_block_duringstim_l_choice_r_f2',
+    'act_block_duringstim_r_choice_l_f2',
 ]
-for split in block_only_contrast_splits:
-    align[split] = 'stimOn_times'
-    pre_post[split] = [0.4, -0.1]
+GOAL3_DURINGCHOICE_BASES = [
+    'block_stim_r_duringchoice_r_f1',
+    'block_stim_l_duringchoice_l_f1',
+    'block_stim_l_duringchoice_r_f2',
+    'block_stim_r_duringchoice_l_f2',
+    'act_block_stim_r_duringchoice_r_f1',
+    'act_block_stim_l_duringchoice_l_f1',
+    'act_block_stim_l_duringchoice_r_f2',
+    'act_block_stim_r_duringchoice_l_f2',
+]
+GOAL3_BASE_SPLITS = GOAL3_DURINGSTIM_BASES + GOAL3_DURINGCHOICE_BASES
+
+
+def contrast_from_split(split):
+    '''
+    Parse optional trailing contrast from a split name.
+
+    Supported suffixes: ``_{float}`` (e.g. ``..._f1_0.125``) or ``_c{float}``
+    (e.g. ``..._c0.125``). Returns None if the split is not contrast-stratified.
+    '''
+    # Anchor at end-of-string so '_choice' etc. never match as '_c...'.
+    m = re.search(r'_c([0-9]*\.?[0-9]+)$', split)
+    if m:
+        return float(m.group(1))
+    m = re.search(r'_([0-9]*\.?[0-9]+)$', split)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def contrast_split_name(base, contrast):
+    '''Canonical contrast-conditioned split name: ``{base}_{contrast}``.'''
+    return f'{base}_{float(contrast)}'
+
+
+def expand_contrast_splits(bases=None, contrasts=None):
+    '''Cartesian product of base splits × contrasts (default: all Goal-3 bases).'''
+    if bases is None:
+        bases = GOAL3_BASE_SPLITS
+    if contrasts is None:
+        contrasts = CONTRASTS
+    return [contrast_split_name(b, c) for b in bases for c in contrasts]
+
+
+def _register_split_window(split, align_event, window):
+    align[split] = align_event
+    pre_post[split] = list(window)
+
+
+def register_contrast_splits(bases=None, contrasts=None):
+    '''
+    Register align/pre_post for contrast-conditioned during-trial splits,
+    copying the base split's alignment event and analysis window.
+    '''
+    if bases is None:
+        bases = GOAL3_BASE_SPLITS
+    if contrasts is None:
+        contrasts = CONTRASTS
+    out = []
+    for base in bases:
+        if base not in align or base not in pre_post:
+            raise KeyError(f'Base split not in align/pre_post: {base}')
+        for c in contrasts:
+            name = contrast_split_name(base, c)
+            _register_split_window(name, align[base], pre_post[base])
+            out.append(name)
+    return out
+
+
+# Register Goal-3 contrast splits (duringstim + duringchoice, act + non-act).
+goal3_contrast_splits = register_contrast_splits()
 
 
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
@@ -236,8 +311,17 @@ pth_stream_acc.mkdir(parents=True, exist_ok=True)
 NULL_BATCH_SIZE = 100
 
 
-def _stream_acc_path(split):
-    return pth_stream_acc / f'{split}.npy'
+def _stream_acc_path(split, shard=None):
+    '''Checkpoint path. shard=None → {split}.npy; else {split}.shard{k}.npy.'''
+    if shard is None:
+        return pth_stream_acc / f'{split}.npy'
+    return pth_stream_acc / f'{split}.shard{int(shard)}.npy'
+
+
+def _stream_acc_shard_paths(split):
+    '''All existing shard checkpoint files for a split (sorted by shard index).'''
+    paths = sorted(pth_stream_acc.glob(f'{split}.shard*.npy'))
+    return paths
 
 
 def _null_labels(split, ntr, dx):
@@ -518,8 +602,6 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     '''
     
     
-    eid,probe = one.pid2eid(pid)
-
     saturation_intervals = saturation_for_split(split)
 
     if cached is not None:
@@ -527,7 +609,12 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         spikes = cached['spikes']
         clusters = cached['clusters']
         trials = cached['trials'][saturation_intervals].copy()
+        eid = cached.get('eid')
+        probe = cached.get('probe')
+        if eid is None or probe is None:
+            eid, probe = one.pid2eid(pid)
     else:
+        eid, probe = one.pid2eid(pid)
         # load in spikes
         spikes, clusters = load_good_units(one, pid)
 
@@ -550,29 +637,40 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         actions = list(trials['choice'])
         trials['act_priors'], trials['probabilityLeft'] = action_kernel_priors(alpha, actions)
 
-        
+    # Contrast stratification from split name (..._0.125 / ..._c0.125) or legacy
+    # bycontrast=True (same trailing-float convention).
+    contrast = contrast_from_split(split)
+    if bycontrast and contrast is None:
+        try:
+            contrast = float(split.split('_')[-1])
+        except ValueError:
+            contrast = None
+
     events = []
     trn = []
-    if bycontrast:
-        contrast = float(split.split('_')[-1])
-        if split == f'stim_{contrast}':
-            for side in ['Left', 'Right']:
-                events.append(trials['stimOn_times'][trials[f'contrast{side}']==contrast])
-                trn.append(
-                    np.arange(len(trials['stimOn_times']))[trials[f'contrast{side}']==contrast])
+    if contrast is not None and split == f'stim_{contrast}':
+        for side in ['Left', 'Right']:
+            events.append(trials['stimOn_times'][
+                np.isclose(trials[f'contrast{side}'].astype(float), contrast)])
+            trn.append(np.arange(len(trials['stimOn_times']))[
+                np.isclose(trials[f'contrast{side}'].astype(float), contrast)])
+
+    def _filter_stim_side(trials_df, side):
+        '''Keep stim-side trials; if contrast set, restrict to that |contrast|.'''
+        col = f'contrast{side}'
+        if contrast is not None:
+            return trials_df[np.isclose(trials_df[col].astype(float), contrast)]
+        return trials_df[~np.isnan(trials_df[col])]
 
     if 'stim_l' in split:
         if split in ('act_block_stim_l', 'block_stim_l'):
             # L vs R block trajectories within left-stimulus trials (no choice filter).
-            trials = trials[~np.isnan(trials['contrastLeft'])]
+            trials = _filter_stim_side(trials, 'Left')
             for pleft in [0.8, 0.2]:
                 events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
                 trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
         elif 'choice_l' in split and 'f1' in split: # correct trials, f1
-            if bycontrast:
-                trials = trials[trials[f'contrastLeft']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastLeft'])]
+            trials = _filter_stim_side(trials, 'Left')
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -581,10 +679,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                         trials['feedbackType'] == 1, trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f2' in split: 
             # choice_r trials, stim_l so these are incorrect trials, f2
-            if bycontrast:
-                trials = trials[trials[f'contrastLeft']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastLeft'])]
+            trials = _filter_stim_side(trials, 'Left')
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -598,15 +693,12 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     elif 'stim_r' in split:
         if split in ('act_block_stim_r', 'block_stim_r'):
             # L vs R block trajectories within right-stimulus trials (no choice filter).
-            trials = trials[~np.isnan(trials['contrastRight'])]
+            trials = _filter_stim_side(trials, 'Right')
             for pleft in [0.8, 0.2]:
                 events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
                 trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
         elif 'choice_l' in split and 'f2' in split: # incorrect trials, f2
-            if bycontrast:  
-                trials = trials[trials[f'contrastRight']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastRight'])]
+            trials = _filter_stim_side(trials, 'Right')
             trials = trials[trials['choice'] == 1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -614,10 +706,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
                         trials['feedbackType'] == -1,trials['probabilityLeft'] == pleft])])
         elif 'choice_r' in split and 'f1' in split: # choice_r trials, correct, f1
-            if bycontrast:  
-                trials = trials[trials[f'contrastRight']==contrast]
-            else:
-                trials = trials[~np.isnan(trials[f'contrastRight'])]
+            trials = _filter_stim_side(trials, 'Right')
             trials = trials[trials['choice'] == -1]
             for pleft in [0.8, 0.2]:
                     events.append(trials[align[split]][np.bitwise_and.reduce([
@@ -733,20 +822,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                    trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
     
     elif 'block_only' in split:
-        # Optional contrast stratification: 'block_only_c{contrast}' restricts to
-        # trials whose |contrast| equals the requested value (0.0 => 0% contrast,
-        # where behavior is fully prior-driven) before the block L vs R split.
-        if '_c' in split:
-            tail = split.rsplit('_c', 1)[-1]
-            try:
-                cval = float(tail)
-            except ValueError:
-                cval = None
-            if cval is not None:
-                cmag = np.nanmax(
-                    np.c_[trials['contrastLeft'].values,
-                          trials['contrastRight'].values], axis=1)
-                trials = trials[np.isclose(cmag, cval)]
+        # Optional contrast stratification via trailing _{c} / _c{c} on the name.
+        cval = contrast_from_split(split)
+        if cval is not None:
+            cmag = np.nanmax(
+                np.c_[trials['contrastLeft'].values.astype(float),
+                      trials['contrastRight'].values.astype(float)], axis=1)
+            trials = trials[np.isclose(cmag, cval)]
         for pleft in [0.8, 0.2]:
             events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
             trn.append(np.arange(len(trials['choice']))[trials['probabilityLeft'] == pleft])
@@ -866,12 +948,18 @@ class SplitPoolAccumulator:
     '''
     Streaming pool across insertions for one split (replaces per-insertion
     manifold/{split}/*.npy + separate d_var_stacked pass).
+
+    shard: optional int. When set, checkpoints go to {split}.shard{k}.npy so
+    multiple Slurm jobs can process disjoint insertion subsets in parallel,
+    then merge_shards() + finalize().
     '''
 
-    def __init__(self, split, min_reg=min_reg):
+    def __init__(self, split, min_reg=min_reg, shard=None):
         self.split = split
         self.min_reg = min_reg
+        self.shard = shard
         self.pooled_keys = set()
+        self.key_order = []
         self.acs = []
         self.acs1 = []
         self.ws = []
@@ -879,30 +967,54 @@ class SplitPoolAccumulator:
         self.regde0 = {}
         self.uperms = {}
 
+    def _path(self):
+        return _stream_acc_path(self.split, shard=self.shard)
+
     @classmethod
-    def load(cls, split, min_reg=min_reg):
-        path = _stream_acc_path(split)
-        if path.exists():
+    def load(cls, split, min_reg=min_reg, shard=None):
+        path = _stream_acc_path(split, shard=shard)
+        if not path.exists():
+            return cls(split, min_reg=min_reg, shard=shard)
+        try:
             state = np.load(path, allow_pickle=True).item()
-            acc = cls(split, min_reg=min_reg)
-            acc.pooled_keys = set(state['pooled_keys'])
-            acc.acs = state['acs']
-            acc.acs1 = state['acs1']
-            acc.ws = state['ws']
-            acc.regdv0 = state['regdv0']
-            acc.regde0 = state['regde0']
-            acc.uperms = state['uperms']
-            return acc
-        return cls(split, min_reg=min_reg)
+        except Exception as exc:
+            # Truncated/corrupt checkpoint (e.g. job killed mid-np.save before
+            # atomic-write fix). Quarantine and start fresh rather than crash.
+            bad = path.with_suffix(path.suffix + f'.corrupt.{os.getpid()}')
+            try:
+                path.rename(bad)
+                print(f'WARNING: corrupt stream_acc for {split}: {exc}')
+                print(f'  quarantined -> {bad}; restarting accumulator from empty')
+            except OSError:
+                print(f'WARNING: corrupt stream_acc for {split}: {exc}; starting empty')
+            return cls(split, min_reg=min_reg, shard=shard)
+        acc = cls(split, min_reg=min_reg, shard=shard)
+        acc.pooled_keys = set(state['pooled_keys'])
+        acc.key_order = list(state.get('key_order') or [])
+        if len(acc.key_order) != len(state['acs']):
+            if state.get('uperms') and len(state['uperms']) == len(state['acs']):
+                acc.key_order = list(state['uperms'].keys())
+            else:
+                acc.key_order = [f'ins_{i}' for i in range(len(state['acs']))]
+        acc.acs = state['acs']
+        acc.acs1 = state['acs1']
+        acc.ws = state['ws']
+        acc.regdv0 = state['regdv0']
+        acc.regde0 = state['regde0']
+        acc.uperms = state['uperms']
+        return acc
 
     def add(self, eid_probe, D_):
         if eid_probe in self.pooled_keys:
             return False
+        if not hasattr(self, 'key_order') or self.key_order is None:
+            self.key_order = []
         if 'uperms' in D_:
             self.uperms[eid_probe] = D_['uperms']
         self.acs.append(D_['acs'])
         self.acs1.append(D_['acs1'])
         self.ws.append(D_['ws'])
+        self.key_order.append(eid_probe)
         scale = _pool_scale()
         if 'D' not in D_:
             raise ValueError('stream_pool requires control=True (regional null curves in D_)')
@@ -915,22 +1027,119 @@ class SplitPoolAccumulator:
         return True
 
     def save(self):
-        np.save(_stream_acc_path(self.split), {
+        '''Atomic checkpoint: write to a temp *.npy then os.replace so a kill
+        mid-write cannot leave a truncated file at the real path.'''
+        path = self._path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Must end in .npy so np.save does not append another .npy suffix.
+        tmp = path.parent / f'.{path.stem}.tmp.{os.getpid()}.npy'
+        key_order = getattr(self, 'key_order', None)
+        if key_order is None or len(key_order) != len(self.acs):
+            if self.uperms and len(self.uperms) == len(self.acs):
+                key_order = list(self.uperms.keys())
+            else:
+                key_order = [f'ins_{i}' for i in range(len(self.acs))]
+            self.key_order = key_order
+        payload = {
             'pooled_keys': list(self.pooled_keys),
+            'key_order': list(self.key_order),
             'acs': self.acs,
             'acs1': self.acs1,
             'ws': self.ws,
             'regdv0': self.regdv0,
             'regde0': self.regde0,
             'uperms': self.uperms,
-        }, allow_pickle=True)
+        }
+        try:
+            np.save(tmp, payload, allow_pickle=True)
+            os.replace(tmp, path)
+        except Exception:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+            raise
 
-    def finalize(self, save=True):
-        '''Write manifold/res/{split}*.npy (same layout as d_var_stacked).'''
-        return _finalize_pooled_split(
+    def finalize(self, save=True, cleanup_checkpoint=True):
+        '''Write manifold/res/{split}*.npy (same layout as d_var_stacked).
+
+        After a successful write, remove stream_acc checkpoints for this split
+        (unsharded + shards).
+        '''
+        out = _finalize_pooled_split(
             self.split, self.acs, self.acs1, self.ws,
             self.regdv0, self.regde0, self.min_reg, save=save,
         )
+        if save and cleanup_checkpoint:
+            final = Path(pth_res, f'{self.split}.npy')
+            if final.exists():
+                for path in [_stream_acc_path(self.split)] + _stream_acc_shard_paths(self.split):
+                    if path.exists():
+                        path.unlink()
+                        print(f'removed stream_acc checkpoint {path}')
+        return out
+
+
+def merge_stream_acc_shards(split, min_reg=min_reg, include_unsharded=True):
+    '''
+    Merge {split}.shard*.npy (and optional {split}.npy) into one accumulator.
+    Shards must be insertion-disjoint. Returns the merged SplitPoolAccumulator.
+    '''
+    paths = []
+    if include_unsharded:
+        p0 = _stream_acc_path(split)
+        if p0.exists():
+            paths.append(p0)
+    paths.extend(_stream_acc_shard_paths(split))
+    if not paths:
+        return SplitPoolAccumulator(split, min_reg=min_reg)
+
+    merged = SplitPoolAccumulator(split, min_reg=min_reg)
+    merged.key_order = []
+    for path in paths:
+        try:
+            state = np.load(path, allow_pickle=True).item()
+        except Exception as exc:
+            raise RuntimeError(f'Cannot load shard {path}: {exc}') from exc
+        key_order = state.get('key_order')
+        if not key_order or len(key_order) != len(state['acs']):
+            if state.get('uperms') and len(state['uperms']) == len(state['acs']):
+                key_order = list(state['uperms'].keys())
+            else:
+                key_order = [f'{path.stem}_{i}' for i in range(len(state['acs']))]
+        n_before = len(merged.acs)
+        skipped = 0
+        for i, key in enumerate(key_order):
+            if key in merged.pooled_keys:
+                skipped += 1
+                continue
+            merged.acs.append(state['acs'][i])
+            merged.acs1.append(state['acs1'][i])
+            merged.ws.append(state['ws'][i])
+            merged.pooled_keys.add(key)
+            merged.key_order.append(key)
+            if key in state.get('uperms', {}):
+                merged.uperms[key] = state['uperms'][key]
+        n_added = len(merged.acs) - n_before
+        if skipped:
+            raise RuntimeError(
+                f'Overlap merging {path}: {skipped} duplicate keys. '
+                f'Shards must be insertion-disjoint.'
+            )
+        if n_added != len(state['acs']):
+            raise RuntimeError(f'Unexpected merge size for {path}')
+        for reg, arrs in state.get('regdv0', {}).items():
+            merged.regdv0.setdefault(reg, []).extend(arrs)
+        for reg, arrs in state.get('regde0', {}).items():
+            merged.regde0.setdefault(reg, []).extend(arrs)
+        print(f'merged {path.name}: +{n_added} insertions '
+              f'(total {len(merged.pooled_keys)})')
+    return merged
+
+
+def finalize_stream_shards(split, min_reg=min_reg, cleanup=True):
+    '''Merge all shards for ``split`` and write manifold/res/{split}*.npy.'''
+    acc = merge_stream_acc_shards(split, min_reg=min_reg)
+    print(f'finalize {split}: {len(acc.pooled_keys)} insertions pooled')
+    return acc.finalize(save=True, cleanup_checkpoint=cleanup)
 
 
 def _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key):
@@ -1188,7 +1397,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              mapping='Beryl', bycontrast=False, restart=True,
                              use_cache=True, save_cache=True,
                              stream_pool=False, save_per_insertion=None,
-                             null_batch_size=NULL_BATCH_SIZE, nrand=nrand):
+                             null_batch_size=NULL_BATCH_SIZE, nrand=nrand,
+                             shard_idx=None, n_shards=None, finalize=True):
     '''
     Time-efficient driver: iterate insertions in the OUTER loop, load each
     insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
@@ -1200,24 +1410,48 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     ``manifold/res/{split}*.npy`` without writing per-insertion
     ``manifold/{split}/{eid_probe}.npy`` (major disk savings).
 
+    Sharding (parallel Slurm jobs for one split):
+      shard_idx, n_shards — process eids_plus[shard_idx::n_shards], write
+      ``{split}.shard{k}.npy``. Set finalize=False on shard workers; run
+      finalize_stream_shards(split) after all shards complete.
+
   ``save_per_insertion``: write manifold/{split}/{eid_probe}.npy (default False
     when stream_pool else True). ``restart``: skip (split, insertion) already done.
     '''
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
+    if (shard_idx is None) ^ (n_shards is None):
+        raise ValueError('Provide both shard_idx and n_shards, or neither')
+    if n_shards is not None:
+        n_shards = int(n_shards)
+        shard_idx = int(shard_idx)
+        if not (0 <= shard_idx < n_shards):
+            raise ValueError(f'shard_idx must be in [0, {n_shards})')
+        if not stream_pool:
+            raise ValueError('Sharding requires stream_pool=True')
+        if finalize and n_shards > 1:
+            print('NOTE: shard worker with finalize=True will only finalize '
+                  'this shard\'s insertions; prefer finalize=False + '
+                  'finalize_stream_shards after all shards finish')
 
     time00 = time.perf_counter()
     print('splits', splits_list, 'control', control, 'use_cache', use_cache,
-          'stream_pool', stream_pool, 'null_batch_size', null_batch_size)
+          'stream_pool', stream_pool, 'null_batch_size', null_batch_size,
+          'shard', shard_idx, '/', n_shards, 'finalize', finalize)
 
     if eids_plus is None:
         df = bwm_query(one)
         eids_plus = df[['eid', 'probe_name', 'pid']].values
+    eids_plus = np.asarray(eids_plus)
+    if n_shards is not None:
+        eids_plus = eids_plus[shard_idx::n_shards]
+        print(f'Shard {shard_idx}/{n_shards}: {len(eids_plus)} insertions')
 
     accumulators = {}
     if stream_pool:
         for split in splits_list:
-            accumulators[split] = SplitPoolAccumulator.load(split)
+            accumulators[split] = SplitPoolAccumulator.load(
+                split, shard=shard_idx)
     elif save_per_insertion:
         for split in splits_list:
             Path(one.cache_dir, 'manifold', split).mkdir(parents=True, exist_ok=True)
@@ -1272,10 +1506,14 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
         time1 = time.perf_counter()
         print(k, 'of', len(eids_plus), f'ok {n_ok}/{len(pending)} splits', round(time1 - time0, 1), 'sec')
 
-    if stream_pool:
+    if stream_pool and finalize:
         for split in splits_list:
-            print('finalize stream pool', split, f'({len(accumulators[split].pooled_keys)} insertions)')
-            accumulators[split].finalize()
+            if n_shards is not None and n_shards > 1:
+                print('shard done — skipping finalize (run finalize_stream_shards later)')
+                print(f'  {split} shard{shard_idx}: {len(accumulators[split].pooled_keys)} insertions')
+            else:
+                print('finalize stream pool', split, f'({len(accumulators[split].pooled_keys)} insertions)')
+                accumulators[split].finalize()
 
     time11 = time.perf_counter()
     print((time11 - time00) / 60, f'min for {len(eids_plus)} insertions x {len(splits_list)} splits')
@@ -1322,13 +1560,18 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
     Returns per region: {'nclus', 'contrasts', 'crf_conc', 'crf_disc',
     'slope_conc', 'slope_disc', 'slope_mod', 'p_slope_mod'}.
     '''
-    eid, probe = one.pid2eid(pid)
     satur = 'saturation_stim_plus04'
+    eid = None
     if cached is not None:
         spikes = cached['spikes']
         clusters = cached['clusters']
         trials = cached['trials'][satur].copy()
+        eid = cached.get('eid')
+    if eid is None:
+        eid, probe = one.pid2eid(pid)
     else:
+        probe = cached.get('probe')
+    if cached is None:
         spikes, clusters = load_good_units(one, pid)
         trials, mask = load_trials_for_saturation(one, eid, satur)
         trials = trials[mask]
