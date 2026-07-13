@@ -105,3 +105,58 @@ python scripts/run_goal2_splits.py --preset stim_duringstim_bayes --list-splits
 python scripts/run_goal2_splits.py --preset stim_duringstim1_bayes
 python scripts/run_goal2_splits.py --preset stim_lr_bayes_all
 ```
+
+### 2026-07-13 — Goal 2 choice L–R: Harris session-permutation null (opt-in)
+
+**Problem (journal Goal 2):** unrestricted label shuffle on choice contrasts destroys choice autocorrelation → inflated significance.
+
+**Implemented** in `block_analysis_allsplits.py` for `choice_stim*` / `choice_duringstim*` — **opt-in only** (`session_shuffle_null=False` by default → label shuffle):
+
+1. Filter stim (± block/prior) only; bin eligible trials in time order.
+2. True distance: split by this session’s choices (L vs R).
+3. Null (when `--session-shuffle-null`): transplant a contiguous choice window from another BWM **eid** (`manifold/choice_donors.npy`); resample if a side has <5 trials; circular-shift own choices if no long-enough donor.
+4. Stim contrasts unchanged.
+
+**Assumption check** (`scripts/analyze_choice_epochs.py`; n=459; `bwm_include` + RT/NaN mask; drop pLeft=0.5):
+
+**2026-07-13b — true matched to stim×block.** Stickiness for **true and null** is scored within stim×block cells. Null shuffles choices within strata then uses the same metric. Fairer vs ephys cell conditioning.
+
+**How strata / tertiles are pooled**
+
+1. After dropping pLeft=0.5 and non-±1 choices, label each trial by stim side (L/R from contrasts) × block side (L if pLeft=0.8, R if 0.2) — either **true** block or **act**-kernel (α=0.2 → 0.8/0.2).
+2. **Within a stratum:** take that cell’s choices in session temporal order (intervening other-stratum trials skipped). Compute run lengths on that subsequence.
+3. **Across strata (session score):** concatenate all within-stratum run lengths and take their mean (`mean_run`). Same idea for lag1 (pool consecutive pairs within each stratum, then correlate). Not a mean of per-stratum means — longer strata contribute more runs/pairs.
+4. **Tertiles:** split the post-0.5 trial sequence into early/mid/late thirds **first**, then apply the same within-stratum pooling **inside each tertile slice** (strata labels restricted to that slice). Null: shuffle within those slice-local strata.
+
+**Overall (all tertiles combined — full post-0.5 session; median mean_run):**
+
+| | true | null | p&lt;0.01 | p&lt;0.05 |
+|--|------|------|---------|---------|
+| stim×true-block | 4.84 | 4.44 | 24.0% | 39.0% |
+| stim×act | 4.80 | 4.48 | 12.0% | 26.1% |
+
+(lag1 session-level p&lt;0.01: stim×true-block 25%, stim×act 14%.)
+
+**Tertiles — mean_run only** (median true/null; frac sessions with p&lt;0.01 / p&lt;0.05):
+
+stim×true-block:
+
+| tertile | true | null | p&lt;0.01 | p&lt;0.05 |
+|---------|------|------|---------|---------|
+| early | 4.43 | 4.20 | 5.9% | 17.2% |
+| mid | 4.59 | 4.30 | 4.8% | 13.1% |
+| late | 4.61 | 4.20 | 9.8% | 22.0% |
+
+stim×act:
+
+| tertile | true | null | p&lt;0.01 | p&lt;0.05 |
+|---------|------|------|---------|---------|
+| early | 4.29 | 4.19 | 3.9% | 10.2% |
+| mid | 4.47 | 4.31 | 3.7% | 10.0% |
+| late | 4.50 | 4.20 | 5.2% | 13.9% |
+
+Late>early (stim×true-block mean_run) in **56%** of sessions (Δ +0.20). Excess stickiness vs stratified null is mild; late has the highest sig rates but still modest.
+
+```bash
+python scripts/analyze_choice_epochs.py --cache-dir $ONE_CACHE_DIR --nrand 200
+```

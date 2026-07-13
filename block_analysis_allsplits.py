@@ -301,6 +301,16 @@ def is_choicestim_split(split):
     ))
 
 
+def is_choice_lr_split(split):
+    '''Choice L vs R under fixed stim (±block): choice_stim* / choice_duringstim*.'''
+    return split.startswith(('choice_stim', 'choice_duringstim'))
+
+
+# Back-compat alias (eligibility only; session-shuffle is opt-in via flag).
+def uses_session_shuffle_null(split):
+    return is_choice_lr_split(split)
+
+
 for _s, _ev in CHOICESTIM_ALIGN.items():
     align[_s] = _ev
     if 'stim_block' in _s or 'short' in _s:
@@ -438,6 +448,8 @@ pth_stream_acc.mkdir(parents=True, exist_ok=True)
 
 # null shuffles processed in batches inside get_d_vars (control=True) to cap RAM
 NULL_BATCH_SIZE = 100
+# Retries per null draw when transplanting donor choices (empty side / short donor).
+SESSION_SHUFFLE_MAX_TRIES = 50
 
 
 def _stream_acc_path(split, shard=None):
@@ -558,6 +570,408 @@ def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
         'ws': np.array([m0_true, m1_true])[:ntravis],
         'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
         'D': D,
+    }
+
+
+def _choice_donors_path():
+    return Path(one.cache_dir, 'manifold', 'choice_donors.npy')
+
+
+def _normalize_donor_rec(rec):
+    '''
+    Donor bank entry → dict with choice, stim_is_left, pleft_true.
+
+    Backward compatible with legacy ``{eid: choice_array}``.
+    '''
+    if isinstance(rec, dict) and 'choice' in rec:
+        return {
+            'choice': np.asarray(rec['choice'], dtype=float),
+            'stim_is_left': np.asarray(rec['stim_is_left'], dtype=bool),
+            'pleft_true': np.asarray(rec['pleft_true'], dtype=float),
+        }
+    ch = np.asarray(rec, dtype=float)
+    return {
+        'choice': ch,
+        'stim_is_left': np.zeros(len(ch), dtype=bool),
+        'pleft_true': np.full(len(ch), np.nan),
+        '_legacy': True,
+    }
+
+
+def _donor_choice_stream(rec, split):
+    '''
+    Contiguous-capable choice subsequence matching this split's stim×block
+    eligibility (same rules as ``_get_d_vars_session_shuffle``).
+
+    For act/bayes splits, block labels are recomputed on the donor from its
+    own action kernel / Bayes prior (not the recipient's).
+
+    Legacy bank entries (choice array only) return empty → circular-shift fallback.
+    '''
+    rec = _normalize_donor_rec(rec)
+    if rec.get('_legacy'):
+        return np.array([], dtype=float)
+
+    choice = rec['choice']
+    stim_is_left = rec['stim_is_left']
+    pleft = rec['pleft_true']
+
+    if 'stim_l' in split:
+        stim_ok = stim_is_left
+    elif 'stim_r' in split:
+        stim_ok = ~stim_is_left
+    else:
+        stim_ok = np.ones(len(choice), dtype=bool)
+
+    if 'block_l' in split:
+        p_target = 0.8
+    elif 'block_r' in split:
+        p_target = 0.2
+    else:
+        p_target = None
+
+    if p_target is not None:
+        if 'act' in split:
+            _, pleft = action_kernel_priors(alpha, list(choice))
+            pleft = np.asarray(pleft, dtype=float)
+        elif 'bayes' in split:
+            _, pleft = bayesian_priors(stim_is_left)
+            pleft = np.asarray(pleft, dtype=float)
+        block_ok = np.isclose(pleft, p_target)
+    else:
+        block_ok = np.ones(len(choice), dtype=bool)
+
+    return choice[stim_ok & block_ok]
+
+
+def build_choice_donor_bank(restart=True):
+    '''
+    Scan manifold/insertion_cache for unique-eid trial metadata.
+
+    Saved to manifold/choice_donors.npy as
+    ``{eid: {choice, stim_is_left, pleft_true}}`` so session-permutation
+    nulls can transplant **stim×block–matched** choice subsequences
+    (true / act / bayes block labels resolved at sample time).
+    '''
+    path = _choice_donors_path()
+    if restart and path.exists():
+        bank = np.load(path, allow_pickle=True).item()
+        print(f'choice donor bank (cached): {len(bank)} eids -> {path}')
+        return bank
+
+    bank = {}
+    cache_dir = Path(one.cache_dir, 'manifold', 'insertion_cache')
+    if not cache_dir.exists():
+        print(f'WARNING: no insertion_cache at {cache_dir}; donor bank empty')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(path, bank, allow_pickle=True)
+        return bank
+
+    for fpath in sorted(cache_dir.glob('*.npy')):
+        try:
+            cache = np.load(fpath, allow_pickle=True).item()
+        except Exception as exc:
+            print(f'WARNING: skip corrupt cache {fpath.name}: {exc}')
+            continue
+        eid = str(cache.get('eid') or '')
+        if not eid or eid in bank:
+            continue
+        trials_by = cache.get('trials') or {}
+        if not trials_by:
+            continue
+        tdf = next(iter(trials_by.values()))
+        choice = np.asarray(
+            tdf['choice'].to_numpy() if hasattr(tdf['choice'], 'to_numpy')
+            else tdf['choice'], dtype=float)
+        # Left stim present ↔ contrastRight is NaN (same as session-shuffle path).
+        cr = tdf['contrastRight']
+        cr = cr.to_numpy() if hasattr(cr, 'to_numpy') else np.asarray(cr)
+        stim_is_left = np.isnan(cr.astype(float))
+        pleft = tdf['probabilityLeft']
+        pleft = np.asarray(
+            pleft.to_numpy() if hasattr(pleft, 'to_numpy') else pleft,
+            dtype=float)
+        if not (len(choice) == len(stim_is_left) == len(pleft)):
+            print(f'WARNING: skip {eid}: length mismatch in donor fields')
+            continue
+        bank[eid] = {
+            'choice': choice,
+            'stim_is_left': stim_is_left,
+            'pleft_true': pleft,
+        }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(path, bank, allow_pickle=True)
+    print(f'choice donor bank: {len(bank)} eids -> {path}')
+    return bank
+
+
+def load_choice_donor_bank():
+    '''Load donor bank; build from insertion_cache if missing.'''
+    path = _choice_donors_path()
+    if path.exists():
+        return np.load(path, allow_pickle=True).item()
+    return build_choice_donor_bank(restart=False)
+
+
+def _sample_session_shuffle_ys(n_elig, choices_true, donor_bank, eid,
+                               split=None, donor_streams=None,
+                               max_tries=SESSION_SHUFFLE_MAX_TRIES):
+    '''
+    One Harris null label vector: ys[i]=True iff transplanted choice == +1 (left).
+
+    Prefer a random contiguous window from another eid's **stim×block–matched**
+    choice stream (same eligibility as this split). Fall back to circular shift
+    of this session's eligible choices. Resample until both sides have
+    ≥ min_trials_per_side trials.
+
+    ``donor_streams``: optional precomputed list of stratified choice arrays
+    (avoids recomputing act/bayes per null draw).
+    '''
+    eid = str(eid)
+    warned_fallback = False
+
+    def _ok(ys):
+        return (int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    if donor_streams is None:
+        donor_streams = []
+        for e, rec in (donor_bank or {}).items():
+            if e == eid:
+                continue
+            stream = (_donor_choice_stream(rec, split) if split
+                      else np.asarray(
+                          rec['choice'] if isinstance(rec, dict) else rec,
+                          dtype=float))
+            if len(stream) >= n_elig:
+                donor_streams.append(stream)
+
+    for _ in range(max_tries):
+        if donor_streams:
+            ch = random.choice(donor_streams)
+            start = random.randint(0, len(ch) - n_elig)
+            cand = np.asarray(ch[start:start + n_elig], dtype=float)
+        else:
+            if not warned_fallback:
+                print('session-shuffle: no long-enough stratified donor; '
+                      'circular-shift own eligible choices')
+                warned_fallback = True
+            if n_elig <= 1:
+                cand = np.asarray(choices_true, dtype=float)
+            else:
+                cand = np.roll(np.asarray(choices_true, dtype=float),
+                               random.randint(1, n_elig - 1))
+        ys = cand == 1
+        if _ok(ys):
+            return ys
+
+    for _ in range(max_tries):
+        if n_elig <= 1:
+            break
+        ys = np.roll(np.asarray(choices_true, dtype=float),
+                     random.randint(1, n_elig - 1)) == 1
+        if _ok(ys):
+            return ys
+    return np.asarray(choices_true, dtype=float) == 1
+
+
+def _compute_control_D_session_shuffle(
+        b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
+        donor_bank, eid, null_batch_size=NULL_BATCH_SIZE):
+    '''
+    Session-permutation nulls (Harris 2020): transplant donor-session choices
+    onto this session's eligible-trial neural tensor ``b`` (temporal order).
+
+    Donor windows are taken from the same stim×block stratum stream as ``split``.
+    '''
+    choices_true = np.asarray(choices_true, dtype=float)
+    ys_true = choices_true == 1
+    m0_true = b[ys_true].mean(axis=0)
+    m1_true = b[~ys_true].mean(axis=0)
+    v0_true = b[ys_true].var(axis=0)
+    v1_true = b[~ys_true].var(axis=0)
+
+    regs = list(Counter(acs).keys())
+    reg_masks = {reg: (acs == reg) for reg in regs}
+    D = {
+        reg: {
+            'nclus': int(np.sum(acs1 == reg)),
+            'd_vars': [],
+            'd_eucs': [],
+            'd_xnobis': [],
+        }
+        for reg in regs
+    }
+    label_perms = [ys_true]
+
+    def _append_perm(m0, m1, v0, v1, ys):
+        for reg in regs:
+            dv, de, dxn = _region_perm_metrics(
+                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
+            D[reg]['d_vars'].append(dv)
+            D[reg]['d_eucs'].append(de)
+            D[reg]['d_xnobis'].append(dxn)
+
+    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
+
+    # Precompute stratified donor streams once per (insertion, split).
+    eid = str(eid)
+    donor_streams = []
+    for e, rec in (donor_bank or {}).items():
+        if e == eid:
+            continue
+        stream = _donor_choice_stream(rec, split)
+        if len(stream) >= ntr:
+            donor_streams.append(stream)
+    if not donor_streams:
+        print(f'session-shuffle [{split}]: 0 stratified donors with '
+              f'len≥{ntr}; will circular-shift')
+
+    for batch_start in range(0, nrand, null_batch_size):
+        batch_end = min(batch_start + null_batch_size, nrand)
+        for _ in range(batch_start, batch_end):
+            ys = _sample_session_shuffle_ys(
+                ntr, choices_true, donor_bank, eid, split=split,
+                donor_streams=donor_streams)
+            label_perms.append(ys)
+            _append_perm(
+                b[ys].mean(axis=0), b[~ys].mean(axis=0),
+                b[ys].var(axis=0), b[~ys].var(axis=0),
+                ys,
+            )
+
+    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
+    d_euc = (m0_true - m1_true) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': np.array([m0_true, m1_true])[:ntravis],
+        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
+        'D': D,
+        'null_scheme': 'session_shuffle_stratified',
+    }
+
+
+def _bin_spike_events(spikes, clusters, events, split):
+    '''Overlapping bins for one list of event times → (n_trials, n_clus, n_bins).'''
+    bis = []
+    st = int(T_BIN(split) // sts)
+    for ts in range(st):
+        bi, _ = bin_spikes2D(
+            spikes['times'],
+            clusters['cluster_id'][spikes['clusters']],
+            clusters['cluster_id'],
+            np.array(events) + ts * sts,
+            pre_post[split][0], pre_post[split][1],
+            T_BIN(split))
+        bis.append(bi)
+    ntr, nn, nbin = bi.shape
+    ar = np.zeros((ntr, nn, st * nbin))
+    for ts in range(st):
+        ar[:, :, ts::st] = bis[ts]
+    return ar
+
+
+def _get_d_vars_session_shuffle(
+        split, trials, spikes, clusters, mapping, control, nrand,
+        null_batch_size, donor_bank, eid):
+    '''
+    Choice L vs R under fixed stim (± block), with Harris session-permutation nulls.
+
+    Bins ALL eligible trials (stim±block, no choice filter), then splits by
+    this session's choices (true) or transplanted donor choices (null).
+
+    Null choice windows come from other eids' **same stim×block stream**
+    (stratum subsequence in time order), not the donor's full session.
+    '''
+    alignment = align[split]
+    # choice_stim_* / choice_duringstim_* route via substring stim_l / stim_r.
+    if 'stim_l' in split:
+        stim_nan_col = 'contrastRight'  # left stimulus present
+    elif 'stim_r' in split:
+        stim_nan_col = 'contrastLeft'
+    else:
+        print('what is the split?', split)
+        return None
+
+    if 'block_l' in split:
+        pleft = 0.8
+    elif 'block_r' in split:
+        pleft = 0.2
+    else:
+        pleft = None
+
+    elig = np.isnan(trials[stim_nan_col].to_numpy()
+                    if hasattr(trials[stim_nan_col], 'to_numpy')
+                    else trials[stim_nan_col])
+    if pleft is not None:
+        elig = np.asarray(elig) & (trials['probabilityLeft'].to_numpy() == pleft)
+    else:
+        elig = np.asarray(elig)
+
+    elig_idx = np.arange(len(trials))[elig]
+    if len(elig_idx) == 0:
+        raise InsufficientTrials('no eligible trials for session-shuffle split')
+
+    choices_true = trials['choice'].to_numpy()[elig_idx].astype(float)
+    events_all = trials[alignment].to_numpy()[elig_idx]
+    n_left = int(np.sum(choices_true == 1))
+    n_right = int(np.sum(choices_true == -1))
+    print('#trials per condition: ', n_left, n_right,
+          f'(eligible={len(elig_idx)}, session-shuffle null)')
+    if n_left < min_trials_per_side or n_right < min_trials_per_side:
+        raise InsufficientTrials(
+            f'need ≥{min_trials_per_side} trials/side, got {n_left}, {n_right}')
+
+    assert len(spikes['times']) == len(spikes['clusters']), 'spikes != clusters'
+
+    b = _bin_spike_events(spikes, clusters, events_all, split)
+    half1 = (np.arange(b.shape[0]) % 2 == 0)
+    half2 = ~half1
+    ntr, nclus, nbins = b.shape
+
+    acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
+    wsc = np.concatenate(b, axis=1)
+    goodcells_count = [
+        k for k in range(wsc.shape[0])
+        if (not np.isnan(wsc[k]).any() and wsc[k].any())
+    ]
+    acs1 = acs[goodcells_count]
+    goodcells = ~np.bitwise_or.reduce([acs == reg for reg in ['void', 'root']])
+    goodcells1 = ~np.bitwise_or.reduce([acs1 == reg for reg in ['void', 'root']])
+    acs = acs[goodcells]
+    acs1 = acs1[goodcells1]
+    b = b[:, goodcells, :]
+
+    if control:
+        if not donor_bank:
+            print('WARNING: empty donor_bank; session-shuffle falls back to '
+                  'circular shifts of own choices')
+        return _compute_control_D_session_shuffle(
+            b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
+            donor_bank=donor_bank or {}, eid=eid,
+            null_batch_size=null_batch_size,
+        )
+
+    print('all trials')
+    ys = choices_true == 1
+    bins = [b[ys], b[~ys]]
+    w0 = [bi.mean(axis=0) for bi in bins]
+    s0 = [bi.var(axis=0) for bi in bins]
+    ws = np.array(w0)
+    ss = np.array(s0)
+    d_var = (((ws[0] - ws[1]) / ((ss[0] + ss[1]) ** 0.5)) ** 2)
+    d_euc = (ws[0] - ws[1]) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': ws[:ntravis],
+        'null_scheme': 'session_shuffle',
     }
 
 
@@ -836,7 +1250,8 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
 
 def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                control=True, nrand=2000, bycontrast=False, cached=None,
-               null_batch_size=NULL_BATCH_SIZE):
+               null_batch_size=NULL_BATCH_SIZE, donor_bank=None,
+               session_shuffle_null=False):
 
     '''
     for a given session, probe, bin neural activity
@@ -845,6 +1260,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     ``cached``: optional per-insertion cache from build_insertion_cache. When
     provided, spikes/clusters/trials are reused (no per-split reload), which is
     the time-efficient path. When None, loads from ONE as before (identical result).
+
+    ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
+    use Harris session-permutation nulls from **stim×block–matched** donor streams
+    (requires ``donor_bank`` with choice/stim/pLeft). Default False → label shuffle.
     '''
     
     
@@ -897,6 +1316,12 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         # Bayes-optimal prior (stimulus-history inference); same 0.8/0.2 labels
         trials['true_priors'] = trials['probabilityLeft']
         trials['probabilityLeft'] = trials['_bayes_binary'].values
+
+    # Optional Harris session-permutation null for choice L–R contrasts.
+    if session_shuffle_null and is_choice_lr_split(split):
+        return _get_d_vars_session_shuffle(
+            split, trials, spikes, clusters, mapping, control, nrand,
+            null_batch_size, donor_bank, eid)
 
     # Contrast stratification from split name (..._0.125 / ..._c0.125) or legacy
     # bycontrast=True (same trailing-float convention).
@@ -1767,7 +2192,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              use_cache=True, save_cache=True,
                              stream_pool=False, save_per_insertion=None,
                              null_batch_size=NULL_BATCH_SIZE, nrand=nrand,
-                             shard_idx=None, n_shards=None, finalize=True):
+                             shard_idx=None, n_shards=None, finalize=True,
+                             session_shuffle_null=False):
     '''
     Time-efficient driver: iterate insertions in the OUTER loop, load each
     insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
@@ -1786,6 +2212,9 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
 
   ``save_per_insertion``: write manifold/{split}/{eid_probe}.npy (default False
     when stream_pool else True). ``restart``: skip (split, insertion) already done.
+
+    ``session_shuffle_null``: if True, choice_stim* / choice_duringstim* use Harris
+    session-permutation nulls (loads donor bank). Default False.
     '''
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
@@ -1806,7 +2235,16 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     time00 = time.perf_counter()
     print('splits', splits_list, 'control', control, 'use_cache', use_cache,
           'stream_pool', stream_pool, 'null_batch_size', null_batch_size,
-          'shard', shard_idx, '/', n_shards, 'finalize', finalize)
+          'shard', shard_idx, '/', n_shards, 'finalize', finalize,
+          'session_shuffle_null', session_shuffle_null)
+
+    donor_bank = None
+    if session_shuffle_null and any(is_choice_lr_split(sp) for sp in splits_list):
+        donor_bank = load_choice_donor_bank()
+        print(f'session-shuffle donor bank: {len(donor_bank)} eids')
+    elif session_shuffle_null:
+        print('WARNING: --session-shuffle-null set but no choice_stim*/'
+              'choice_duringstim* splits in list')
 
     if eids_plus is None:
         df = bwm_query(one)
@@ -1861,7 +2299,9 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
             try:
                 D_ = get_d_vars(split, pid, control=control, mapping=mapping,
                                 bycontrast=bycontrast, cached=cache,
-                                null_batch_size=null_batch_size, nrand=nrand)
+                                null_batch_size=null_batch_size, nrand=nrand,
+                                donor_bank=donor_bank,
+                                session_shuffle_null=session_shuffle_null)
                 if stream_pool:
                     accumulators[split].add(eid_probe, D_)
                     accumulators[split].save()

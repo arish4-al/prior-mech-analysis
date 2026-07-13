@@ -8,6 +8,7 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
   python scripts/run_goal2_splits.py --splits act_block_duringstim_l --shard-idx 0 --n-shards 4
   python scripts/run_goal2_splits.py --finalize-only --splits act_block_duringstim_l
   python scripts/run_goal2_splits.py --cache-only
+  python scripts/run_goal2_splits.py --build-choice-donors
 """
 from __future__ import annotations
 
@@ -49,6 +50,44 @@ RUN_ALIGN = {
         'block_stim_r_duringchoice_l_f2',
     ],
 }
+
+# Choice L vs R under fixed stim×block (Harris session-permutation null).
+CHOICE_DURINGCHOICE = [
+    'choice_stim_r_block_r',
+    'choice_stim_l_block_l',
+    'choice_stim_r_block_l',
+    'choice_stim_l_block_r',
+]
+CHOICE_DURINGCHOICE_ACT = [
+    'choice_stim_r_block_r_act',
+    'choice_stim_l_block_l_act',
+    'choice_stim_r_block_l_act',
+    'choice_stim_l_block_r_act',
+]
+CHOICE_DURINGSTIM = [
+    'choice_duringstim_r_block_r',
+    'choice_duringstim_l_block_l',
+    'choice_duringstim_r_block_l',
+    'choice_duringstim_l_block_r',
+]
+CHOICE_DURINGSTIM_ACT = [
+    'choice_duringstim_r_block_r_act',
+    'choice_duringstim_l_block_l_act',
+    'choice_duringstim_r_block_l_act',
+    'choice_duringstim_l_block_r_act',
+]
+CHOICE_DURINGCHOICE_BAYES = [
+    'choice_stim_r_block_r_bayes',
+    'choice_stim_l_block_l_bayes',
+    'choice_stim_r_block_l_bayes',
+    'choice_stim_l_block_r_bayes',
+]
+CHOICE_DURINGSTIM_BAYES = [
+    'choice_duringstim_r_block_r_bayes',
+    'choice_duringstim_l_block_l_bayes',
+    'choice_duringstim_r_block_l_bayes',
+    'choice_duringstim_l_block_r_bayes',
+]
 
 
 def _goal3_presets(contrasts=None):
@@ -103,6 +142,21 @@ PRESETS = {
         'stim_block_l_bayes',
         'stim_block_r_bayes',
     ],
+    # Choice L vs R (Harris session-permutation null)
+    'choice_duringchoice': CHOICE_DURINGCHOICE,
+    'choice_duringchoice_act': CHOICE_DURINGCHOICE_ACT,
+    'choice_duringstim': CHOICE_DURINGSTIM,
+    'choice_duringstim_act': CHOICE_DURINGSTIM_ACT,
+    # Default session-null preset: act only (8 splits)
+    'choice_lr_session_null_all': (
+        CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
+    ),
+    'choice_lr_session_null_true': (
+        CHOICE_DURINGCHOICE + CHOICE_DURINGSTIM
+    ),
+    'choice_lr_session_null_bayes': (
+        CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
+    ),
     **_goal3_presets(),
 }
 
@@ -149,6 +203,12 @@ def main():
                    default=os.environ.get('ONE_BASE_URL', 'https://alyx.internationalbrainlab.org'))
     p.add_argument('--cache-only', action='store_true',
                    help='Only build manifold/insertion_cache')
+    p.add_argument('--build-choice-donors', action='store_true',
+                   help='Rebuild manifold/choice_donors.npy from insertion_cache '
+                        '(choice + stim + pLeft for stratified Harris nulls)')
+    p.add_argument('--session-shuffle-null', action='store_true', default=False,
+                   help='Use stim×block–stratified session-permutation nulls '
+                        'for choice_stim*/choice_duringstim* (default: label shuffle)')
     p.add_argument('--shard-idx', type=int, default=None,
                    help='0-based shard index (with --n-shards)')
     p.add_argument('--n-shards', type=int, default=None,
@@ -182,6 +242,12 @@ def main():
     if args.contrasts is not None:
         ba.register_contrast_splits(contrasts=args.contrasts)
 
+    if args.build_choice_donors:
+        print('ONE cache:', ba.one.cache_dir)
+        bank = ba.build_choice_donor_bank(restart=False)
+        print(f'Done. {len(bank)} donor eids ->', ba._choice_donors_path())
+        return
+
     if args.cache_only:
         print('ONE cache:', ba.one.cache_dir)
         ba.cache_all_insertions(restart=args.restart)
@@ -212,7 +278,8 @@ def main():
     print('Splits:', splits)
     print('nrand:', args.nrand, 'restart:', args.restart,
           'stream_pool:', args.stream_pool, 'save_cache:', args.save_cache,
-          'shard:', args.shard_idx, '/', args.n_shards, 'finalize:', finalize)
+          'shard:', args.shard_idx, '/', args.n_shards, 'finalize:', finalize,
+          'session_shuffle_null:', args.session_shuffle_null)
 
     # bycontrast=False: contrast is read from the split name (..._0.125).
     ba.get_all_d_vars_allsplits(
@@ -228,6 +295,7 @@ def main():
         shard_idx=args.shard_idx,
         n_shards=args.n_shards,
         finalize=finalize,
+        session_shuffle_null=args.session_shuffle_null,
     )
     print('Done. Outputs under:', ba.pth_res)
     if finalize:

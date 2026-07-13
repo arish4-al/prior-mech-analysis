@@ -33,6 +33,7 @@ SHARD_IDX="${SHARD_IDX:?Set SHARD_IDX=0..N-1}"
 N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
+SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -40,13 +41,14 @@ cd "$REPO_DIR"
 
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
-echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
+echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
       --shard-idx "$SHARD_IDX" --n-shards "$N_SHARDS" --no-finalize)
 [[ "$RESTART" == "1" ]] && ARGS+=(--restart) || ARGS+=(--no-restart)
 ARGS+=(--stream-pool)
+[[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
 
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 echo "Shard done: $(date)"
