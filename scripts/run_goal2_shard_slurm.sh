@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=12G
+#SBATCH --mem=6G
 #SBATCH -p mit_normal
 #SBATCH --time=12:00:00
 #SBATCH --mail-user=arily
@@ -12,10 +12,10 @@
 
 # One insertion shard for one split (no finalize).
 # Peak RSS (stream_pool, nrand=2000): ~1.5–2.5 GB (journal 07-10b); stream_acc
-# grows with insertions in the shard. Default 12G is ~4–5× headroom.
-# Submitters may override: sbatch --mem=8G ... scripts/run_goal2_shard_slurm.sh
+# grows with insertions in the shard. Default 6G ≈ 2–4× headroom (was 12G).
+# Submitters override via --mem= (see submit_goal2_stimOn_act_sharded.sh).
 #
-#   SPLIT=act_block_stim_l SHARD_IDX=0 N_SHARDS=4 sbatch \
+#   SPLIT=act_block_duringstim_l SHARD_IDX=0 N_SHARDS=4 sbatch \
 #     --export=ALL,SPLIT,SHARD_IDX,N_SHARDS \
 #     --job-name=g2_stim_l_s0 scripts/run_goal2_shard_slurm.sh
 

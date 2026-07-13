@@ -79,6 +79,11 @@ nrand = 2000  # number of random trial splits for null_d
 min_reg = 20  # 100, minimum number of neurons in pooled region
 min_trials_per_side = 5  # skip insertion if either split side has fewer trials
 alpha = 0.2 # inverse of time constant for action kernel calculation
+# IBL Bayes-optimal prior (Findling et al. Nature 2025 SI §1.1.1)
+BAYES_TAU = 60.0       # truncated-exp block-length scale
+BAYES_GAMMA = 0.8      # P(stim matches biased-block side)
+BAYES_MIN_LEN = 20
+BAYES_MAX_LEN = 100
 
 
 class InsufficientTrials(ValueError):
@@ -144,8 +149,27 @@ align_old = {
          'act_block_stim_l_duringchoice_r_f2':'firstMovement_times',
          'act_block_stim_r_duringchoice_l_f2':'firstMovement_times',
          'act_block_only':'stimOn_times',
-         'act_block_stim_l':'stimOn_times',
-         'act_block_stim_r':'stimOn_times',
+         # Stim-side prior (no choice×feedback): post-stim window via 'durings' in name
+         'block_duringstim_l':'stimOn_times',
+         'block_duringstim_r':'stimOn_times',
+         'act_block_duringstim_l':'stimOn_times',
+         'act_block_duringstim_r':'stimOn_times',
+         # Bayes-optimal prior (stimulus-history inference); mirrors act_block_*
+         'bayes_block_stim_r_choice_r_f1':'stimOn_times',
+         'bayes_block_stim_l_choice_l_f1':'stimOn_times',
+         'bayes_block_stim_l_choice_r_f2':'stimOn_times',
+         'bayes_block_stim_r_choice_l_f2':'stimOn_times',
+         'bayes_block_duringstim_r_choice_r_f1':'stimOn_times',
+         'bayes_block_duringstim_l_choice_l_f1':'stimOn_times',
+         'bayes_block_duringstim_l_choice_r_f2':'stimOn_times',
+         'bayes_block_duringstim_r_choice_l_f2':'stimOn_times',
+         'bayes_block_stim_r_duringchoice_r_f1':'firstMovement_times',
+         'bayes_block_stim_l_duringchoice_l_f1':'firstMovement_times',
+         'bayes_block_stim_l_duringchoice_r_f2':'firstMovement_times',
+         'bayes_block_stim_r_duringchoice_l_f2':'firstMovement_times',
+         'bayes_block_only':'stimOn_times',
+         'bayes_block_duringstim_l':'stimOn_times',
+         'bayes_block_duringstim_r':'stimOn_times',
         }
 
 # align_act = {
@@ -237,6 +261,24 @@ GOAL3_DURINGCHOICE_BASES = [
 ]
 GOAL3_BASE_SPLITS = GOAL3_DURINGSTIM_BASES + GOAL3_DURINGCHOICE_BASES
 
+# Bayes-optimal prior variants (same windows as act_block_*); kept separate so
+# existing goal3_* presets (act vs true-block) are unchanged.
+GOAL3_BAYES_DURINGSTIM_BASES = [
+    'bayes_block_duringstim_r_choice_r_f1',
+    'bayes_block_duringstim_l_choice_l_f1',
+    'bayes_block_duringstim_l_choice_r_f2',
+    'bayes_block_duringstim_r_choice_l_f2',
+]
+GOAL3_BAYES_DURINGCHOICE_BASES = [
+    'bayes_block_stim_r_duringchoice_r_f1',
+    'bayes_block_stim_l_duringchoice_l_f1',
+    'bayes_block_stim_l_duringchoice_r_f2',
+    'bayes_block_stim_r_duringchoice_l_f2',
+]
+GOAL3_BAYES_BASE_SPLITS = (
+    GOAL3_BAYES_DURINGSTIM_BASES + GOAL3_BAYES_DURINGCHOICE_BASES
+)
+
 
 def contrast_from_split(split):
     '''
@@ -296,6 +338,9 @@ def register_contrast_splits(bases=None, contrasts=None):
 
 # Register Goal-3 contrast splits (duringstim + duringchoice, act + non-act).
 goal3_contrast_splits = register_contrast_splits()
+# Bayes-optimal prior contrast splits (same windows as act_block_* bases).
+goal3_bayes_contrast_splits = register_contrast_splits(
+    bases=GOAL3_BAYES_BASE_SPLITS)
 
 
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
@@ -440,6 +485,107 @@ def action_kernel_priors(alpha, actions):
     binary_priors = np.double(list(np.double(priors)>=0.5))
     binary_priors = binary_priors*0.6+0.2
     
+    return priors, binary_priors
+
+
+def bayesian_priors(
+        stim_is_left,
+        tau=BAYES_TAU,
+        gamma=BAYES_GAMMA,
+        min_len=BAYES_MIN_LEN,
+        max_len=BAYES_MAX_LEN):
+    '''
+    IBL Bayes-optimal prior from stimulus history (Findling et al. Nature 2025
+    SI §1.1.1 / behavior_models.OptimalBayesian).
+
+    Infers P(stim left on trial t | sides on trials 1..t-1) under the task
+    generative model: truncated-exponential block lengths, biased blocks at
+    gamma, and uncued switches. Mirrors ``action_kernel_priors`` return
+    convention: continuous P(left) plus binarized 0.8 / 0.2 labels.
+
+    Parameters
+    ----------
+    stim_is_left : array-like of bool
+        True if the stimulus appeared on the left on that trial (contrastLeft
+        finite). Length T.
+    tau, gamma, min_len, max_len : float / int
+        Generative-model hyperparameters (IBL defaults).
+
+    Returns
+    -------
+    priors : ndarray, shape (T,)
+        Continuous P(left) before each trial.
+    binary_priors : ndarray, shape (T,)
+        0.8 if priors >= 0.5 else 0.2 (same encoding as action kernel).
+    '''
+    stim_is_left = np.asarray(stim_is_left, dtype=bool)
+    T = len(stim_is_left)
+    if T == 0:
+        return np.array([]), np.array([])
+
+    # Hazard H(n) for current block length n in {1..max_len}.
+    ns = np.arange(1, max_len + 1)
+    h = np.exp(-ns / float(tau))
+    h[(ns < min_len) | (ns > max_len)] = 0.0
+    H = np.zeros(max_len)
+    for i in range(max_len):
+        denom = h[i:].sum()
+        H[i] = (h[i] / denom) if denom > 0 else 0.0
+
+    # State: length index 0..max_len-1 (= length 1..max_len), block b in {-1,0,1}.
+    b_vals = np.array([-1, 0, 1], dtype=int)
+    n_b = 3
+    # p(stim left | b)
+    p_left_given_b = np.array([gamma, 0.5, 1.0 - gamma], dtype=float)
+
+    # g[l, bi] = p(length, block, s_1:(t-1)); h_post after observing s_t.
+    g = np.zeros((max_len, n_b), dtype=float)
+    g[0, 1] = 1.0  # length=1, unbiased block
+
+    priors = np.empty(T, dtype=float)
+    for t in range(T):
+        if t >= 1:
+            g_new = np.zeros_like(g)
+            for lp in range(max_len):
+                Hp = H[lp]
+                for bip, bp in enumerate(b_vals):
+                    mass = g[lp, bip]
+                    if mass == 0.0:
+                        continue
+                    # Switch: length → 1
+                    if Hp > 0.0:
+                        if bp == 0:
+                            for bi_new, b_new in enumerate(b_vals):
+                                if b_new != 0:
+                                    g_new[0, bi_new] += mass * Hp * 0.5
+                        else:
+                            b_new = -bp
+                            bi_new = int(b_new + 1)  # -1→0, 1→2
+                            g_new[0, bi_new] += mass * Hp
+                    # Continue: length → length+1
+                    if Hp < 1.0 and lp + 1 < max_len:
+                        g_new[lp + 1, bip] += mass * (1.0 - Hp)
+            g = g_new
+
+        z = g.sum()
+        if z <= 0:
+            priors[t] = 0.5
+        else:
+            p_b = g.sum(axis=0) / z
+            priors[t] = float(np.dot(p_b, p_left_given_b))
+
+        # Incorporate observation s_t for next trial's g.
+        p_obs = np.where(stim_is_left[t], p_left_given_b, 1.0 - p_left_given_b)
+        g = g * p_obs[np.newaxis, :]
+        z = g.sum()
+        if z > 0:
+            g /= z
+        else:
+            g[:] = 0.0
+            g[0, 1] = 1.0
+
+    binary_priors = (np.asarray(priors, dtype=float) >= 0.5).astype(float)
+    binary_priors = binary_priors * 0.6 + 0.2
     return priors, binary_priors
 
 
@@ -627,6 +773,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
         # remove certain trials
         trials = trials[mask]
+    # Bayes-optimal prior needs the full stimulus history (incl. 0.5 blocks).
+    # Compute before dropping unbiased trials; labels are applied after.
+    if 'bayes' in split:
+        stim_is_left = ~np.isnan(trials['contrastLeft'].astype(float).values)
+        bayes_cont, bayes_bin = bayesian_priors(stim_is_left)
+        trials = trials.copy()
+        trials['bayes_priors'] = bayes_cont
+        trials['_bayes_binary'] = bayes_bin
+
     if 'block' in split:
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
     # rs_range = [0.08, 2]  # discard [long/short] reaction time trials
@@ -641,6 +796,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         trials['true_priors'] = trials['probabilityLeft']
         actions = list(trials['choice'])
         trials['act_priors'], trials['probabilityLeft'] = action_kernel_priors(alpha, actions)
+    elif 'bayes' in split:
+        # Bayes-optimal prior (stimulus-history inference); same 0.8/0.2 labels
+        trials['true_priors'] = trials['probabilityLeft']
+        trials['probabilityLeft'] = trials['_bayes_binary'].values
 
     # Contrast stratification from split name (..._0.125 / ..._c0.125) or legacy
     # bycontrast=True (same trailing-float convention).
@@ -668,8 +827,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         return trials_df[~np.isnan(trials_df[col])]
 
     if 'stim_l' in split:
-        if split in ('act_block_stim_l', 'block_stim_l'):
-            # L vs R block trajectories within left-stimulus trials (no choice filter).
+        if split in ('act_block_duringstim_l', 'block_duringstim_l',
+                     'bayes_block_duringstim_l'):
+            # L vs R prior within left-stimulus trials (no choice filter);
+            # post-stim window [0, 0.15] via 'durings' in name.
             trials = _filter_stim_side(trials, 'Left')
             for pleft in [0.8, 0.2]:
                 events.append(trials[align[split]][trials['probabilityLeft'] == pleft])
@@ -696,8 +857,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             return
         
     elif 'stim_r' in split:
-        if split in ('act_block_stim_r', 'block_stim_r'):
-            # L vs R block trajectories within right-stimulus trials (no choice filter).
+        if split in ('act_block_duringstim_r', 'block_duringstim_r',
+                     'bayes_block_duringstim_r'):
+            # L vs R prior within right-stimulus trials (no choice filter);
+            # post-stim window [0, 0.15] via 'durings' in name.
             trials = _filter_stim_side(trials, 'Right')
             for pleft in [0.8, 0.2]:
                 events.append(trials[align[split]][trials['probabilityLeft'] == pleft])

@@ -5,8 +5,8 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
   python scripts/run_goal2_splits.py --preset stimOn_times_act
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --list-splits
-  python scripts/run_goal2_splits.py --splits act_block_stim_l --shard-idx 0 --n-shards 4
-  python scripts/run_goal2_splits.py --finalize-only --splits act_block_stim_l
+  python scripts/run_goal2_splits.py --splits act_block_duringstim_l --shard-idx 0 --n-shards 4
+  python scripts/run_goal2_splits.py --finalize-only --splits act_block_duringstim_l
   python scripts/run_goal2_splits.py --cache-only
 """
 from __future__ import annotations
@@ -52,7 +52,7 @@ RUN_ALIGN = {
 
 
 def _goal3_presets(contrasts=None):
-    '''Contrast × duringstim/duringchoice bases (act and/or non-act).'''
+    '''Contrast × duringstim/duringchoice bases (act / true-block / bayes).'''
     act_stim = [s for s in ba.GOAL3_DURINGSTIM_BASES if s.startswith('act_')]
     block_stim = [s for s in ba.GOAL3_DURINGSTIM_BASES if not s.startswith('act_')]
     act_choice = [s for s in ba.GOAL3_DURINGCHOICE_BASES if s.startswith('act_')]
@@ -64,12 +64,26 @@ def _goal3_presets(contrasts=None):
         'goal3_duringstim_block': ba.expand_contrast_splits(block_stim, contrasts),
         'goal3_duringchoice_act': ba.expand_contrast_splits(act_choice, contrasts),
         'goal3_duringchoice_block': ba.expand_contrast_splits(block_choice, contrasts),
+        'goal3_duringstim_bayes': ba.expand_contrast_splits(
+            ba.GOAL3_BAYES_DURINGSTIM_BASES, contrasts),
+        'goal3_duringchoice_bayes': ba.expand_contrast_splits(
+            ba.GOAL3_BAYES_DURINGCHOICE_BASES, contrasts),
+        'goal3_bayes_all': ba.expand_contrast_splits(ba.GOAL3_BAYES_BASE_SPLITS, contrasts),
         'goal3_all': ba.expand_contrast_splits(ba.GOAL3_BASE_SPLITS, contrasts),
     }
 
 
 PRESETS = {
-    'stimOn_times_act': RUN_ALIGN['stimOn_times'] + ['act_block_stim_l', 'act_block_stim_r'],
+    'stimOn_times_act': RUN_ALIGN['stimOn_times'] + [
+        'act_block_duringstim_l', 'act_block_duringstim_r'],
+    'stimOn_times_bayes': [
+        'bayes_block_duringstim_r_choice_r_f1',
+        'bayes_block_duringstim_l_choice_l_f1',
+        'bayes_block_duringstim_l_choice_r_f2',
+        'bayes_block_duringstim_r_choice_l_f2',
+        'bayes_block_duringstim_l',
+        'bayes_block_duringstim_r',
+    ],
     **_goal3_presets(),
 }
 
