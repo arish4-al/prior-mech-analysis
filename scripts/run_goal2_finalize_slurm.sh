@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=16G
+#SBATCH --mem=10G
 #SBATCH -p mit_normal
 #SBATCH --time=2:00:00
 #SBATCH --mail-user=arily
@@ -11,10 +11,10 @@
 #SBATCH -o goal2_finalize_%x_%j.out
 
 # Merge stream_acc shards → manifold/res/{split}*.npy
-# Loads all shard checkpoints into memory; default 16G (was 32G). Override with
-#   sbatch --mem=12G ... if the split is contrast-sparse (Goal 3).
+# Loads all shard checkpoints into memory; default 10G (was 16G/32G).
+# Submitters override via --mem= (see submit_goal2_stimOn_act_sharded.sh).
 #
-#   SPLIT=act_block_stim_l sbatch --export=ALL,SPLIT --job-name=g2_fin_stim_l \
+#   SPLIT=act_block_duringstim_l sbatch --export=ALL,SPLIT --job-name=g2_fin_dstim_l \
 #     scripts/run_goal2_finalize_slurm.sh
 
 set -euo pipefail

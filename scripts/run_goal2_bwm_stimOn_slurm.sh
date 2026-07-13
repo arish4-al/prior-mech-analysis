@@ -11,8 +11,8 @@
 #SBATCH -o goal2_stimOn_act_%j.out
 
 # Goal 2 BWM run: run_align['stimOn_times'] action-kernel during-stim splits
-# plus new act_block_stim_l / act_block_stim_r (L vs R trajectories within
-# left- or right-stim trials, action-kernel prior).
+# plus act_block_duringstim_l / act_block_duringstim_r (L vs R prior within
+# left- or right-stim trials, no choice filter; post-stim [0, 0.15]).
 #
 # Pipeline: insertion cache (once per insertion) + stream_pool accumulators
 # → manifold/res/{split}.npy + {split}_regde.npy
@@ -22,7 +22,7 @@
 #
 # Overrides:
 #   PRESET=stimOn_times_act NRAND=2000 RESTART=1 sbatch scripts/run_goal2_bwm_stimOn_slurm.sh
-#   SPLITS="act_block_stim_l act_block_stim_r" sbatch ...   # explicit list instead of preset
+#   SPLITS="act_block_duringstim_l act_block_duringstim_r" sbatch ...
 
 set -euo pipefail
 
