@@ -482,7 +482,7 @@ BWM_DECORR_PANELS = [
     ("stim_duringstim1_act", r"$d^{stim,se'}$"),
 ]
 
-# Canonical analysis defaults (2026-06-19 retest; see research_journal_2026-06-18.md).
+# Canonical analysis defaults (2026-06-19 retest; see journals/research_journal_2026-06-18.md).
 CANONICAL_PRIOR_DISTANCE_ANALYSIS = {
     "s_window_s": S_DURINGSTIM_WINDOW_S,
     "im_window_s": IM_DURINGSTIM_WINDOW_S,

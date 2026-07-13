@@ -88,3 +88,20 @@ Any cached outputs under the old names are **invalid for during-stim claims** an
 | Concurrent (8×4 shards) | 384G | **192G** |
 
 Override if OOM: `MEM_SHARD=8G MEM_FIN=12G bash scripts/submit_goal2_stimOn_act_sharded.sh`.
+
+### 2026-07-12h — Bayes stim L–R splits in cached pipeline (not choicestim)
+
+Ported choicestim’s **stim L vs R** contrasts into `block_analysis_allsplits.py` with Bayes-optimal prior labels. Do **not** revive `choicestim_analysis.py` for new runs (legacy docstring only).
+
+| Timeframe | Splits | Window |
+|-----------|--------|--------|
+| `stim_duringstim_bayes` | `stim_choice_{r,l}_block_{r,l}_bayes` | `[0, 0.15]` — stim L/R, fixed choice + Bayes prior |
+| `stim_duringstim1_bayes` | `stim_block_{l,r}_bayes` | `[0, 0.08]` — stim L/R, fixed Bayes prior only |
+
+Parity with choicestim act: **no** true-block 0.5 drop before prior overwrite for these names.
+
+```bash
+python scripts/run_goal2_splits.py --preset stim_duringstim_bayes --list-splits
+python scripts/run_goal2_splits.py --preset stim_duringstim1_bayes
+python scripts/run_goal2_splits.py --preset stim_lr_bayes_all
+```

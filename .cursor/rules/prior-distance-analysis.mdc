@@ -32,3 +32,7 @@ If S is significant with large curve_mean, the analysis path is wrong (likely ze
 `--unsplit-prior` = no f1/f2 splits, but **still stim_l + stim_r** (see `UNSPLIT_PRIOR_SPLITS`). Do not use a single pool of all trials for S distance.
 
 `--unsplit-mode fully` = diagnostic only (L+R mixed); reproduces spurious S signal even under Phase 4b.
+
+## Research journals — develop only
+
+Journals live in **`journals/research_journal_*.md`**, **only on `develop`**. Never create/edit/commit journals on `main`. Work on `develop` for journaling; use `main` for runnable code/scripts only.

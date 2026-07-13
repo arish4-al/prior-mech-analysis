@@ -25,7 +25,7 @@ python simulate_recovery.py --phase4-no-prior-mod \
 
 **Expected (seed 123):** S curve_mean ≈ **0.012**, p_mean ≈ **0.78** (not significant). I/M also null.
 
-Source: [research_journal_2026-06-18.md](research_journal_2026-06-18.md) (2026-06-19b retest).
+Source: [research_journal_2026-06-18.md](journals/research_journal_2026-06-18.md) (2026-06-19b retest).
 
 ### Common pitfalls
 
@@ -38,4 +38,12 @@ Source: [research_journal_2026-06-18.md](research_journal_2026-06-18.md) (2026-0
 
 - **Code (source of truth):** `simulate_recovery.py` — module docstring, `CANONICAL_PRIOR_DISTANCE_ANALYSIS`, `build_population_b_for_split`
 - **Cursor rule:** `.cursor/rules/prior-distance-analysis.mdc` (auto-loaded for agents)
-- **Experiment history:** `research_journal_*.md` — dated results, not agent defaults
+- **Experiment history:** `journals/research_journal_*.md` — dated results, not agent defaults
+
+### Research journals (`journals/`) — develop only
+
+- All research journals live under **`journals/research_journal_YYYY-MM-DD.md`**.
+- Journals live **only on the `develop` branch**. Do **not** create, edit, or commit them on `main`.
+- When journaling: check out / work on `develop`; put new files in `journals/`.
+- `main` is for code/scripts needed to run analyses (e.g. ORCD); keep journals off it.
+- If asked to start a journal while on `main`, switch to `develop` first (or warn the user).
