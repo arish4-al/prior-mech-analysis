@@ -103,38 +103,6 @@ align_old = {
          'block_stim_l_choice_l_f1':'stimOn_times',
          'block_stim_l_choice_r_f2':'stimOn_times',
          'block_stim_r_choice_l_f2':'stimOn_times',
-         'durings_srcrbl_slclbl':'stimOn_times',
-         'durings_srcrbr_slclbr':'stimOn_times',
-         'durings_srcrbl_slclbr':'stimOn_times',
-         'durings_slclbl_srcrbr':'stimOn_times',
-         'durings_slcrbl_srclbl':'stimOn_times',
-         'durings_slcrbl_srclbr':'stimOn_times',
-         'durings_slcrbr_srclbl':'stimOn_times',
-         'durings_slcrbr_srclbr':'stimOn_times',
-         'duringc_srcrbl_slclbl':'firstMovement_times',
-         'duringc_srcrbr_slclbr':'firstMovement_times',
-         'duringc_srcrbl_slclbr':'firstMovement_times',
-         'duringc_slclbl_srcrbr':'firstMovement_times',
-         'duringc_slcrbl_srclbl':'firstMovement_times',
-         'duringc_slcrbl_srclbr':'firstMovement_times',
-         'duringc_slcrbr_srclbl':'firstMovement_times',
-         'duringc_slcrbr_srclbr':'firstMovement_times',
-        #  'srcrbl_slclbl':'stimOn_times',
-        #  'srcrbr_slclbr':'stimOn_times',
-        #  'srcrbl_slclbr':'stimOn_times',
-        #  'slclbl_srcrbr':'stimOn_times',
-        #  'slcrbl_srclbl':'stimOn_times',
-        #  'slcrbl_srclbr':'stimOn_times',
-        #  'slcrbr_srclbl':'stimOn_times',
-        #  'slcrbr_srclbr':'stimOn_times',
-        #  'act_srcrbl_slclbl':'stimOn_times',
-        #  'act_srcrbr_slclbr':'stimOn_times',
-        #  'act_srcrbl_slclbr':'stimOn_times',
-        #  'act_slclbl_srcrbr':'stimOn_times',
-        #  'act_slcrbl_srclbl':'stimOn_times',
-        #  'act_slcrbl_srclbr':'stimOn_times',
-        #  'act_slcrbr_srclbl':'stimOn_times',
-        #  'act_slcrbr_srclbr':'stimOn_times',
          'block_only':'stimOn_times',
          'act_block_stim_r_choice_r_f1':'stimOn_times',
          'act_block_stim_l_choice_l_f1':'stimOn_times',
@@ -171,6 +139,92 @@ align_old = {
          'bayes_block_duringstim_l':'stimOn_times',
          'bayes_block_duringstim_r':'stimOn_times',
         }
+
+# Choicestim family (stim L–R or choice L–R contrasts). Windows set below —
+# do not rely on align_old's default ITI [0.4, -0.1].
+CHOICESTIM_ALIGN = {
+    # bare (no block)
+    'stim_choice_r': 'stimOn_times',
+    'stim_choice_l': 'stimOn_times',
+    'stim_block_r': 'stimOn_times',
+    'stim_block_l': 'stimOn_times',
+    'choice_stim_l': 'firstMovement_times',
+    'choice_stim_r': 'firstMovement_times',
+    'stim_duringchoice_r': 'firstMovement_times',
+    'stim_duringchoice_l': 'firstMovement_times',
+    'choice_duringstim_r': 'stimOn_times',
+    'choice_duringstim_l': 'stimOn_times',
+    # stim_block ± act/bayes (short 80 ms)
+    'stim_block_l_act': 'stimOn_times',
+    'stim_block_r_act': 'stimOn_times',
+    'stim_block_l_bayes': 'stimOn_times',
+    'stim_block_r_bayes': 'stimOn_times',
+    # stim_choice × block ± act/bayes/short
+    'stim_choice_r_block_r': 'stimOn_times',
+    'stim_choice_r_block_l': 'stimOn_times',
+    'stim_choice_l_block_r': 'stimOn_times',
+    'stim_choice_l_block_l': 'stimOn_times',
+    'stim_choice_r_block_r_act': 'stimOn_times',
+    'stim_choice_r_block_l_act': 'stimOn_times',
+    'stim_choice_l_block_r_act': 'stimOn_times',
+    'stim_choice_l_block_l_act': 'stimOn_times',
+    'stim_choice_r_block_r_bayes': 'stimOn_times',
+    'stim_choice_r_block_l_bayes': 'stimOn_times',
+    'stim_choice_l_block_r_bayes': 'stimOn_times',
+    'stim_choice_l_block_l_bayes': 'stimOn_times',
+    'stim_choice_r_block_r_short': 'stimOn_times',
+    'stim_choice_r_block_l_short': 'stimOn_times',
+    'stim_choice_l_block_r_short': 'stimOn_times',
+    'stim_choice_l_block_l_short': 'stimOn_times',
+    'stim_choice_r_block_r_short_act': 'stimOn_times',
+    'stim_choice_r_block_l_short_act': 'stimOn_times',
+    'stim_choice_l_block_r_short_act': 'stimOn_times',
+    'stim_choice_l_block_l_short_act': 'stimOn_times',
+    'stim_choice_r_block_r_short_bayes': 'stimOn_times',
+    'stim_choice_r_block_l_short_bayes': 'stimOn_times',
+    'stim_choice_l_block_r_short_bayes': 'stimOn_times',
+    'stim_choice_l_block_l_short_bayes': 'stimOn_times',
+    # choice_stim × block ± act/bayes
+    'choice_stim_l_block_r': 'firstMovement_times',
+    'choice_stim_l_block_l': 'firstMovement_times',
+    'choice_stim_r_block_r': 'firstMovement_times',
+    'choice_stim_r_block_l': 'firstMovement_times',
+    'choice_stim_l_block_r_act': 'firstMovement_times',
+    'choice_stim_l_block_l_act': 'firstMovement_times',
+    'choice_stim_r_block_r_act': 'firstMovement_times',
+    'choice_stim_r_block_l_act': 'firstMovement_times',
+    'choice_stim_l_block_r_bayes': 'firstMovement_times',
+    'choice_stim_l_block_l_bayes': 'firstMovement_times',
+    'choice_stim_r_block_r_bayes': 'firstMovement_times',
+    'choice_stim_r_block_l_bayes': 'firstMovement_times',
+    # stim_duringchoice × block ± act/bayes
+    'stim_duringchoice_r_block_r': 'firstMovement_times',
+    'stim_duringchoice_r_block_l': 'firstMovement_times',
+    'stim_duringchoice_l_block_r': 'firstMovement_times',
+    'stim_duringchoice_l_block_l': 'firstMovement_times',
+    'stim_duringchoice_r_block_r_act': 'firstMovement_times',
+    'stim_duringchoice_r_block_l_act': 'firstMovement_times',
+    'stim_duringchoice_l_block_r_act': 'firstMovement_times',
+    'stim_duringchoice_l_block_l_act': 'firstMovement_times',
+    'stim_duringchoice_r_block_r_bayes': 'firstMovement_times',
+    'stim_duringchoice_r_block_l_bayes': 'firstMovement_times',
+    'stim_duringchoice_l_block_r_bayes': 'firstMovement_times',
+    'stim_duringchoice_l_block_l_bayes': 'firstMovement_times',
+    # choice_duringstim × block ± act/bayes
+    'choice_duringstim_r_block_r': 'stimOn_times',
+    'choice_duringstim_r_block_l': 'stimOn_times',
+    'choice_duringstim_l_block_r': 'stimOn_times',
+    'choice_duringstim_l_block_l': 'stimOn_times',
+    'choice_duringstim_r_block_r_act': 'stimOn_times',
+    'choice_duringstim_r_block_l_act': 'stimOn_times',
+    'choice_duringstim_l_block_r_act': 'stimOn_times',
+    'choice_duringstim_l_block_l_act': 'stimOn_times',
+    'choice_duringstim_r_block_r_bayes': 'stimOn_times',
+    'choice_duringstim_r_block_l_bayes': 'stimOn_times',
+    'choice_duringstim_l_block_r_bayes': 'stimOn_times',
+    'choice_duringstim_l_block_l_bayes': 'stimOn_times',
+}
+
 
 # align_act = {
 #          'act_block_stim_r_choice_r_f1':'stimOn_times',
@@ -232,6 +286,31 @@ for split in splits_new:
     else:
         align[split] = 'stimOn_times'
         pre_post[split] = [0.4,-0.1]
+
+# Choicestim family: register align + windows (override any align_old ITI default).
+# Rule matches choicestim_analysis: stim_block/short → 80 ms; else stimOn → 150 ms;
+# firstMovement → [-0.15, 0] (pre/post).
+SHORT_DURINGSTIM_WINDOW_S = 0.08
+
+
+def is_choicestim_split(split):
+    '''Stim/choice L–R contrasts from choicestim_analysis (not prior-distance).'''
+    return split.startswith((
+        'stim_choice', 'stim_block', 'choice_stim',
+        'stim_duringchoice', 'choice_duringstim',
+    ))
+
+
+for _s, _ev in CHOICESTIM_ALIGN.items():
+    align[_s] = _ev
+    if 'stim_block' in _s or 'short' in _s:
+        pre_post[_s] = [0, SHORT_DURINGSTIM_WINDOW_S]
+    elif _ev == 'stimOn_times':
+        pre_post[_s] = [0, 0.15]
+    elif _ev == 'firstMovement_times':
+        pre_post[_s] = [0.15, 0]
+    else:
+        raise ValueError(f'Unexpected choicestim align event for {_s}: {_ev}')
 
 # Goal-3 contrast conditioning. CONTRASTS are the IBL stimulus contrasts; 0.0 is
 # the fully prior-driven (0% contrast) stratum.
@@ -374,11 +453,24 @@ def _stream_acc_shard_paths(split):
     return paths
 
 
-def _null_labels(split, ntr, dx):
-    '''One boolean trial label vector for a null draw.'''
+def _null_labels(split, ntr, dx, choices=None):
+    '''One boolean trial label vector for a null draw.
+
+    ``choices``: choice (±1) in temporal trial order (same as sorted dx[:,1]).
+    Used for stim_block nulls (shuffle stim-side labels within choice class).
+    '''
     if 'block_only' in split:
         return generate_pseudo_blocks(ntr, first5050=0) == 0.8
-    tr_c = dx[np.argsort(dx[:, 1])][:, 0]
+    order = np.argsort(dx[:, 1])
+    tr_c = dx[order][:, 0]
+    if 'stim_block' in split and choices is not None:
+        # Port of choicestim_analysis: shuffle stim sides within choice classes.
+        tr_c2 = np.array(tr_c, copy=True)
+        y_ = np.asarray(choices)
+        for cc in [y_ == 1, y_ != 1]:
+            r = tr_c[cc]
+            tr_c2[cc] = np.array(random.sample(list(r), len(r)))
+        return tr_c2 == 1
     tr_c2 = np.array(random.sample(list(tr_c), len(tr_c)))
     return tr_c2 == 1
 
@@ -409,7 +501,7 @@ def _region_perm_metrics(m0, m1, v0, v1, b, half1, half2, ys, reg_mask):
 
 
 def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
-                       null_batch_size=NULL_BATCH_SIZE):
+                       null_batch_size=NULL_BATCH_SIZE, choices=None):
     '''
     Batched null loop: one full-tensor mean/var per null, then regional metrics.
     Matches original loop order (perm outer, region inner) without materialising
@@ -448,7 +540,7 @@ def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
     for batch_start in range(0, nrand, null_batch_size):
         batch_end = min(batch_start + null_batch_size, nrand)
         for _ in range(batch_start, batch_end):
-            ys = _null_labels(split, ntr, dx)
+            ys = _null_labels(split, ntr, dx, choices=choices)
             label_perms.append(ys)
             _append_perm(
                 b[ys].mean(axis=0), b[~ys].mean(axis=0),
@@ -652,9 +744,12 @@ def generate_pseudo_blocks(
 
 def saturation_for_split(split):
     '''Saturation-interval key used to load/mask trials for a split's alignment.'''
-    if 'duringstim' in split:
+    # Match choicestim_analysis: stim_choice / stim_block use stim sat;
+    # choice_stim / duringchoice use move sat.
+    if ('duringstim' in split or 'stim_choice' in split
+            or 'stim_block' in split):
         return 'saturation_stim_plus04'
-    if 'duringchoice' in split:
+    if 'duringchoice' in split or 'choice_stim' in split:
         return 'saturation_move_minus02'
     if 'fback' in split:
         return 'saturation_feedback_plus04'
@@ -782,7 +877,9 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         trials['bayes_priors'] = bayes_cont
         trials['_bayes_binary'] = bayes_bin
 
-    if 'block' in split:
+    # Drop true 0.5 only for prior-distance *block_* splits. Choicestim family
+    # keeps 0.5 trials (priors overwritten later for act/bayes).
+    if 'block' in split and not is_choicestim_split(split):
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
     # rs_range = [0.08, 2]  # discard [long/short] reaction time trials
     # stim_diff = trials['firstMovement_times'] - trials['stimOn_times']
@@ -826,7 +923,105 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             return trials_df[np.isclose(trials_df[col].astype(float), contrast)]
         return trials_df[~np.isnan(trials_df[col])]
 
-    if 'stim_l' in split:
+    # Choicestim family (stim L–R or choice L–R). Port of choicestim_analysis
+    # get_d_vars substring dispatch — must run before prior-distance stim_l/stim_r.
+    if is_choicestim_split(split):
+        alignment = align[split]
+        if 'stim_block' in split:
+            # Fixed prior; stim L vs R; no choice filter (80 ms via pre_post).
+            if 'block_l' in split:
+                pleft = 0.8
+            elif 'block_r' in split:
+                pleft = 0.2
+            else:
+                print('what is the split?', split)
+                return
+            for side in ['Right', 'Left']:
+                sel = np.bitwise_and.reduce([
+                    trials['probabilityLeft'] == pleft,
+                    np.isnan(trials[f'contrast{side}']),
+                ])
+                events.append(trials[alignment][sel])
+                trn.append(np.arange(len(trials['choice']))[sel])
+        elif 'stim_l' in split:
+            # Fixed stim Left; choice L vs R (± fixed prior).
+            # Matches choice_stim_l*, choice_duringstim_l* (substring stim_l).
+            if 'block_l' in split:
+                pleft = 0.8
+            elif 'block_r' in split:
+                pleft = 0.2
+            else:
+                pleft = None
+            for choice in [1, -1]:
+                conds = [
+                    trials['choice'] == choice,
+                    np.isnan(trials['contrastRight']),
+                ]
+                if pleft is not None:
+                    conds.insert(0, trials['probabilityLeft'] == pleft)
+                sel = np.bitwise_and.reduce(conds)
+                events.append(trials[alignment][sel])
+                trn.append(np.arange(len(trials['choice']))[sel])
+        elif 'stim_r' in split:
+            # Fixed stim Right; choice L vs R (± fixed prior).
+            if 'block_l' in split:
+                pleft = 0.8
+            elif 'block_r' in split:
+                pleft = 0.2
+            else:
+                pleft = None
+            for choice in [1, -1]:
+                conds = [
+                    trials['choice'] == choice,
+                    np.isnan(trials['contrastLeft']),
+                ]
+                if pleft is not None:
+                    conds.insert(0, trials['probabilityLeft'] == pleft)
+                sel = np.bitwise_and.reduce(conds)
+                events.append(trials[alignment][sel])
+                trn.append(np.arange(len(trials['choice']))[sel])
+        elif 'choice_l' in split:
+            # Fixed choice Left; stim L vs R (± fixed prior).
+            # Matches stim_choice_l*, stim_duringchoice_l*.
+            if 'block_l' in split:
+                pleft = 0.8
+            elif 'block_r' in split:
+                pleft = 0.2
+            else:
+                pleft = None
+            for side in ['Right', 'Left']:
+                conds = [
+                    np.isnan(trials[f'contrast{side}']),
+                    trials['choice'] == 1,
+                ]
+                if pleft is not None:
+                    conds.insert(0, trials['probabilityLeft'] == pleft)
+                sel = np.bitwise_and.reduce(conds)
+                events.append(trials[alignment][sel])
+                trn.append(np.arange(len(trials['choice']))[sel])
+        elif 'choice_r' in split:
+            # Fixed choice Right; stim L vs R (± fixed prior).
+            if 'block_l' in split:
+                pleft = 0.8
+            elif 'block_r' in split:
+                pleft = 0.2
+            else:
+                pleft = None
+            for side in ['Right', 'Left']:
+                conds = [
+                    np.isnan(trials[f'contrast{side}']),
+                    trials['choice'] == -1,
+                ]
+                if pleft is not None:
+                    conds.insert(0, trials['probabilityLeft'] == pleft)
+                sel = np.bitwise_and.reduce(conds)
+                events.append(trials[alignment][sel])
+                trn.append(np.arange(len(trials['choice']))[sel])
+        else:
+            print('what is the split?', split)
+            return
+
+    elif 'stim_l' in split:
         if split in ('act_block_duringstim_l', 'block_duringstim_l',
                      'bayes_block_duringstim_l'):
             # L vs R prior within left-stimulus trials (no choice filter);
@@ -885,109 +1080,109 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             print('what is the split?', split)
             return
    
-    elif 'srcrbl_slclbl' in split:
-        trials = trials[trials['probabilityLeft'] == 0.8]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    # elif 'srcrbl_slclbl' in split:
+    #     trials = trials[trials['probabilityLeft'] == 0.8]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
         
-    elif 'srcrbr_slclbr' in split:
-        trials = trials[trials['probabilityLeft'] == 0.2]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    # elif 'srcrbr_slclbr' in split:
+    #     trials = trials[trials['probabilityLeft'] == 0.2]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
         
-    elif 'srcrbl_slclbr' in split:
-        #trials = trials[~rm_trials]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.8, 
-                      trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.8, 
-                   trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.2, 
-                      trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.2, 
-                   trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    # elif 'srcrbl_slclbr' in split:
+    #     #trials = trials[~rm_trials]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.8, 
+    #                   trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.8, 
+    #                trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.2, 
+    #                   trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.2, 
+    #                trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
         
-    elif 'slclbl_srcrbr' in split:
-        #trials = trials[~rm_trials]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.8, 
-                      trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.8, 
-                   trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.2, 
-                      trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.2, 
-                   trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    # elif 'slclbl_srcrbr' in split:
+    #     #trials = trials[~rm_trials]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.8, 
+    #                   trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.8, 
+    #                trials['choice'] == 1,np.isnan(trials['contrastRight'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.2, 
+    #                   trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.2, 
+    #                trials['choice'] == -1,np.isnan(trials['contrastLeft'])])])
         
-    elif 'slcrbl_srclbl' in split:
-        trials = trials[trials['probabilityLeft'] == 0.8]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    # elif 'slcrbl_srclbl' in split:
+    #     trials = trials[trials['probabilityLeft'] == 0.8]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
         
-    elif 'slcrbr_srclbr' in split:
-        trials = trials[trials['probabilityLeft'] == 0.2]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                        trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    # elif 'slcrbr_srclbr' in split:
+    #     trials = trials[trials['probabilityLeft'] == 0.2]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                     trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
         
-    elif 'slcrbr_srclbl' in split:
-        #trials = trials[~rm_trials]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.2, 
-                      trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.2, 
-                   trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.8, 
-                      trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.8, 
-                   trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    # elif 'slcrbr_srclbl' in split:
+    #     #trials = trials[~rm_trials]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.2, 
+    #                   trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.2, 
+    #                trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.8, 
+    #                   trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.8, 
+    #                trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
         
-    elif 'slcrbl_srclbr' in split:
-        #trials = trials[~rm_trials]
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.8, 
-                      trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.8, 
-                   trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
-        events.append(trials[align[split]][np.bitwise_and.reduce([
-                      trials['probabilityLeft'] == 0.2, 
-                      trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
-        trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
-                   trials['probabilityLeft'] == 0.2, 
-                   trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    # elif 'slcrbl_srclbr' in split:
+    #     #trials = trials[~rm_trials]
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.8, 
+    #                   trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.8, 
+    #                trials['choice'] == -1,np.isnan(trials['contrastRight'])])])
+    #     events.append(trials[align[split]][np.bitwise_and.reduce([
+    #                   trials['probabilityLeft'] == 0.2, 
+    #                   trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
+    #     trn.append(np.arange(len(trials['choice']))[np.bitwise_and.reduce([
+    #                trials['probabilityLeft'] == 0.2, 
+    #                trials['choice'] == 1,np.isnan(trials['contrastLeft'])])])
     
     elif 'block_only' in split:
         # Optional contrast stratification via trailing _{c} / _c{c} on the name.
@@ -1084,9 +1279,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     bins = bins2
 
     if control:
+        # Temporal-order choices for stim_block within-choice null shuffle.
+        order = np.argsort(dx[:, 1])
+        choices_ord = trials['choice'].to_numpy()[dx[order, 1].astype(int)]
         return _compute_control_D(
             b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
             null_batch_size=null_batch_size,
+            choices=choices_ord if 'stim_block' in split else None,
         )
 
     # average trials per condition (no null)

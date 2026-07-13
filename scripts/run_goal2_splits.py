@@ -84,6 +84,25 @@ PRESETS = {
         'bayes_block_duringstim_l',
         'bayes_block_duringstim_r',
     ],
+    # Stim L vs R under Bayes prior (from choicestim; cached pipeline)
+    'stim_duringstim_bayes': [
+        'stim_choice_r_block_r_bayes',
+        'stim_choice_l_block_l_bayes',
+        'stim_choice_r_block_l_bayes',
+        'stim_choice_l_block_r_bayes',
+    ],
+    'stim_duringstim1_bayes': [
+        'stim_block_l_bayes',
+        'stim_block_r_bayes',
+    ],
+    'stim_lr_bayes_all': [
+        'stim_choice_r_block_r_bayes',
+        'stim_choice_l_block_l_bayes',
+        'stim_choice_r_block_l_bayes',
+        'stim_choice_l_block_r_bayes',
+        'stim_block_l_bayes',
+        'stim_block_r_bayes',
+    ],
     **_goal3_presets(),
 }
 
