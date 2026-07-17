@@ -368,6 +368,17 @@ GOAL3_BAYES_BASE_SPLITS = (
     GOAL3_BAYES_DURINGSTIM_BASES + GOAL3_BAYES_DURINGCHOICE_BASES
 )
 
+# Revised Goal 3 (2026-07-17): at 0% contrast, nominal stimulus side and
+# correct/incorrect feedback subdivisions are not conditioning variables. Compare
+# true block L vs R separately within each fixed choice side.
+GOAL3_C0_CHOICE_BASES = [
+    'block_duringstim_choice_l',
+    'block_duringstim_choice_r',
+]
+GOAL3_C0_CHOICE_SPLITS = [
+    f'{base}_0.0' for base in GOAL3_C0_CHOICE_BASES
+]
+
 
 def contrast_from_split(split):
     '''
@@ -405,6 +416,23 @@ def _register_split_window(split, align_event, window):
     pre_post[split] = list(window)
 
 
+def is_goal3_c0_choice_split(split):
+    '''True-block L-vs-R split at 0% contrast within one fixed choice side.'''
+    return split in GOAL3_C0_CHOICE_SPLITS
+
+
+def goal3_c0_choice_mask(trials, split):
+    '''Eligible trials for revised Goal 3, without stim-side/feedback filtering.'''
+    if not is_goal3_c0_choice_split(split):
+        raise ValueError(f'Not a revised Goal-3 split: {split}')
+    choice = 1 if '_choice_l_' in split else -1
+    zero_contrast = np.bitwise_or(
+        np.isclose(trials['contrastLeft'].astype(float), 0.0),
+        np.isclose(trials['contrastRight'].astype(float), 0.0),
+    )
+    return zero_contrast & (trials['choice'] == choice)
+
+
 def register_contrast_splits(bases=None, contrasts=None):
     '''
     Register align/pre_post for contrast-conditioned during-trial splits,
@@ -430,6 +458,10 @@ goal3_contrast_splits = register_contrast_splits()
 # Bayes-optimal prior contrast splits (same windows as act_block_* bases).
 goal3_bayes_contrast_splits = register_contrast_splits(
     bases=GOAL3_BAYES_BASE_SPLITS)
+# Revised Goal-3 splits have no old base split to copy because their names
+# intentionally omit stimulus side and f1/f2.
+for _split in GOAL3_C0_CHOICE_SPLITS:
+    _register_split_window(_split, 'stimOn_times', [0, 0.15])
 
 
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
@@ -1446,6 +1478,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             print('what is the split?', split)
             return
 
+    elif is_goal3_c0_choice_split(split):
+        # Revised Goal 3: block L vs R at 0% contrast, within a fixed choice.
+        # Include both nominal stimulus sides and both feedback outcomes.
+        trials = trials[goal3_c0_choice_mask(trials, split)]
+        for pleft in [0.8, 0.2]:
+            sel = trials['probabilityLeft'] == pleft
+            events.append(trials[align[split]][sel])
+            trn.append(np.arange(len(trials['choice']))[sel])
+
     elif 'stim_l' in split:
         if split in ('act_block_duringstim_l', 'block_duringstim_l',
                      'bayes_block_duringstim_l'):
@@ -1949,6 +1990,27 @@ def _accumulate_from_D(D_, regdv0, regde0, acs, acs1, ws, uperms, key):
         regde0.setdefault(reg, []).append(np.array(D_['D'][reg]['d_eucs']) * scale)
 
 
+def _euc_curve_summary(curves, split):
+    '''Summary statistics for one true curve followed by its null curves.'''
+    curves = np.asarray(curves)
+    amps = np.ptp(curves, axis=1)
+    d_euc = curves[0] - np.mean(curves[1:], axis=0)
+    d_euc = d_euc - np.min(d_euc)
+    amp_euc = float(np.max(d_euc))
+    loc = np.where(d_euc > 0.7 * amp_euc)[0]
+    lat_euc = (
+        float(np.linspace(
+            -pre_post[split][0], pre_post[split][1], len(d_euc))[loc[0]])
+        if len(loc) else np.nan
+    )
+    return {
+        'p_euc': float(np.mean(amps >= amps[0])),
+        'd_euc': d_euc,
+        'amp_euc': amp_euc,
+        'lat_euc': lat_euc,
+    }
+
+
 def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg,
                          save=True):
     if not acs:
@@ -1964,27 +2026,38 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
 
     r = {}
     for reg in regs:
-        res = {}
+        res = _euc_curve_summary(regde[reg], split)
         dat = ws_cat[:, acs_cat == reg, :]
         res['nclus'] = regs[reg]
         res['ws'] = dat[:2]
-        ampse = [np.max(x) - np.min(x) for x in regde[reg]]
-        res['p_euc'] = np.mean(np.array(ampse) >= ampse[0])
-        d_euc = regde[reg][0] - np.mean(regde[reg][1:], axis=0)
-        res['d_euc'] = d_euc - min(d_euc)
-        res['amp_euc'] = max(res['d_euc'])
-        loc = np.where(res['d_euc'] > 0.7 * (np.max(res['d_euc'])))[0]
-        if len(loc):
-            res['lat_euc'] = np.linspace(
-                -pre_post[split][0], pre_post[split][1], len(res['d_euc']))[loc[0]]
-        else:
-            res['lat_euc'] = np.nan
-        res['nclus'] = regs[reg]
         r[reg] = res
+
+    # Pool raw squared distances over every valid neuron before normalization.
+    # This is a literal all-region population result, not an average of regional
+    # RMS curves. It also includes regions below the per-region min_reg cutoff.
+    all_nclus = len(acs1_cat)
+    all_regde = None
+    all_result = {}
+    if all_nclus and regde0:
+        all_raw = np.nansum(
+            [np.nansum(arrays, axis=0) for arrays in regde0.values()],
+            axis=0,
+        )
+        all_regde = np.sqrt(all_raw / all_nclus)
+        all_result = _euc_curve_summary(all_regde, split)
+        all_result['nclus'] = all_nclus
+        all_result['n_regions'] = len(regde0)
 
     if save:
         np.save(Path(pth_res, f'{split}.npy'), r, allow_pickle=True)
         np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
+        np.save(Path(pth_res, f'{split}_all.npy'), all_result, allow_pickle=True)
+        if all_regde is not None:
+            np.save(
+                Path(pth_res, f'{split}_all_regde.npy'),
+                all_regde,
+                allow_pickle=True,
+            )
     return r, regde
 
 

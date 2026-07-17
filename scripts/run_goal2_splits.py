@@ -3,6 +3,7 @@
 Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split list.
 
   python scripts/run_goal2_splits.py --preset stimOn_times_act
+  python scripts/run_goal2_splits.py --preset goal3_c0_choice
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --list-splits
   python scripts/run_goal2_splits.py --splits act_block_duringstim_l --shard-idx 0 --n-shards 4
@@ -157,6 +158,8 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    # Revised Goal 3: true block L vs R at 0% contrast, separately by choice.
+    'goal3_c0_choice': ba.GOAL3_C0_CHOICE_SPLITS,
     **_goal3_presets(),
 }
 
@@ -221,6 +224,13 @@ def main():
                    help='Print resolved split names (one per line) and exit')
     args = p.parse_args()
 
+    if (
+        args.preset == 'goal3_c0_choice'
+        and args.contrasts is not None
+        and args.contrasts != [0.0]
+    ):
+        p.error('goal3_c0_choice is fixed at 0% contrast; omit --contrasts')
+
     presets = dict(PRESETS)
     if args.contrasts is not None:
         presets.update(_goal3_presets(args.contrasts))
@@ -262,7 +272,10 @@ def main():
         print('Finalize splits:', splits)
         for sp in splits:
             ba.finalize_stream_shards(sp)
-            for name in (f'{sp}.npy', f'{sp}_regde.npy'):
+            for name in (
+                f'{sp}.npy', f'{sp}_regde.npy',
+                f'{sp}_all.npy', f'{sp}_all_regde.npy',
+            ):
                 fp = ba.pth_res / name
                 tag = 'OK' if fp.exists() else 'MISSING'
                 size = f'{fp.stat().st_size/1e6:.1f} MB' if fp.exists() else ''
@@ -300,7 +313,10 @@ def main():
     print('Done. Outputs under:', ba.pth_res)
     if finalize:
         for sp in splits:
-            for name in (f'{sp}.npy', f'{sp}_regde.npy'):
+            for name in (
+                f'{sp}.npy', f'{sp}_regde.npy',
+                f'{sp}_all.npy', f'{sp}_all_regde.npy',
+            ):
                 fp = ba.pth_res / name
                 if fp.exists():
                     print(f'  OK {fp} ({fp.stat().st_size/1e6:.1f} MB)')
