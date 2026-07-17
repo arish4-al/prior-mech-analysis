@@ -85,6 +85,23 @@ Names: `'{base}_{contrast}'` (e.g. `act_block_duringstim_l_choice_l_f1_0.125`).
 Contrast is parsed from the split name on the Goal-2 cached pipeline — no
 `bycontrast` flag needed. See 07-12.
 
+### Updated Goal 3 — Prior modulation at 0% contrast (added 07-17)
+
+Focus the real-data prior-modulation analysis on **0% contrast only**. At zero
+contrast, remove the old same-stim-side restriction: stimulus side is not a
+meaningful conditioning variable and unnecessarily fragments the trials. For each
+choice side separately, compare block L versus block R using all 0%-contrast trials
+with that choice:
+
+- choice L: block L versus block R
+- choice R: block L versus block R
+
+Thus the new analysis conditions only on a common **choice side**; it does not
+retain the old stim-side or f1/f2 subdivisions. Report results both **per individual
+region** and **aggregated across all regions**. The earlier per-contrast,
+stim-side-conditioned implementation and results below are retained as experiment
+history, but they do not answer this updated Goal 3.
+
 ### Goal 4 — Presence sweep on S prior-mod params (fitted I/M, stim-side unsplit)
 
 **Question:** With **canonical fitted I/M prior modulation** left on (as in absence/E2), at what `(g_s, d_s)` does **direct P→S coupling** produce a detectable S prior signature under the **stim-side unsplit** pipeline — and specifically when do both **p_mean** (avg) and **p_gain** cross α=0.01?
@@ -565,9 +582,11 @@ bash scripts/submit_goal2_stimOn_act_sharded.sh
 2. ~~nrand=2000 parity + timing~~ DONE (07-10).
 3. ~~End-to-end original vs new pipeline comparison (alyx)~~ DONE (07-10b).
 4. ~~Insertion sharding + atomic stream_acc~~ DONE (07-12b).
-5. Goal 3: contrast-conditioned **during-trial** prior mod on cached + **sharded** pipeline (see 07-12).
-6. Optional: CRF slope test (`get_crf_slope`) after contrast splits land.
-7. Optional: finish ORCD `stimOn_times_act` BWM with sharded submit (or unsharded restart where checkpoints are valid).
+5. ~~Old Goal 3: contrast-conditioned **during-trial** prior mod on cached + **sharded** pipeline~~ DONE (07-12 + 07-14 tables; retained as diagnostic).
+6. Updated Goal 3: 0%-contrast block L/R within each choice side, without stim-side
+   or f1/f2 conditioning; report per-region and all-region aggregate results.
+7. Optional: CRF slope test (`get_crf_slope`) after contrast splits land.
+8. Optional: finish ORCD `stimOn_times_act` BWM with sharded submit (or unsharded restart where checkpoints are valid).
 
 ### 2026-07-12 — Goal 3 corrected: during-trial contrast splits (not ITI block_only)
 
@@ -641,3 +660,169 @@ Goal 3 contrast + `min_trials_per_side=5` skips many insertions → smaller stre
 
 Concurrent Goal 3 default: 80 × 8G = **640G** (~6× less). Override:
 `MEM_SHARD=6G MEM_FIN=10G bash scripts/submit_goal3_sharded.sh`.
+
+### 2026-07-14 — Goal 3 results: cell retention + gain/offset tables
+
+Downloaded finalized contrast splits: `alyx.../manifold/res/new/`.
+
+**Cell retention (corrected).** An earlier draft summed L+R nclus (~125k) and
+double-counted neurons across stim sides. Correct baseline is **per stim-side**
+(~62.5k f1; ~55.6k f2), matching unsplit `act_block_duringstim_{l,r}` (~62.8k).
+
+**Metric:** pooled `nclus` from finalized splits; **% kept** = mean(L,R) /
+mean(all-contrast L,R). Region count = union of L∪R with ≥1 cell in that split.
+
+#### f1 (correct; L = `*_l_choice_l_f1`, R = `*_r_choice_r_f1`)
+
+| contrast | L cells | R cells | mean | % kept | nreg |
+|----------|--------:|--------:|-----:|-------:|-----:|
+| all | 62,520 | 62,575 | 62,548 | 100% | 208 |
+| 1.0 | 53,136 | 55,601 | 54,368 | 86.9% | 206 |
+| 0.25 | 56,013 | 53,996 | 55,004 | 87.9% | 203 |
+| 0.125 | 46,269 | 45,364 | 45,816 | 73.3% | 199 |
+| 0.0625 | 35,290 | 35,823 | 35,556 | 56.8% | 191 |
+| 0.0 | 2,788 | 6,816 | 4,802 | **7.7%** | 92 |
+
+#### f2 (incorrect; L = `*_l_choice_r_f2`, R = `*_r_choice_l_f2`)
+
+| contrast | L cells | R cells | mean | % kept | nreg |
+|----------|--------:|--------:|-----:|-------:|-----:|
+| all | 56,045 | 55,216 | 55,630 | 100% | 206 |
+| 1.0 | — | 51 | 51 | **0.1%** | 1 |
+| 0.25 | 408 | 280 | 344 | 0.6% | 17 |
+| 0.125 | 3,458 | 2,664 | 3,061 | 5.5% | 86 |
+| 0.0625 | 19,244 | 15,906 | 17,575 | 31.6% | 174 |
+| 0.0 | 11,151 | 9,197 | 10,174 | 18.3% | 139 |
+
+f1 thins at low contrast (0% nearly empty under ≥5 trials/side). f2 is nearly empty
+at high contrast (errors rare) and only modest at 0%.
+
+**Gain/offset summary tables** (combine available of 4 `act_block_duringstim_*_{c}`
+splits → `p_mean`/`p_gain`/`p_offset` → BH-FDR → `plot_table_with_styles` gain/offset;
+α=0.01):
+
+`alyx.../meta/table_act_block_combined_summary_act_p_mean_c_combinedpTrue_0.01_gain_offset_{c1,c025,c0125,c00625,c0}.png`
+
+Script: `scripts/plot_goal3_c0_summary_table.py` (all contrasts; `--retention-only`).
+
+**Note:** at α=0.01 FDR, **0 regions** pass `p_mean_c` for any contrast-conditioned
+combined table. c=1 uses 3/4 splits (`l_choice_r_f2_1.0` missing).
+
+### 2026-07-14b — Pipeline sanity: all-contrast recoverability
+
+Same combine → `p_mean`/`p_gain`/`p_offset` → BH-FDR (α=0.01) → gain/offset table,
+on the **unconditioned** four `act_block_duringstim_*` splits (no contrast suffix).
+
+| source | path | FDR `p_mean_c`≤0.01 | gain∩sig |
+|--------|------|--------------------:|---------:|
+| openalyx copies (isolated) | `res/new/openalyx_allcontrast_ref/` | **37**/208 | 20 |
+| alyx `res/new` all-contrast | `res/new/act_block_duringstim_*` | **42**/208 | 26 |
+
+Plots (alyx meta only; do not overwrite openalyx):
+`…_gain_offset_openalyx_ref.png`, `…_gain_offset_alyx_new_all.png`.
+
+**alyx vs openalyx files are not bitwise identical** (null shuffle seeds + ~15/207
+regions with small `nclus` diffs, e.g. CP 2759 vs 2655), but true curves match
+(VISp corr=1.0) and both recover tens of FDR hits — so the combine/FDR path is fine.
+Per-contrast zeros are not a plotting bug.
+
+### 2026-07-14c — Why per-contrast looks dead at α=0.01 even at c=1 (~87% cells)
+
+**Not mainly cell loss.** f1 at c=1 keeps ~87% cells / 206 regions. Two compounding
+issues:
+
+**(1) Discrete p-floor vs BH-FDR at α=0.01 (dominant).**
+With `nrand=2000`, min attainable p ≈ **1/2001 ≈ 0.0005**. For BH at α=0.01 with
+m≈206 tests you need **≥11 regions pinned at that floor** before *any* rejection is
+possible (`k ≥ ceil(0.0005·m/α)`). Count at floor / FDR survivors:
+
+| set | n at p-floor | `p<0.01` | FDR@0.01 | FDR@0.05 |
+|-----|-------------:|---------:|---------:|---------:|
+| all-contrast | 25 | 54 | **42** | 56 |
+| c=1.0 | **10** | 36 | **0** | **32** |
+| c=0.25 | 3 | 24 | 0 | 9 |
+
+So c=1 is one region short of clearing the α=0.01 floor barrier; at **α=0.05 FDR
+there are 32 hits**. The earlier “nothing significant at highest contrast” was an
+α=0.01 + nrand interaction, not absence of signal.
+
+**(2) Smaller per-contrast effect / SNR (real biology + fewer trials).**
+Pooling all contrasts accumulates prior-distance across conditions. Restricting to
+c=1 uses fewer trials per cell → smaller `amp_euc` / effect, fewer regions pushed
+to the p-floor:
+
+| set | median amp | median effect (true−null mean) | median SNR |
+|-----|-----------:|-------------------------------:|-----------:|
+| all-contrast | 1.75 | 0.114 | 1.23 |
+| c=1.0 | 0.85 | 0.056 | 1.12 |
+| c=0.25 | 0.98 | 0.043 | 0.82 |
+
+Of 42 all-contrast FDR@0.01 regions, **18** still have uncorrected `p≤0.01` at c=1
+(27 at `p≤0.05`), but only 10 hit the floor — not enough for BH@0.01.
+
+**Also:** f2 is empty at high contrast, so “4-split” c=1 is effectively **f1-only**
+(plus a tiny f2 R file). Cell % is high on f1, but you lose incorrect-trial splits
+and all lower-contrast trials that carried prior signal in the pooled analysis.
+
+**Takeaways:** (a) re-plot / re-threshold per-contrast at **FDR α=0.05**, or raise
+`nrand` (e.g. 10k) if insisting on α=0.01; (b) high-contrast prior distance is
+weaker than pooled — consistent with prior mattering more when stim is ambiguous.
+
+### 2026-07-14d — Per-contrast gain/offset tables at FDR α=0.05
+
+```bash
+python scripts/plot_goal3_c0_summary_table.py --alpha 0.05 --skip-retention
+```
+
+| contrast | nreg | FDR `p_mean_c`≤0.05 | gain∩sig | offset∩sig | notes |
+|----------|-----:|--------------------:|---------:|-----------:|-------|
+| 1.0 | 206 | **32** | 23 | 11 | 3/4 splits |
+| 0.25 | 203 | **9** | 6 | 4 | |
+| 0.125 | 200 | **3** | 1 | 2 | |
+| 0.0625 | 198 | **4** | 2 | 2 | |
+| 0.0 | 151 | **0** | 0 | 0 | |
+
+Plots: `alyx.../meta/table_act_block_combined_summary_act_p_mean_c_combinedpTrue_0.05_gain_offset_{c1,c025,c0125,c00625,c0}.png`
+
+Signal recovers strongly at c=1 under α=0.05; mid/low contrasts weak; 0% still null.
+
+### 2026-07-17 — Goal 3 scope update: choice-conditioned 0% contrast
+
+The previous Goal-3 contrast sweep conditioned on nominal stimulus side and then
+split correct/incorrect trials (`f1`/`f2`). This is too restrictive for the revised
+question and leaves very few 0%-contrast trials.
+
+**New primary analysis:**
+
+1. Keep only 0%-contrast trials.
+2. Do **not** condition on nominal stimulus side.
+3. Do **not** subdivide by `f1`/`f2`; condition only on choice L or choice R.
+4. Within each fixed choice side, measure the population difference between block
+   L and block R.
+5. Produce both (a) individual-region results and (b) one result aggregated across
+   all regions.
+
+This supersedes the old four-way `stim side × choice/feedback` split for the main
+Goal-3 result. The 07-14 contrast-conditioned tables remain useful diagnostics and
+historical results.
+
+**Implementation (07-17):**
+
+- New true-block splits: `block_duringstim_choice_l_0.0` and
+  `block_duringstim_choice_r_0.0`.
+- Trial mask is `(contrastLeft == 0 OR contrastRight == 0) AND fixed choice`;
+  neither nominal stimulus side nor `feedbackType` is used.
+- Existing finalized `{split}.npy` / `{split}_regde.npy` files provide regional
+  results. Finalization now also writes `{split}_all.npy` and
+  `{split}_all_regde.npy`, pooling raw squared distances over all valid neurons
+  before normalization (not averaging normalized regional curves).
+- `scripts/run_goal2_splits.py --preset goal3_c0_choice` and the Goal-3 Slurm
+  scripts run the two revised splits by default.
+- `scripts/plot_goal3_c0_summary_table.py` now defaults to revised Goal 3 and
+  writes one BH-FDR regional CSV per choice plus
+  `goal3_c0_choice_all_regions.csv`. Historical analysis remains available via
+  `--legacy-contrast` and the prior explicit options.
+
+**Validation:** split registration/window, synthetic zero-contrast masks (both
+nominal sides and feedback outcomes), raw all-region pooling, summary CSV output,
+Python compilation, and shell syntax all pass. Full BWM run remains to be submitted.

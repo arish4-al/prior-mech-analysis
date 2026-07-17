@@ -160,3 +160,5 @@ Late>early (stim×true-block mean_run) in **56%** of sessions (Δ +0.20). Excess
 ```bash
 python scripts/analyze_choice_epochs.py --cache-dir $ONE_CACHE_DIR --nrand 200
 ```
+
+Goal 3 contrast retention + gain/offset tables: see [07-06 journal](research_journal_2026-07-06.md) §2026-07-14.
