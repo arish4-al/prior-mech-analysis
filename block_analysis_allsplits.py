@@ -3133,6 +3133,353 @@ def crf_slope_stacked(min_reg=min_reg, alpha_sig=0.05):
     return res
 
 
+def _ols_r2_multi(X, Y):
+    '''Vectorized OLS R² for shared design ``X`` (n×p) and responses ``Y`` (n×m).'''
+    n = X.shape[0]
+    if n < X.shape[1] + 1:
+        return np.full(Y.shape[1], np.nan)
+    beta, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+    resid = Y - X @ beta
+    ss_res = np.sum(resid * resid, axis=0)
+    y_c = Y - Y.mean(axis=0, keepdims=True)
+    ss_tot = np.sum(y_c * y_c, axis=0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        r2 = 1.0 - ss_res / ss_tot
+    r2 = np.where(ss_tot > 1e-12, r2, np.nan)
+    return r2
+
+
+def _signed_contrast(trials):
+    '''Signed stimulus contrast: +c for left, −c for right.'''
+    cl = trials['contrastLeft'].to_numpy(dtype=float)
+    cr = trials['contrastRight'].to_numpy(dtype=float)
+    return np.nan_to_num(cl, nan=0.0) - np.nan_to_num(cr, nan=0.0)
+
+
+def get_var_partition(pid, cached=None, mapping='Beryl',
+                      window=(0.0, SHORT_DURINGSTIM_WINDOW_S),
+                      regions=None, min_trials=30, prior_type='act',
+                      act_alpha=None):
+    '''
+    Per-neuron OLS variance partition in the early duringstim window
+    (default 0–80 ms post-stimOn, ``SHORT_DURINGSTIM_WINDOW_S``).
+
+    Model: y ~ 1 + stim + choice + prior + stim×prior, where
+      stim  = signed contrast (+left / −right),
+      choice = ±1,
+      prior  = action-kernel prior − 0.5 (default ``prior_type='act'``),
+               via ``action_kernel_priors`` (same as act SC splits).
+
+    Unique main-effect R² are Type-II relative to the additive model
+    (stim+choice+prior); interaction ΔR² = R²(full) − R²(additive).
+
+    ``regions``: optional set/list of Beryl acronyms to keep; if None, all
+    non-void/root regions with ≥1 neuron are fit.
+
+    Returns dict with per-neuron arrays under key ``neurons`` plus metadata.
+    '''
+    satur = 'saturation_stim_plus04'
+    eid = None
+    probe = None
+    if cached is not None:
+        spikes = cached['spikes']
+        clusters = cached['clusters']
+        trials = cached['trials'][satur].copy()
+        eid = cached.get('eid')
+        probe = cached.get('probe')
+    if eid is None:
+        eid, probe = one.pid2eid(pid)
+    if cached is None:
+        spikes, clusters = load_good_units(one, pid)
+        trials, mask = load_trials_for_saturation(one, eid, satur)
+        trials = trials[mask]
+
+    # Keep full trial order (incl. true-block 0.5) so the action kernel matches
+    # act SC splits; drop only invalid choices.
+    choice = trials['choice'].to_numpy(dtype=float)
+    valid = np.isin(choice, [-1.0, 1.0])
+    trials = trials.loc[valid].reset_index(drop=True)
+    choice = trials['choice'].to_numpy(dtype=float)
+
+    if len(trials) < min_trials:
+        raise InsufficientTrials(
+            f'pid {pid}: only {len(trials)} trials (need ≥{min_trials})')
+
+    prior_type = str(prior_type).lower()
+    if prior_type == 'act':
+        # Same transform as get_d_vars for '*_act' splits.
+        a = float(alpha if act_alpha is None else act_alpha)
+        trials = trials.copy()
+        trials['true_priors'] = trials['probabilityLeft']
+        act_cont, act_bin = action_kernel_priors(a, list(choice))
+        trials['act_priors'] = act_cont
+        trials['probabilityLeft'] = act_bin
+        # Continuous EMA for encoding (graded action-kernel belief).
+        prior = np.asarray(act_cont, dtype=float) - 0.5
+    elif prior_type in ('block', 'true'):
+        trials = trials[trials['probabilityLeft'] != 0.5].reset_index(drop=True)
+        choice = trials['choice'].to_numpy(dtype=float)
+        if len(trials) < min_trials:
+            raise InsufficientTrials(
+                f'pid {pid}: only {len(trials)} block-biased trials '
+                f'(need ≥{min_trials})')
+        prior = trials['probabilityLeft'].to_numpy(dtype=float) - 0.5
+    else:
+        raise ValueError(
+            f"prior_type must be 'act' or 'block', got {prior_type!r}")
+
+    stim = _signed_contrast(trials)
+    choice = trials['choice'].to_numpy(dtype=float)
+    inter = stim * prior
+    ones = np.ones(len(trials), dtype=float)
+
+    X_full = np.column_stack([ones, stim, choice, prior, inter])
+    X_add = np.column_stack([ones, stim, choice, prior])
+    X_no_stim = np.column_stack([ones, choice, prior])
+    X_no_choice = np.column_stack([ones, stim, prior])
+    X_no_prior = np.column_stack([ones, stim, choice])
+
+    acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
+    good = ~np.bitwise_or.reduce([acs == r for r in ['void', 'root']])
+    acs = acs[good]
+    cluster_ids_good = np.asarray(clusters['cluster_id'])[good]
+    if regions is not None:
+        region_set = set(regions)
+        keep_reg = np.array([a in region_set for a in acs], dtype=bool)
+    else:
+        keep_reg = np.ones(len(acs), dtype=bool)
+    if keep_reg.sum() == 0:
+        return {
+            'pid': pid, 'eid': eid, 'probe': probe,
+            'n_trials': int(len(trials)), 'neurons': {},
+            'skipped': 'no_target_regions',
+            'prior_type': prior_type,
+        }
+
+    acs_fit = acs[keep_reg]
+    cluster_ids = cluster_ids_good[keep_reg]
+
+    pre_t = 0.0
+    post_t = float(window[1] - window[0])
+    stim_on = trials['stimOn_times'].to_numpy(dtype=float)
+    # Bin only target-region clusters (not the full probe).
+    bi, _ = bin_spikes2D(
+        spikes['times'],
+        clusters['cluster_id'][spikes['clusters']],
+        cluster_ids,
+        stim_on, pre_t, post_t, post_t)
+    # rates in spikes/s over the window; columns already match cluster_ids
+    R = (bi[:, :, 0] / post_t).astype(float)
+
+    r2_full = _ols_r2_multi(X_full, R)
+    r2_add = _ols_r2_multi(X_add, R)
+    r2_no_stim = _ols_r2_multi(X_no_stim, R)
+    r2_no_choice = _ols_r2_multi(X_no_choice, R)
+    r2_no_prior = _ols_r2_multi(X_no_prior, R)
+
+    r2_unique_stim = r2_add - r2_no_stim
+    r2_unique_choice = r2_add - r2_no_choice
+    r2_unique_prior = r2_add - r2_no_prior
+    r2_stim_x_prior = r2_full - r2_add
+
+    beta_full, _, _, _ = np.linalg.lstsq(X_full, R, rcond=None)
+    # beta rows: intercept, stim, choice, prior, stim×prior
+
+    neurons = {
+        'cluster_id': cluster_ids,
+        'region': acs_fit,
+        'r2_full': r2_full,
+        'r2_additive': r2_add,
+        'r2_unique_stim': r2_unique_stim,
+        'r2_unique_choice': r2_unique_choice,
+        'r2_unique_prior': r2_unique_prior,
+        'r2_stim_x_prior': r2_stim_x_prior,
+        'beta_stim': beta_full[1],
+        'beta_choice': beta_full[2],
+        'beta_prior': beta_full[3],
+        'beta_stim_x_prior': beta_full[4],
+    }
+    return {
+        'pid': pid,
+        'eid': eid,
+        'probe': probe,
+        'n_trials': int(len(trials)),
+        'window': list(window),
+        'n_neurons': int(R.shape[1]),
+        'prior_type': prior_type,
+        'neurons': neurons,
+    }
+
+
+def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
+                          window=(0.0, SHORT_DURINGSTIM_WINDOW_S),
+                          restart=True, use_cache=True,
+                          min_trials=30, prior_type='act'):
+    '''Driver: per-insertion variance partition (default early 0–80 ms,
+    action-kernel prior); save under manifold/var_partition.'''
+    if eids_plus is None:
+        df = bwm_query(one)
+        eids_plus = df[['eid', 'probe_name', 'pid']].values
+    pth = Path(one.cache_dir, 'manifold', 'var_partition')
+    pth.mkdir(parents=True, exist_ok=True)
+    Fs = []
+    for k, (eid, probe, pid) in enumerate(eids_plus, 1):
+        eid_probe = f'{eid}_{probe}'
+        outp = Path(pth, f'{eid_probe}.npy')
+        if restart and outp.exists():
+            continue
+        t0 = time.perf_counter()
+        try:
+            cache = None
+            if use_cache:
+                cpath = Path(one.cache_dir, 'manifold', 'insertion_cache',
+                             f'{eid_probe}.npy')
+                # Always reuse an existing insertion cache (avoids pid2eid offline).
+                if cpath.exists():
+                    cache = np.load(cpath, allow_pickle=True).item()
+                else:
+                    cache = build_insertion_cache(pid, restart=False)
+            # Skip early if cache has no overlap with target regions.
+            if cache is not None and regions is not None:
+                acs = np.array(br.id2acronym(cache['clusters']['atlas_id'],
+                                             mapping=mapping))
+                if not any(a in set(regions) for a in acs):
+                    print(k, 'of', len(eids_plus), 'skip (no target regions)',
+                          eid_probe)
+                    continue
+            D_ = get_var_partition(
+                pid, cached=cache, mapping=mapping, window=window,
+                regions=regions, min_trials=min_trials, prior_type=prior_type)
+            if D_.get('skipped') or not D_.get('neurons'):
+                print(k, 'of', len(eids_plus), 'skip (empty)',
+                      eid_probe, D_.get('skipped', ''))
+                del cache
+                gc.collect()
+                continue
+            np.save(outp, D_, allow_pickle=True)
+            del cache
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'ok',
+                  D_.get('n_neurons', 0), 'neu',
+                  round(time.perf_counter() - t0, 1), 'sec')
+        except InsufficientTrials as exc:
+            Fs.append(pid)
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'skip', pid, exc)
+        except Exception as exc:
+            Fs.append(pid)
+            gc.collect()
+            print(k, 'of', len(eids_plus), 'fail', pid, exc)
+    print(f'{len(Fs)} failures/skips:', Fs)
+    return Fs
+
+
+def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
+                          min_neurons=5, alpha_sig=None, mixed_only=False):
+    '''
+    Pool per-neuron variance-partition stats across insertions by region.
+
+    If ``regtype_csv`` is given (from export_stimchoice_regtypes), join
+    ``sc_duringstim_regtype`` / ``mixed_stim_choice`` and optionally restrict.
+
+    Writes manifold/res/var_partition_stacked.npy and meta CSV under cache.
+    '''
+    pth = Path(one.cache_dir, 'manifold', 'var_partition')
+    if not pth.exists():
+        raise FileNotFoundError(pth)
+    files = [f for f in os.listdir(pth) if f.endswith('.npy')]
+    rows = []
+    for f in files:
+        D_ = np.load(Path(pth, f), allow_pickle=True).item()
+        neu = D_.get('neurons') or {}
+        if not neu or 'region' not in neu:
+            continue
+        regs = neu['region']
+        for i in range(len(regs)):
+            rows.append({
+                'eid': D_.get('eid'),
+                'probe': D_.get('probe'),
+                'pid': D_.get('pid'),
+                'cluster_id': int(neu['cluster_id'][i]),
+                'region': regs[i],
+                'r2_full': float(neu['r2_full'][i]),
+                'r2_additive': float(neu['r2_additive'][i]),
+                'r2_unique_stim': float(neu['r2_unique_stim'][i]),
+                'r2_unique_choice': float(neu['r2_unique_choice'][i]),
+                'r2_unique_prior': float(neu['r2_unique_prior'][i]),
+                'r2_stim_x_prior': float(neu['r2_stim_x_prior'][i]),
+                'beta_stim': float(neu['beta_stim'][i]),
+                'beta_choice': float(neu['beta_choice'][i]),
+                'beta_prior': float(neu['beta_prior'][i]),
+                'beta_stim_x_prior': float(neu['beta_stim_x_prior'][i]),
+                'n_trials': D_.get('n_trials'),
+            })
+    if not rows:
+        print('var_partition_stacked: no neurons found')
+        return {}
+    df = pd.DataFrame(rows)
+
+    regtype_col = None
+    if regtype_csv is not None:
+        rt = pd.read_csv(regtype_csv)
+        keep_cols = ['region', 'sc_duringstim_regtype', 'sc_duringchoice_regtype']
+        for c in ('mixed_stim_choice', 'has_stim', 'has_choice',
+                  'stim_processor', 'stim_processor_loose',
+                  'sigma_stim_s', 'sigma_stim_s_prime'):
+            if c in rt.columns:
+                keep_cols.append(c)
+        rt = rt[keep_cols].drop_duplicates('region')
+        df = df.merge(rt, on='region', how='left')
+        regtype_col = 'sc_duringstim_regtype'
+        if mixed_only and 'mixed_stim_choice' in df.columns:
+            mixed = df['mixed_stim_choice']
+            if mixed.dtype == object:
+                mixed = mixed.astype(str).str.lower().isin(('true', '1', '1.0'))
+            else:
+                mixed = mixed.fillna(False).astype(bool)
+            df = df[mixed]
+        elif regtypes is not None:
+            allowed = set(float(x) for x in regtypes)
+            df = df[df[regtype_col].isin(allowed)]
+
+    agg = {}
+    for reg, g in df.groupby('region'):
+        if len(g) < min_neurons:
+            continue
+        entry = {
+            'n_neurons': int(len(g)),
+            'n_insertions': int(g[['eid', 'probe']].drop_duplicates().shape[0]),
+            'r2_full_mean': float(np.nanmean(g['r2_full'])),
+            'r2_unique_stim_mean': float(np.nanmean(g['r2_unique_stim'])),
+            'r2_unique_choice_mean': float(np.nanmean(g['r2_unique_choice'])),
+            'r2_unique_prior_mean': float(np.nanmean(g['r2_unique_prior'])),
+            'r2_stim_x_prior_mean': float(np.nanmean(g['r2_stim_x_prior'])),
+            'r2_unique_stim_median': float(np.nanmedian(g['r2_unique_stim'])),
+            'r2_unique_choice_median': float(np.nanmedian(g['r2_unique_choice'])),
+            'r2_stim_x_prior_median': float(np.nanmedian(g['r2_stim_x_prior'])),
+        }
+        if regtype_col and regtype_col in g.columns:
+            entry['sc_duringstim_regtype'] = float(g[regtype_col].iloc[0])
+            if 'sc_duringchoice_regtype' in g.columns:
+                entry['sc_duringchoice_regtype'] = float(
+                    g['sc_duringchoice_regtype'].iloc[0])
+        agg[reg] = entry
+
+    outp = Path(one.cache_dir, 'manifold', 'res', 'var_partition_stacked.npy')
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    np.save(outp, agg, allow_pickle=True)
+
+    meta = Path(one.cache_dir, 'meta')
+    meta.mkdir(parents=True, exist_ok=True)
+    summary = pd.DataFrame([
+        {'region': reg, **vals} for reg, vals in agg.items()
+    ]).sort_values('region')
+    csv_path = meta / 'var_partition_by_region.csv'
+    summary.to_csv(csv_path, index=False)
+    print(f'var_partition_stacked: {len(agg)} regions -> {outp}\n  CSV {csv_path}')
+    return agg
+
+
 def d_var_stacked(split, min_reg = min_reg, uperms_ = False):
                   
     time0 = time.perf_counter()
