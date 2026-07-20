@@ -112,7 +112,7 @@ def summarize_goal3_c0_choice(pth_res: Path, meta_dir: Path, alpha: float):
         regional_df = pd.DataFrame(rows)
         if rows:
             regional_df = regional_df.sort_values(['p_euc_fdr', 'region'])
-        regional_out = meta_dir / f'{split}_regions.csv'
+        regional_out = meta_dir / f'{split}_regions_a{alpha:g}.csv'
         regional_df.to_csv(regional_out, index=False)
         regional_outputs.append(regional_out)
 
@@ -141,6 +141,41 @@ def summarize_goal3_c0_choice(pth_res: Path, meta_dir: Path, alpha: float):
     for path in regional_outputs:
         print(f'wrote {path}')
     return regional_outputs, aggregate_out
+
+
+def plot_goal3_c0_choice_tables(pth_res: Path, meta_dir: Path, alphas: list[float]):
+    '''
+    Mirror the legacy per-contrast workflow for revised Goal 3:
+    combine choice-L + choice-R 0% splits → p_mean/p_gain/p_offset → BH-FDR →
+    gain/offset summary table at each alpha.
+    '''
+    import analysis_functions as af
+
+    af.pth_res = pth_res
+    af.meta_pth = meta_dir
+    af.meta_pth.mkdir(parents=True, exist_ok=True)
+    open_order = _openalyx_meta_dir() / 'region_order.txt'
+    local_order = af.meta_pth / 'region_order.txt'
+    if open_order.exists() and not local_order.exists():
+        local_order.write_text(open_order.read_text())
+
+    timeframe = 'block_duringstim_choice_c0'
+    outs = []
+    for alpha in alphas:
+        print(f'\n======== revised Goal 3 c0 choice combine @ α={alpha:g} ========')
+        outs.append(
+            run_splits(
+                af,
+                pth_res,
+                GOAL3_C0_CHOICE_SPLITS,
+                timeframe=timeframe,
+                alpha=alpha,
+                meta_dir=meta_dir,
+                file_tag='c0_choice',
+                prior='block',
+            )
+        )
+    return outs
 
 
 def contrast_tag(c: float) -> str:
@@ -508,7 +543,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--res-dir', type=Path, default=_default_res_dir())
     ap.add_argument('--meta-dir', type=Path, default=_default_meta_dir())
-    ap.add_argument('--alpha', type=float, default=0.01)
+    ap.add_argument('--alpha', type=float, default=None,
+                    help='Single FDR alpha (default revised path: both 0.05 and 0.01)')
+    ap.add_argument(
+        '--alphas',
+        nargs='+',
+        type=float,
+        default=None,
+        help='FDR alphas for revised Goal-3 tables (default: 0.05 0.01)',
+    )
+    ap.add_argument(
+        '--csv-only',
+        action='store_true',
+        help='Revised Goal 3: write regional/all CSVs only (no combine/table plots)',
+    )
     ap.add_argument(
         '--legacy-contrast',
         action='store_true',
@@ -570,7 +618,19 @@ def main():
         args.skip_retention,
     ])
     if not legacy_requested:
-        return summarize_goal3_c0_choice(pth_res, args.meta_dir, args.alpha)
+        if args.alphas is not None:
+            alphas = args.alphas
+        elif args.alpha is not None:
+            alphas = [args.alpha]
+        else:
+            alphas = [0.05, 0.01]
+        # Per-split regional CSVs use the first / primary alpha for FDR marking.
+        summarize_goal3_c0_choice(pth_res, args.meta_dir, alphas[0])
+        for a in alphas[1:]:
+            summarize_goal3_c0_choice(pth_res, args.meta_dir, a)
+        if args.csv_only:
+            return
+        return plot_goal3_c0_choice_tables(pth_res, args.meta_dir, alphas)
 
     tables = None
     if not args.skip_retention:
@@ -588,12 +648,13 @@ def main():
     if open_order.exists() and not local_order.exists():
         local_order.write_text(open_order.read_text())
 
+    alpha = 0.01 if args.alpha is None else args.alpha
     if args.stim_side:
         print('\n======== stim-side only (no choice restriction) ========')
         run_splits(
             af, pth_res, STIM_SIDE_SPLITS,
             timeframe='act_block_duringstim_stimlr',
-            alpha=args.alpha,
+            alpha=alpha,
             meta_dir=af.meta_pth,
             file_tag=args.tag or 'stim_lr',
             prior='act',
@@ -603,7 +664,7 @@ def main():
         run_splits(
             af, pth_res, BAYES_CHOICE_SPLITS,
             timeframe='bayes_block_duringstim_choice',
-            alpha=args.alpha,
+            alpha=alpha,
             meta_dir=af.meta_pth,
             file_tag=args.tag,  # default None → …_gain_offset.png
             prior='bayes',
@@ -613,7 +674,7 @@ def main():
         run_splits(
             af, pth_res, BAYES_STIM_SIDE_SPLITS,
             timeframe='bayes_block_duringstim_stimlr',
-            alpha=args.alpha,
+            alpha=alpha,
             meta_dir=af.meta_pth,
             file_tag=args.tag or 'stim_lr',
             prior='bayes',
@@ -621,14 +682,14 @@ def main():
     elif args.all_contrast:
         print('\n======== all-contrast (unconditioned 4-split) ========')
         run_contrast(
-            af, pth_res, None, args.alpha, af.meta_pth,
+            af, pth_res, None, alpha, af.meta_pth,
             tag=args.tag,  # None → plain …_gain_offset.png
         )
     else:
         contrasts = args.contrasts if args.contrasts is not None else CONTRASTS
         for c in contrasts:
             print(f'\n======== contrast {c} ========')
-            run_contrast(af, pth_res, c, args.alpha, af.meta_pth, tag=args.tag)
+            run_contrast(af, pth_res, c, alpha, af.meta_pth, tag=args.tag)
 
     return tables
 

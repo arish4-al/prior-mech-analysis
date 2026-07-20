@@ -825,4 +825,54 @@ historical results.
 
 **Validation:** split registration/window, synthetic zero-contrast masks (both
 nominal sides and feedback outcomes), raw all-region pooling, summary CSV output,
-Python compilation, and shell syntax all pass. Full BWM run remains to be submitted.
+Python compilation, and shell syntax all pass. Full BWM run submitted and
+finalized (see 2026-07-20).
+
+### 2026-07-20 — Revised Goal 3 results: combine + gain/offset tables
+
+Finalized outputs in `alyx.../manifold/res/new/`:
+`block_duringstim_choice_{l,r}_0.0{,_regde,_all,_all_regde}.npy`.
+
+**Cell retention (pooled regions with ≥ min_reg):**
+
+| split | nreg | nclus |
+|-------|-----:|------:|
+| `block_duringstim_choice_l_0.0` | 162 | 25,360 |
+| `block_duringstim_choice_r_0.0` | 174 | 34,271 |
+
+**All-region population** (`*_all.npy`; raw-pooled before RMS & min_reg):
+
+| choice | nclus | n_regions | p_euc | amp_euc |
+|--------|------:|----------:|------:|--------:|
+| L | 25,946 | 238 | 0.074 | 0.059 |
+| R | 34,833 | 249 | 0.020 | 0.062 |
+
+Choice-R all-region is uncorrected p≈0.02; neither side survives a strong claim alone.
+Per-split regional BH-FDR on `p_euc` is **0** hits at α=0.05 and 0.01.
+
+**Combined L+R choice** (same path as old per-contrast tables: sum regde →
+`p_mean`/`p_gain`/`p_offset` → BH-FDR → gain/offset table):
+
+```bash
+python scripts/plot_goal3_c0_summary_table.py --alphas 0.05 0.01
+```
+
+| α | nreg | FDR `p_mean_c` | gain∩sig | offset∩sig | regions |
+|---|-----:|---------------:|---------:|-----------:|---------|
+| 0.05 | 185 | **2** | 0 | 2 | **MRN**, **SCm** |
+| 0.01 | 185 | **0** | 0 | 0 | — |
+
+Both FDR@0.05 hits sit at the nrand=2000 p-floor (`p_mean≈0.0005`); after offset
+subtraction at α=0.05, neither keeps a significant gain (MRN `p_gain` rises to
+~0.15 once the significant offset is removed; SCm was gain-null already).
+
+Plots:
+`alyx.../meta/table_block_block_combined_summary_block_p_mean_c_combinedpTrue_{0.05,0.01}_gain_offset_c0_choice.png`
+
+Also: per-split regional CSVs `…_regions_a{0.05,0.01}.csv` and
+`goal3_c0_choice_all_regions.csv` in the same meta dir.
+
+**Takeaway:** relaxing stim-side/f1–f2 at 0% recovers far more cells than the old
+c=0 four-way (~5k f1 cells → ~25–35k per choice). Combined prior distance is still
+weak: only midbrain MRN/SCm clear FDR@0.05, both offset- rather than gain-driven,
+and nothing survives FDR@0.01.
