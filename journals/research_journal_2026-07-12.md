@@ -14,7 +14,7 @@ Real-data pipeline only — see [prior journal](research_journal_2026-07-06.md) 
 | Contrast splits | `'{base}_{contrast}'` on duringstim / duringchoice (act + non-act), incl. 0% |
 | Min trials | ≥5 per split side (`InsufficientTrials` → skip) |
 | Sharding | `scripts/submit_goal2_*` / `submit_goal3_sharded.sh` (ORCD `mit_normal`) |
-| Null (current) | label shuffle within condition (contrast-matched where applicable) |
+| Null (current) | label shuffle within condition (contrast-matched where applicable); choice L–R: `--synthetic-choice-null` or `--exclude-sticky-trials` (opt-in) |
 
 ---
 
@@ -33,15 +33,39 @@ Motivation: block identity and recent outcomes can pull in opposite directions; 
 2. Does any effect concentrate on conflict trials, alignment trials, or both?
 3. Does the conclusion change relative to the usual block-prior split (pooled across recent-reward history)?
 
-### Goal 2 — Null that respects choice / prior autocorrelation (Harris-style or matched-spectrum surrogates)
+### Goal 2 — Null that respects choice / prior autocorrelation and neural drift
 
-**Problem:** Label-shuffling **within stim × block** destroys **across-trial choice autocorrelation**. Animals show one-side response epochs (runs of L or R choices). Destroying that structure **narrows the null** and **inflates false positives** for **choice** and **prior** effects — not for stimulus (stim labels lack that temporal structure in the same way).
+**Revised problem:** Trial averaging does **not** by itself remove the issue. At each peri-event bin the choice/prior distance is a difference between condition-averaged trial responses. If the labels occur in long epochs and neural responses also drift or remain autocorrelated across trials, the two averages can sample different parts of the session. An unrestricted label shuffle mixes those epochs and can produce a null that is too narrow. Label autocorrelation **alone** is not sufficient: if trial responses were independent and stationary, label ordering would not matter once condition counts were fixed. The relevant failure mode is therefore **autocorrelated choice/prior labels interacting with across-trial neural nonstationarity**.
 
-**Plan:** redo significance for choice/prior contrasts on real data using a null that preserves temporal structure, e.g.:
-- **Session-shuffled** null (Harris 2020), or
-- **Surrogate data** with matched autocorrelation / power spectrum
+**Affected contrasts:**
+- **Choice:** animals show runs of one-sided responses, so choice L–R tests under fixed stimulus/block need a temporally structured null.
+- **Prior:** true block labels are explicitly block-autocorrelated. `block_only` already generates pseudo-blocks, but other prior-distance splits currently use unrestricted permutations and can destroy this structure. Action-kernel and Bayes-derived priors are also temporally structured.
+- **Stimulus:** stimulus identities are randomized by the task, so a task-matched pseudo-session/shuffle remains appropriate; stimulus significance is not the main target of this correction.
 
-**Scope:** affects **choice** and **prior** analyses; **stimulus** significance claims are not the target of this correction.
+**Important terminology / implementation correction:** the opt-in donor-window code added on 2026-07-13 is a **stim×block-matched donor surrogate**, not a literal Harris (2020) session-permutation test. It transplants a donor choice subsequence independently for each insertion/null draw. A Harris test instead permutes complete behavioral sessions against complete neural sessions, uses one coherent session mapping for every probe from the same `eid`, and evaluates an aggregate session-level statistic. Keep the current method labeled as a matched donor surrogate unless it is redesigned accordingly.
+
+**Literal Harris session-permutation setup:**
+1. Treat each unique `eid` as the exchangeable unit; all probes from that `eid` must share the same donor assignment.
+2. Predefine a scalar association statistic for each region/session from the trial-resolved neural tensor and the complete behavioral history. Apply deterministic, permutation-independent trial trimming so paired sessions have compatible lengths.
+3. The observed statistic is the aggregate over matched sessions, \(T_{\mathrm{obs}}=\sum_s A(X_s,B_s)\), with a fixed weighting rule so sessions with multiple probes are not implicitly over-weighted.
+4. For each null draw, sample a bijection \(\pi\) of compatible sessions (preferably a derangement), pair \(X_s\) with the **complete** behavioral history \(B_{\pi(s)}\), and compute \(T_\pi=\sum_s A(X_s,B_{\pi(s)})\). Use the same \(\pi\) for all probes/regions in that draw.
+5. Compute \(p=(1+\#\{T_\pi\ge T_{\mathrm{obs}}\})/(1+N_{\mathrm{perm}})\), then apply the planned across-region correction.
+
+**Conditional-choice caveat:** transplanting only donor choices after filtering each donor to a recipient-like stim×block stratum is not literal session permutation, and skipping intervening trials changes the relevant lag structure. Moreover, a Harris permutation of complete sessions directly tests neural–behavioral independence, whereas “choice beyond stimulus and block” is a partial-association question.
+
+**Implemented primary structured null (2026-07-18):** sticky psychometric **synthetic-choice** null for `choice_stim*` / `choice_duringstim*`:
+
+- Keep neural tensor `b` and stim×block eligibility fixed (real stim / contrast / prior covariates frozen — including act/bayes overwrites; do **not** recompute act from synthetic choices).
+- Per `eid`, fit  
+  \(\operatorname{logit} P(\mathrm{choice}_t=\mathrm{L})=\beta_0+\beta_s s_t+\beta_c c_t+\beta_p(p_t-0.5)+\beta_{\mathrm{lag}} a_{t-1}\)  
+  (MLE; empirical cell-rate × lag-1 stickiness fallback).
+- Null draws: sequentially sample full-session synthetic ±1 choices; split eligible trials by those labels.
+- CLI: `--synthetic-choice-null` in `scripts/run_goal2_splits.py` → `null_scheme: synthetic_choice_sticky`.
+- Donor-window `--session-shuffle-null` remains a comparison surrogate; label shuffle stays the default until width/p-value validation.
+
+Not the same as `brainbox.generate_pseudo_session` (i.i.d. within contrast×side×block cells — destroys stickiness) and not a literal Harris session permutation.
+
+**Validation:** compare unrestricted label shuffle, the matched donor surrogate, and synthetic-choice using both null width and region-level p-values. The choice-run analysis establishes that label structure exists; it does not by itself show that neural-distance significance changes.
 
 ---
 
@@ -162,3 +186,74 @@ python scripts/analyze_choice_epochs.py --cache-dir $ONE_CACHE_DIR --nrand 200
 ```
 
 Goal 3 contrast retention + gain/offset tables: see [07-06 journal](research_journal_2026-07-06.md) §2026-07-14.
+
+### 2026-07-18 — Synthetic-choice sticky null (choice L–R)
+
+Implemented preferred Goal-2 structured null for stratified choice contrasts:
+
+| Piece | Detail |
+|-------|--------|
+| Model | \(\operatorname{logit}P(L)=\beta_0+\beta_s s+\beta_c c+\beta_p(p-0.5)+\beta_{\mathrm{lag}}a_{t-1}\) |
+| Fit | per `eid` (cached across probes); MLE with empirical+stickiness fallback |
+| Null | sample full-session synthetic choices; apply to fixed eligible `b` |
+| Tag | `null_scheme: synthetic_choice_sticky` |
+| CLI | `--synthetic-choice-null` (`scripts/run_goal2_splits.py`) |
+| Smoke | `python scripts/smoke_synthetic_choice_null.py` |
+
+Donor `--session-shuffle-null` kept for comparison; default still label shuffle until null-width validation.
+
+### 2026-07-20 — Late + perseveration trial exclusion (choice L–R sensitivity)
+
+Alternative to structured nulls: remove likely drift×stickiness trials, then use **label shuffle within stim×block** (existing default null on block-conditioned choice splits).
+
+**Drop** (union):
+1. Last 20% of the session (temporal order)
+2. **Tail** of same-choice runs of length ≥10 that are poorly explained by non-0 contrast stim (block ignored): keep the first 9 trials of the run; drop from trial 10 onward within the run. A run is poorly explained if among |contrast|>0 trials, any stim side ≠ choice — or the run has no non-0 contrast trials
+
+Well-explained long runs (all non-0 stims match the perseverated choice) are kept in full.
+
+| Piece | Detail |
+|-------|--------|
+| API | `apply_sticky_trial_exclusion` / `--exclude-sticky-trials` |
+| Outputs | `manifold/res_excl_sticky/` (avoids overwriting main `res/`) |
+| Tag | `null_scheme: label_shuffle_excl_sticky` + `trial_exclusion` stats |
+| Presets | `choice_lr_excl_sticky_{act,true,bayes}` |
+| Submit | `bash scripts/submit_goal2_choice_excl_sticky_sharded.sh` |
+| Smoke | `python scripts/smoke_excl_sticky_trials.py` |
+
+```bash
+# Local / single split
+python scripts/run_goal2_splits.py --preset choice_lr_excl_sticky_act \
+  --exclude-sticky-trials --nrand 2000
+
+# ORCD sharded
+bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
+PRESET=choice_lr_excl_sticky_true bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
+```
+
+Use as a robustness arm next to synthetic-choice nulls; not a complete replacement for a temporally structured null.
+
+### 2026-07-20b — Perseveration counts over all BWM sessions
+
+**Tail-of-run exclusion** (keep first `min_run-1=9` of each poorly explained run).
+
+Ran `scripts/analyze_perseveration_counts.py` on `bwm_tables/trials.pqt` (459 sessions, `bwm_include=True`, min_run=10, late_frac=0.2).
+
+| Metric | median | mean | IQR |
+|--------|-------:|-----:|-----|
+| # perseveration **tail** trials | 26 | 33.9 | [11, 49] |
+| frac perseveration | 0.066 | 0.076 | [0.031, 0.107] |
+| # dropped (late ∪ pers) | 100 | 111 | [74, 136] |
+| frac dropped | 0.248 | 0.257 | [0.221, 0.283] |
+| # kept | 291 | 317 | [230, 376] |
+
+23/459 sessions (5%) have zero perseveration-tail trials. vs whole-run (earlier): median pers 66→26, frac dropped 0.33→0.25.
+
+Plot + CSV: `manifold/choice_epoch_diag/perseveration_exclusion_distributions.png`, `…_by_session.csv`.
+
+```bash
+python scripts/analyze_perseveration_counts.py \
+  --cache-dir $HOME/Downloads/ONE/openalyx.internationalbrainlab.org
+```
+
+
