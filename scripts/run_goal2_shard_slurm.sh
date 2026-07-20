@@ -34,6 +34,10 @@ N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
+EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
+STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
+STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
+SYNTHETIC_CHOICE_NULL="${SYNTHETIC_CHOICE_NULL:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -41,7 +45,7 @@ cd "$REPO_DIR"
 
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
-echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL"
+echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL exclude_sticky=$EXCLUDE_STICKY_TRIALS synthetic_choice=$SYNTHETIC_CHOICE_NULL"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
@@ -49,7 +53,15 @@ ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
 [[ "$RESTART" == "1" ]] && ARGS+=(--restart) || ARGS+=(--no-restart)
 ARGS+=(--stream-pool)
 [[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
+[[ "$SYNTHETIC_CHOICE_NULL" == "1" ]] && ARGS+=(--synthetic-choice-null)
+[[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(
+  --exclude-sticky-trials
+  --sticky-late-frac "$STICKY_LATE_FRAC"
+  --sticky-min-run "$STICKY_MIN_RUN"
+)
 
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 echo "Shard done: $(date)"
-ls -lh "$ONE_CACHE_DIR/manifold/res/_stream_acc/${SPLIT}.shard${SHARD_IDX}.npy" 2>/dev/null || true
+RES_ROOT="$ONE_CACHE_DIR/manifold/res"
+[[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
+ls -lh "$RES_ROOT/_stream_acc/${SPLIT}.shard${SHARD_IDX}.npy" 2>/dev/null || true

@@ -27,12 +27,17 @@ ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
 SPLIT="${SPLIT:?Set SPLIT=}"
+EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT"
+echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT exclude_sticky=$EXCLUDE_STICKY_TRIALS"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
-python3 -u scripts/run_goal2_splits.py --finalize-only --splits "$SPLIT"
-ls -lh "$ONE_CACHE_DIR/manifold/res/${SPLIT}"*.npy 2>/dev/null || true
+ARGS=(--finalize-only --splits "$SPLIT")
+[[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(--exclude-sticky-trials)
+python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
+RES_ROOT="$ONE_CACHE_DIR/manifold/res"
+[[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
+ls -lh "$RES_ROOT/${SPLIT}"*.npy 2>/dev/null || true

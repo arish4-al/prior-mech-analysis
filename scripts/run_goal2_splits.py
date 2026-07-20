@@ -158,6 +158,16 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    # Late+perseveration exclusion + label-shuffle null (stim×block splits)
+    'choice_lr_excl_sticky_act': (
+        CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
+    ),
+    'choice_lr_excl_sticky_true': (
+        CHOICE_DURINGCHOICE + CHOICE_DURINGSTIM
+    ),
+    'choice_lr_excl_sticky_bayes': (
+        CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
+    ),
     # Revised Goal 3: true block L vs R at 0% contrast, separately by choice.
     'goal3_c0_choice': ba.GOAL3_C0_CHOICE_SPLITS,
     **_goal3_presets(),
@@ -210,8 +220,24 @@ def main():
                    help='Rebuild manifold/choice_donors.npy from insertion_cache '
                         '(choice + stim + pLeft for stratified Harris nulls)')
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
-                   help='Use stim×block–stratified session-permutation nulls '
+                   help='Use stim×block–stratified donor-window nulls '
                         'for choice_stim*/choice_duringstim* (default: label shuffle)')
+    p.add_argument('--synthetic-choice-null', action='store_true', default=False,
+                   help='Use sticky psychometric synthetic-choice nulls for '
+                        'choice_stim*/choice_duringstim* (preferred Goal-2 '
+                        'structured null; takes precedence over '
+                        '--session-shuffle-null)')
+    p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
+                   help='Drop last 20%% of session and tails of perseveration '
+                        'runs (≥10 same choice poorly explained by non-0 '
+                        'contrast stim; keep first 9 of each run); outputs go '
+                        'to manifold/res_excl_sticky')
+    p.add_argument('--sticky-late-frac', type=float, default=0.2,
+                   help='Fraction of late-session trials to drop when '
+                        '--exclude-sticky-trials (default 0.2)')
+    p.add_argument('--sticky-min-run', type=int, default=10,
+                   help='Min same-choice run length; drop only the run tail '
+                        'from this position onward (default 10)')
     p.add_argument('--shard-idx', type=int, default=None,
                    help='0-based shard index (with --n-shards)')
     p.add_argument('--n-shards', type=int, default=None,
@@ -268,8 +294,10 @@ def main():
     splits = _validate_splits(splits)
 
     if args.finalize_only:
+        if args.exclude_sticky_trials:
+            ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
         print('ONE cache:', ba.one.cache_dir)
-        print('Finalize splits:', splits)
+        print('Finalize splits:', splits, 'res=', ba.pth_res)
         for sp in splits:
             ba.finalize_stream_shards(sp)
             for name in (
@@ -292,7 +320,12 @@ def main():
     print('nrand:', args.nrand, 'restart:', args.restart,
           'stream_pool:', args.stream_pool, 'save_cache:', args.save_cache,
           'shard:', args.shard_idx, '/', args.n_shards, 'finalize:', finalize,
-          'session_shuffle_null:', args.session_shuffle_null)
+          'session_shuffle_null:', args.session_shuffle_null,
+          'synthetic_choice_null:', args.synthetic_choice_null,
+          'exclude_sticky_trials:', args.exclude_sticky_trials)
+
+    if args.exclude_sticky_trials:
+        ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
 
     # bycontrast=False: contrast is read from the split name (..._0.125).
     ba.get_all_d_vars_allsplits(
@@ -309,6 +342,10 @@ def main():
         n_shards=args.n_shards,
         finalize=finalize,
         session_shuffle_null=args.session_shuffle_null,
+        synthetic_choice_null=args.synthetic_choice_null,
+        exclude_sticky_trials=args.exclude_sticky_trials,
+        sticky_late_frac=args.sticky_late_frac,
+        sticky_min_run=args.sticky_min_run,
     )
     print('Done. Outputs under:', ba.pth_res)
     if finalize:
