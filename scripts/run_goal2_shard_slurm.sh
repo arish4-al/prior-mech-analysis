@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=6G
 #SBATCH -p mit_normal
-#SBATCH --time=12:00:00
+#SBATCH --time=6:00:00
 #SBATCH --mail-user=arily
 #SBATCH --mail-type=FAIL
 #SBATCH -o goal2_shard_%x_%j.out
