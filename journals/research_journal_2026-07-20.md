@@ -158,3 +158,56 @@ on the full choice sequence (same as act SC / `get_d_vars`), use continuous EMA
 − 0.5 as the prior regressor in \(y\sim\mathrm{stim}+\mathrm{choice}+\mathrm{prior}+\mathrm{stim}\times\mathrm{prior}\).
 True-block 0.5 trials are kept (needed for the kernel). Override with
 `--prior-type block` only for comparison.
+
+### 2026-07-20i — Full BWM mixed var-partition (alyx results)
+
+**Sync:** binning fix (`bin_spikes2D` all clusters → slice) + Slurm 1 h walltime
+brought from `main` → `develop` (earlier subset-`cluster_ids` path left mostly fails).
+
+**Outputs (local alyx copy):**
+- `meta/var_partition_by_region.csv`
+- `manifold/res/new/var_partition_stacked.npy` (19 regions; matches CSV)
+
+**Design reminder:** 0–80 ms post-stimOn; act prior; unique Type-II R²;  
+`R²_stim×prior` = ΔR²(full − additive) = prior-modulated stim readout.  
+Means below are neuron-averaged within region.
+
+**Global:** 13 394 neurons · 19/19 mixed regions. Mean unique R²:  
+prior **0.0083** ≫ stim **0.0044** ≈ stim×prior **0.0035** ≈ choice **0.0031**.  
+So in early duringstim, the **main prior term dominates** the partition; the
+stim×prior interaction is on the **same order as unique stim**, not a
+negligible leftover. stim×prior > unique stim in **8/19**; > unique choice in
+**12/19**.
+
+| region | n | ins | R²_full | stim | choice | prior | stim×prior | s×p/stim | regtype | read |
+|--------|--:|---:|--------:|-----:|-------:|------:|-----------:|---------:|--------:|------|
+| BMA | 175 | 13 | 0.012 | 0.0027 | 0.0028 | 0.0039 | 0.0029 | 1.08 | — | Small balanced partition; stim×prior ≈ stim ≈ choice. Amygdala mixed unit with weak but even prior modulation of stim. |
+| CENT2 | 613 | 16 | 0.021 | 0.0031 | 0.0037 | 0.0087 | 0.0038 | 1.23 | 1.0 | Cerebellar vermis (move-typed). Prior-led; stim×prior exceeds unique stim — early rate already carries prior-gated stim variance. |
+| CP | 2892 | 76 | 0.015 | 0.0034 | 0.0030 | 0.0050 | 0.0028 | 0.83 | 0.5 | Largest sample (striatum integrator). Modest everything; stim slightly > choice; stim×prior a bit under unique stim. Stable “yes mixed, mild modulation” baseline. |
+| CUL4 5 | 1183 | 33 | 0.020 | 0.0039 | 0.0035 | 0.0074 | 0.0034 | 0.87 | 1.0 | Culmen (move). Prior main largest; stim / choice / stim×prior nearly tied — classic mixed early encoding with moderate prior gating of stim. |
+| FN | 46 | 5 | 0.013 | 0.0032 | 0.0019 | 0.0034 | 0.0031 | 0.96 | 1.0 | Fastigial; **low n**. stim ≈ stim×prior ≫ choice — stim variance is almost fully prior-contingent; treat as suggestive. |
+| GRN | 560 | 17 | 0.021 | 0.0034 | 0.0030 | 0.0076 | 0.0035 | 1.02 | 1.0 | Gigantocellular RF. stim×prior ≈ unique stim; prior dominates. Brainstem mixed site with clear prior-modulated stim. |
+| IP | 604 | 28 | 0.025 | 0.0044 | 0.0032 | 0.0097 | 0.0049 | 1.11 | 1.0 | Interpositus: **2nd-highest stim×prior**. Strong prior + interaction > unique stim — cerebellar deep nucleus with prior-gated early stim. |
+| IRN | 735 | 30 | 0.020 | 0.0029 | 0.0030 | 0.0085 | 0.0026 | 0.90 | 1.0 | Intermediate RF. Prior-heavy; stim≈choice; stim×prior slightly below stim. Mixed but modulation not oversized. |
+| LING | 45 | 5 | 0.019 | 0.0035 | 0.0034 | 0.0082 | 0.0030 | 0.84 | 0.5 | Lingula; **low n**. Balanced stim/choice under a large prior; stim×prior close to stim. |
+| MRN | 2678 | 128 | 0.024 | 0.0054 | 0.0037 | 0.0080 | 0.0036 | 0.67 | 1.0 | Huge midbrain RF sample. Clear stim > choice; stim×prior solid but **below** unique stim (ratio 0.67). Overlaps Goal‑3 0%-contrast hit regions — early stim variance is real and partly prior-gated. |
+| PF | 108 | 7 | 0.038 | **0.0160** | 0.0030 | 0.0058 | 0.0026 | **0.16** | 0.5 | **Outlier: stim-dominated.** Highest unique stim, lowest s×p/stim. Parafascicular / thalamic mixed label but early window looks like a **near-additive stim encoder** (prior modulation small vs stim). |
+| PGRN | 120 | 12 | 0.022 | 0.0023 | 0.0028 | 0.0094 | 0.0030 | 1.33 | 0.5 | Paragigantocellular. Prior ≫ rest; stim×prior > unique stim (and ≈ choice). Prior-led mixed with strong gating relative to weak stim main. |
+| PRNc | 280 | 11 | 0.024 | 0.0054 | 0.0032 | 0.0081 | 0.0032 | 0.59 | 0.5 | Pontine RF central. Stim ≈ MRN-level; stim×prior lower ratio (0.59) — more additive stim than cerebellar peers. |
+| SCm | 1666 | 72 | 0.022 | 0.0051 | 0.0032 | 0.0074 | 0.0035 | 0.68 | 1.0 | Superior colliculus (medial). Parallel to MRN: stim > choice, mid stim×prior. Also a Goal‑3 offset region — consistent midbrain early stim + partial prior gate. |
+| SIM | 893 | 21 | 0.021 | 0.0032 | 0.0026 | 0.0083 | 0.0046 | **1.43** | 0.5 | Simplex cerebellum. High stim×prior / stim — among strongest **relative** prior modulation of stim in the set. |
+| SNr | 149 | 19 | 0.036 | 0.0066 | 0.0042 | 0.0141 | 0.0048 | 0.72 | 0.5 | Substantia nigra reticulata. High full R²; **largest prior** among well-sampled regions after VCO; strong stim and top-tier stim×prior. BG output with concurrent prior + prior-gated stim. |
+| VCO | 141 | 5 | **0.041** | 0.0049 | 0.0037 | **0.0192** | **0.0057** | 1.17 | 0.5 | Ventral cochlear / related; **highest stim×prior and prior**, highest full R² — but only 5 insertions. Flag as **strongest modulation candidate** pending more coverage. |
+| VPL | 436 | 24 | 0.019 | 0.0035 | 0.0032 | 0.0071 | 0.0030 | 0.86 | 1.0 | Ventral posterolateral thalamus. Textbook mixed: stim≈choice under prior; stim×prior ≈ stim. Sensory-adjacent thalamic prior gating of early stim. |
+| VeCB | 70 | 6 | 0.018 | 0.0017 | 0.0019 | 0.0084 | 0.0027 | **1.65** | 0.5 | Vestibulocerebellum; **low n**. Weak stim/choice mains but stim×prior > both (highest ratio) — almost all early “stim” variance looks interaction-shaped; interpret cautiously. |
+
+**Takeaways for Goal 1**
+
+1. **Prior main ≫ stim×prior ≈ stim unique** across mixed regions in 0–80 ms — early activity is prior-rich; asking whether stim is prior-modulated is well-posed and generally **yes at a modest R² scale**.
+2. **Cerebellar / RF cluster** (SIM, IP, CENT2, GRN, PGRN, VeCB, VCO): stim×prior often **≥** unique stim → early stim encoding looks contingent on act prior.
+3. **Midbrain motor (MRN, SCm)** and **PRNc**: clearer additive stim with mid-strength interaction (s×p/stim ~0.6–0.7).
+4. **PF** is the clear **stim-additive** exception (interaction tiny vs stim).
+5. **CP / VPL / CUL4 5**: balanced mixed without extreme gating.
+6. Caveats: means are descriptive (no neuron-level null yet); FN/LING/VeCB/VCO are thin on insertions; regtype 1.0 vs 0.5 does not cleanly separate modulation strength.
+
+**Next (optional):** insertion- or neuron-level null on `R²_stim×prior`; compare `--prior-type block`; plot region means ± SEM from stacked npy.
