@@ -3262,14 +3262,15 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
     pre_t = 0.0
     post_t = float(window[1] - window[0])
     stim_on = trials['stimOn_times'].to_numpy(dtype=float)
-    # Bin only target-region clusters (not the full probe).
+    # Bin all clusters then slice to targets (same pattern as get_crf_slope /
+    # get_d_vars). Passing a subset of cluster_ids into bin_spikes2D causes
+    # shape-mismatch failures on some insertions.
     bi, _ = bin_spikes2D(
         spikes['times'],
         clusters['cluster_id'][spikes['clusters']],
-        cluster_ids,
+        clusters['cluster_id'],
         stim_on, pre_t, post_t, post_t)
-    # rates in spikes/s over the window; columns already match cluster_ids
-    R = (bi[:, :, 0] / post_t).astype(float)
+    R = (bi[:, :, 0][:, good][:, keep_reg] / post_t).astype(float)
 
     r2_full = _ols_r2_multi(X_full, R)
     r2_add = _ols_r2_multi(X_add, R)

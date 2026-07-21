@@ -5,8 +5,8 @@
 #
 # Runtime estimate (cache present, ~700 BWM insertions, mixed 19 regions):
 #   Local smoke ≈ 0.5–1 s/insertion compute; ORCD FS load often 2–10 s.
-#   Single job ≈ 0.5–2 h → borderline for 2 h walltime → default N_SHARDS=4
-#   (~10–30 min/shard typical; --time=2:00:00 headroom).
+#   Single job ≈ 0.5–2 h → use N_SHARDS=4 with --time=1:00:00
+#   (~10–30 min/shard typical; 1 h headroom).
 #
 #   bash scripts/submit_var_partition_sharded.sh
 #   N_SHARDS=2 bash scripts/submit_var_partition_sharded.sh
@@ -43,7 +43,7 @@ echo "ONE_CACHE_DIR=$ONE_CACHE_DIR"
 
 echo "N_SHARDS=$N_SHARDS  TARGET=$TARGET  WINDOW=$WINDOW  PRIOR_TYPE=$PRIOR_TYPE  RESTART=$RESTART"
 echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  REGTYPE_CSV=$REGTYPE_CSV"
-echo "Estimate: ~700 insertions / $N_SHARDS shards; walltime 2h/shard"
+echo "Estimate: ~700 insertions / $N_SHARDS shards; walltime 1h/shard"
 echo "NOTE: RESTART=1 skips existing manifold/var_partition/*.npy — delete those"
 echo "      first if re-running after prior_type/window changes."
 
