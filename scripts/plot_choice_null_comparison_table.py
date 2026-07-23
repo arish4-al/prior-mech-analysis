@@ -384,7 +384,11 @@ def main():
     suffix = args.arm_split_suffix
     tag_aliases = {
         'pseudosession': '_pseudosession',
-        'actkernel': '_pseudosession',  # legacy alias
+        'actkernel': '_pseudosession',  # legacy unconstrained
+        'pseudo_strat': '_pseudo_strat',
+        'strat': '_pseudo_strat',
+        'pseudo_fixed': '_pseudo_fixed',
+        'fixedstim': '_pseudo_fixed',
         'harris': '_harris',
     }
     if not suffix and args.arm_tag in tag_aliases:

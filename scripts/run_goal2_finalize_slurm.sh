@@ -11,11 +11,7 @@
 #SBATCH -o goal2_finalize_%x_%j.out
 
 # Merge stream_acc shards → manifold/res/{split}*.npy
-# Loads all shard checkpoints into memory; default 10G (was 16G/32G).
-# Submitters override via --mem= (see submit_goal2_stimOn_act_sharded.sh).
-#
-#   SPLIT=act_block_duringstim_l sbatch --export=ALL,SPLIT --job-name=g2_fin_dstim_l \
-#     scripts/run_goal2_finalize_slurm.sh
+# Env: SPLIT, SESSION_SHUFFLE_NULL, ACTKERNEL_CHOICE_NULL, ACTKERNEL_NULL_MODE
 
 set -euo pipefail
 
@@ -30,21 +26,33 @@ SPLIT="${SPLIT:?Set SPLIT=}"
 EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
 SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
 ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
+ACTKERNEL_NULL_MODE="${ACTKERNEL_NULL_MODE:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT exclude_sticky=$EXCLUDE_STICKY_TRIALS session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL"
+echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT"
+echo "exclude_sticky=$EXCLUDE_STICKY_TRIALS session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 ARGS=(--finalize-only --splits "$SPLIT")
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(--exclude-sticky-trials)
 [[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
 [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
+[[ -n "$ACTKERNEL_NULL_MODE" ]] && ARGS+=(--actkernel-null-mode "$ACTKERNEL_NULL_MODE")
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
 SUFFIX=""
-[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_pseudosession"
-[[ "$SESSION_SHUFFLE_NULL" == "1" && "$ACTKERNEL_CHOICE_NULL" != "1" ]] && SUFFIX="_harris"
+if [[ -n "$ACTKERNEL_NULL_MODE" ]]; then
+  case "$ACTKERNEL_NULL_MODE" in
+    strat) SUFFIX=_pseudo_strat ;;
+    fixedstim) SUFFIX=_pseudo_fixed ;;
+    unconstrained) SUFFIX=_pseudosession ;;
+  esac
+elif [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
+  SUFFIX=_pseudo_strat
+elif [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
+  SUFFIX=_harris
+fi
 ls -lh "$RES_ROOT/${SPLIT}${SUFFIX}"*.npy 2>/dev/null || true

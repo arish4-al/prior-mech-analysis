@@ -483,17 +483,31 @@ pth_stream_acc.mkdir(parents=True, exist_ok=True)
 RES_FILE_SUFFIX = ''
 
 
-def configure_null_file_suffix(actkernel_choice_null=False, session_shuffle_null=False):
+# ActionKernel choice-null modes (journal 2026-07-23b options 1–2).
+ACTKERNEL_NULL_MODES = ('strat', 'fixedstim', 'unconstrained')
+_ACTKERNEL_MODE_SUFFIX = {
+    'strat': '_pseudo_strat',
+    'fixedstim': '_pseudo_fixed',
+    'unconstrained': '_pseudosession',  # legacy calendar-index into full pseudo
+}
+
+
+def configure_null_file_suffix(
+        actkernel_choice_null=False, session_shuffle_null=False,
+        actkernel_null_mode=None):
     '''Tag pooled / stream_acc filenames by null scheme; shuffle keeps plain names.
 
-    - ``--actkernel-choice-null`` → ``{split}_pseudosession*.npy``
-      (BWM pseudo stim/blocks + ActionKernel choices)
-    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy``
-    - default label shuffle → ``{split}*.npy`` (unchanged)
+    - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (opt 1)
+    - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy`` (opt 2)
+    - AK ``unconstrained`` → ``{split}_pseudosession*.npy`` (legacy)
+    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy`` (opt 3)
+    - default label shuffle → ``{split}*.npy``
     '''
     global RES_FILE_SUFFIX
-    if actkernel_choice_null:
-        RES_FILE_SUFFIX = '_pseudosession'
+    mode = _resolve_actkernel_null_mode(
+        actkernel_choice_null, actkernel_null_mode)
+    if mode is not None:
+        RES_FILE_SUFFIX = _ACTKERNEL_MODE_SUFFIX[mode]
     elif session_shuffle_null:
         RES_FILE_SUFFIX = '_harris'
     else:
@@ -502,6 +516,20 @@ def configure_null_file_suffix(actkernel_choice_null=False, session_shuffle_null
         print(f'null-tagged file suffix: *{{split}}{RES_FILE_SUFFIX}*.npy '
               f'(stream_acc + res pooled)')
     return RES_FILE_SUFFIX
+
+
+def _resolve_actkernel_null_mode(actkernel_choice_null, actkernel_null_mode):
+    '''Return strat|fixedstim|unconstrained or None if AK null is off.'''
+    if actkernel_null_mode is not None and str(actkernel_null_mode).strip():
+        mode = str(actkernel_null_mode).strip().lower()
+        if mode not in ACTKERNEL_NULL_MODES:
+            raise ValueError(
+                f'actkernel_null_mode must be one of {ACTKERNEL_NULL_MODES}, '
+                f'got {actkernel_null_mode!r}')
+        return mode
+    if actkernel_choice_null:
+        return 'strat'  # option 1 default (fixes unconstrained imbalance bug)
+    return None
 
 
 def output_split_name(split):
@@ -587,31 +615,111 @@ def get_actkernel_choice_fit(eid, trials, nb_steps=None):
     return fit
 
 
-def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
-                                max_tries=HARRIS_MAX_TRIES):
+def _choice_lr_stratum_targets(split):
+    '''Return (stim_is_left: bool|None, pleft: float|None) for a choice L–R split.'''
+    stim_is_left = None
+    if 'stim_l' in split:
+        stim_is_left = True
+    elif 'stim_r' in split:
+        stim_is_left = False
+    pleft = None
+    if 'block_l' in split:
+        pleft = 0.8
+    elif 'block_r' in split:
+        pleft = 0.2
+    return stim_is_left, pleft
+
+
+def _stratum_mask_stim_pleft(stim_side, pleft, split):
+    '''Boolean mask: trials matching split's stim×prior stratum.
+
+    ``stim_side`` in {-1, +1} (IBL: -1 left); ``pleft`` in {0.2, 0.8, ...}.
     '''
-    BWM-style ActionKernel null labels: draw a pseudo-session (new stim/blocks
-    via ``generate_pseudo_session``), simulate choices under fitted θ, then
-    read choices at the recipient's stratified trial indices ``elig_idx``.
+    stim_is_left, p_target = _choice_lr_stratum_targets(split)
+    stim_side = np.asarray(stim_side, dtype=float)
+    pleft = np.asarray(pleft, dtype=float)
+    mask = np.ones(len(stim_side), dtype=bool)
+    if stim_is_left is True:
+        mask &= stim_side < 0
+    elif stim_is_left is False:
+        mask &= stim_side > 0
+    if p_target is not None:
+        mask &= np.isclose(pleft, p_target)
+    return mask
+
+
+def _ys_from_stratum_choices(choice, stratum_mask, n_elig, rng):
+    '''Length-``n_elig`` boolean L labels from temporally ordered stratum trials.
+
+    If more than ``n_elig`` stratum trials, take a contiguous window (random
+    start) to preserve local temporal structure. Returns None if too few.
+    '''
+    if rng is None:
+        rng = np.random.default_rng()
+    choice = np.asarray(choice, dtype=float).reshape(-1)
+    idx = np.flatnonzero(np.asarray(stratum_mask, dtype=bool))
+    if len(idx) < n_elig:
+        return None
+    if len(idx) > n_elig:
+        start = int(rng.integers(0, len(idx) - n_elig + 1))
+        idx = idx[start:start + n_elig]
+    return choice[idx] == 1
+
+
+def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
+                                max_tries=HARRIS_MAX_TRIES,
+                                mode='unconstrained', split=None):
+    '''
+    Draw one ActionKernel null label vector on eligible trials.
+
+    ``mode``:
+      - ``unconstrained``: pseudo session; labels at calendar ``elig_idx``
+      - ``strat``: pseudo session; labels from stim×prior stratum on the pseudo
+      - ``fixedstim``: choices on real stim/side; labels at ``elig_idx``
     '''
     def _ok(ys):
-        return (int(ys.sum()) >= min_trials_per_side
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
                 and int((~ys).sum()) >= min_trials_per_side)
 
     syn = _syn()
     theta = fit['params'] if isinstance(fit, dict) else fit
     elig_idx = np.asarray(elig_idx, dtype=int)
+    n_elig = len(elig_idx)
+    sim_model = fit.get('sim_model') if isinstance(fit, dict) else None
+    if rng is None:
+        rng = np.random.default_rng()
+
+    last_ys = None
     for _ in range(max_tries):
-        seed = None if rng is None else int(rng.integers(0, 2**31 - 1))
-        ps = syn.make_synthetic_session(trials, theta, seed=seed)
-        ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
-        ys = ch[elig_idx] == 1
+        seed = int(rng.integers(0, 2**31 - 1))
+        if mode == 'fixedstim':
+            out = syn.synthetic_choices_fixed_stim(
+                trials, params=theta, n=1, seed=seed, model=sim_model)
+            ch = np.asarray(out['choice'], dtype=float).reshape(-1)
+            ys = ch[elig_idx] == 1
+        elif mode == 'strat':
+            ps = syn.make_synthetic_session(trials, theta, seed=seed)
+            ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
+            side = np.asarray(ps['stim_side'], dtype=float).reshape(-1)
+            if 'act' in (split or ''):
+                _, p_strat = action_kernel_priors(alpha, list(ch))
+            elif 'bayes' in (split or ''):
+                _, p_strat = bayesian_priors(side < 0)
+            else:
+                p_strat = np.asarray(ps['probabilityLeft'], dtype=float)
+            mask = _stratum_mask_stim_pleft(side, p_strat, split)
+            ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
+        else:
+            ps = syn.make_synthetic_session(trials, theta, seed=seed)
+            ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
+            ys = ch[elig_idx] == 1
+        last_ys = ys
         if _ok(ys):
             return ys
-    seed = None if rng is None else int(rng.integers(0, 2**31 - 1))
-    ps = syn.make_synthetic_session(trials, theta, seed=seed)
-    ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
-    return ch[elig_idx] == 1
+    # Do not silently fall back to unconstrained elig_idx for strat — that
+    # reintroduces the n_L/n_R imbalance bug. Caller must reject None / !_ok.
+    return last_ys
 
 
 def _stream_acc_path(split, shard=None):
@@ -967,29 +1075,11 @@ def load_choice_donor_bank():
 
 
 
-def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
-                      max_tries=HARRIS_MAX_TRIES, rng=None):
-    """
-    Harris-style null labels: take another session's **full** choice sequence
-    and read choices at the recipient's stratified trial indices ``elig_idx``.
-
-    Stratification (stim×prior) is applied only on the real session to define
-    which trial numbers enter the neural tensor; the donor is not re-stratified.
-    """
-    if rng is None:
-        rng = np.random.default_rng()
-    elif isinstance(rng, np.random.RandomState):
-        rng = np.random.default_rng(rng.randint(0, 2**31 - 1))
-
+def _harris_donor_candidates(elig_idx, donor_bank, eid):
+    '''Donors long enough to index ``elig_idx`` (excludes recipient eid).'''
     eid = str(eid)
     elig_idx = np.asarray(elig_idx, dtype=int)
-    n_elig = len(elig_idx)
-    need = int(elig_idx.max()) + 1 if n_elig else 0
-
-    def _ok(ys):
-        return (int(ys.sum()) >= min_trials_per_side
-                and int((~ys).sum()) >= min_trials_per_side)
-
+    need = int(elig_idx.max()) + 1 if len(elig_idx) else 0
     candidates = []
     for e, rec in (donor_bank or {}).items():
         if str(e) == eid:
@@ -997,35 +1087,44 @@ def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
         ch = _normalize_donor_rec(rec)['choice']
         if len(ch) >= need:
             candidates.append(np.asarray(ch, dtype=float))
+    return candidates, need
 
-    warned = False
+
+def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
+                      max_tries=HARRIS_MAX_TRIES, rng=None,
+                      candidates=None):
+    """
+    Harris-style null labels: take another session's **full** choice sequence
+    and read choices at the recipient's stratified trial indices ``elig_idx``.
+
+    Stratification (stim×prior) is applied only on the real session to define
+    which trial numbers enter the neural tensor; the donor is not re-stratified.
+
+    Returns None if no usable donor or no balanced draw within ``max_tries``
+    (no circular-shift / observed-label fallback).
+    """
+    del choices_true  # kept for call-site back-compat; never used as fallback
+    if rng is None:
+        rng = np.random.default_rng()
+    elif isinstance(rng, np.random.RandomState):
+        rng = np.random.default_rng(rng.randint(0, 2**31 - 1))
+
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    if candidates is None:
+        candidates, _need = _harris_donor_candidates(elig_idx, donor_bank, eid)
+    if not candidates:
+        return None
+
+    def _ok(ys):
+        return (int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
     for _ in range(max_tries):
-        if candidates:
-            ch = candidates[int(rng.integers(0, len(candidates)))]
-            cand = ch[elig_idx]
-        else:
-            if not warned:
-                print('harris-null: no donor with len≥'
-                      f'{need}; circular-shift own eligible choices')
-                warned = True
-            if choices_true is None or n_elig <= 1:
-                cand = np.asarray(choices_true, dtype=float) if choices_true is not None else np.ones(n_elig)
-            else:
-                cand = np.roll(np.asarray(choices_true, dtype=float),
-                               int(rng.integers(1, n_elig)))
-        ys = cand == 1
+        ch = candidates[int(rng.integers(0, len(candidates)))]
+        ys = ch[elig_idx] == 1
         if _ok(ys):
             return ys
-
-    if choices_true is not None and n_elig > 1:
-        for _ in range(max_tries):
-            ys = np.roll(np.asarray(choices_true, dtype=float),
-                         int(rng.integers(1, n_elig))) == 1
-            if _ok(ys):
-                return ys
-    if choices_true is not None:
-        return np.asarray(choices_true, dtype=float) == 1
-    return np.zeros(n_elig, dtype=bool)
+    return None
 
 
 def _compute_control_D_harris(
@@ -1038,6 +1137,9 @@ def _compute_control_D_harris(
     Observed distance uses real choices on stim×prior–eligible trials.
     Each null draw indexes another session's full choice sequence at the same
     ``elig_idx`` trial numbers (no donor-side stratification).
+
+    If there are no long-enough donors, or ``nrand`` balanced draws cannot be
+    obtained, raises ``InsufficientTrials`` (insertion skipped upstream).
     """
     choices_true = np.asarray(choices_true, dtype=float)
     ys_true = choices_true == 1
@@ -1071,25 +1173,42 @@ def _compute_control_D_harris(
 
     eid = str(eid)
     elig_idx = np.asarray(elig_idx, dtype=int)
-    need = int(elig_idx.max()) + 1 if len(elig_idx) else 0
-    n_ok = sum(
-        1 for e, rec in (donor_bank or {}).items()
-        if str(e) != eid and len(_normalize_donor_rec(rec)['choice']) >= need)
-    print(f'harris-null [{split}]: {n_ok} donors with len≥{need} '
+    candidates, need = _harris_donor_candidates(elig_idx, donor_bank, eid)
+    print(f'harris-null [{split}]: {len(candidates)} donors with len≥{need} '
           f'(elig={len(elig_idx)})')
+    if not candidates:
+        raise InsufficientTrials(
+            f'harris-null [{split}]: no donor with len≥{need}; '
+            f'skipping insertion (no circular-shift fallback)')
+
+    def _ok(ys):
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
 
     rng = np.random.default_rng()
-    for batch_start in range(0, nrand, null_batch_size):
-        batch_end = min(batch_start + null_batch_size, nrand)
-        for _ in range(batch_start, batch_end):
-            ys = _sample_harris_ys(
-                elig_idx, donor_bank, eid, choices_true=choices_true, rng=rng)
-            label_perms.append(ys)
-            _append_perm(
-                b[ys].mean(axis=0), b[~ys].mean(axis=0),
-                b[ys].var(axis=0), b[~ys].var(axis=0),
-                ys,
-            )
+    n_done = 0
+    n_tries = 0
+    max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
+    while n_done < nrand:
+        ys = _sample_harris_ys(
+            elig_idx, donor_bank, eid, rng=rng, candidates=candidates,
+            max_tries=1)
+        n_tries += 1
+        if not _ok(ys):
+            if n_tries >= max_tries_total:
+                raise InsufficientTrials(
+                    f'harris-null [{split}]: only {n_done}/{nrand} balanced '
+                    f'donor draws after {n_tries} tries '
+                    f'({len(candidates)} donors); skipping insertion')
+            continue
+        label_perms.append(ys)
+        _append_perm(
+            b[ys].mean(axis=0), b[~ys].mean(axis=0),
+            b[ys].var(axis=0), b[~ys].var(axis=0),
+            ys,
+        )
+        n_done += 1
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
@@ -1106,17 +1225,20 @@ def _compute_control_D_harris(
 
 def _compute_control_D_actkernel_choice(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
-        trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE):
+        trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
+        actkernel_null_mode='strat'):
     '''
-    BWM-style ActionKernel synthetic-session nulls.
+    ActionKernel synthetic-choice nulls (journal options 1–2 + legacy).
 
-    Fit ActionKernel once on the real session. Each null draw regenerates a
-    pseudo stim/block stream (``generate_pseudo_session``) and simulates
-    choices under the fitted θ (``synthetic_sessions_from_trials`` /
-    ``make_synthetic_session``). Null labels for neural ``b`` are those
-    synthetic choices at the real session's stratified ``elig_idx`` (same
-    indexing pattern as Harris).
+    Fit ActionKernel once on the real session. Null labels for neural ``b``:
+
+    - ``strat``: new pseudo stim/blocks + AK choices; take choices from the
+      pseudo's stim×prior stratum (length-matched to ``elig_idx``).
+    - ``fixedstim``: AK choices on the real stim/side stream; labels at
+      ``elig_idx``.
+    - ``unconstrained``: legacy — pseudo choices at calendar ``elig_idx``.
     '''
+    mode = _resolve_actkernel_null_mode(True, actkernel_null_mode)
     choices_true = np.asarray(choices_true, dtype=float)
     ys_true = choices_true == 1
     m0_true = b[ys_true].mean(axis=0)
@@ -1149,12 +1271,14 @@ def _compute_control_D_actkernel_choice(
 
     fit = get_actkernel_choice_fit(eid, trials)
     elig_idx = np.asarray(elig_idx, dtype=int)
-    print(f'actkernel-choice [{split}]: BWM pseudo-session null; '
+    n_elig = len(elig_idx)
+    print(f'actkernel-choice [{split}]: mode={mode}; '
           f'fit mode={fit.get("mode")} '
           f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
 
     def _ok(ys):
-        return (int(ys.sum()) >= min_trials_per_side
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
                 and int((~ys).sum()) >= min_trials_per_side)
 
     syn = _syn()
@@ -1162,18 +1286,43 @@ def _compute_control_D_actkernel_choice(
     seed_base = int(rng.integers(0, 2**31 - 1))
     n_done = 0
     gen_offset = 0
-    # Batch-generate BWM synthetic sessions; reject draws with too few L/R
-    # on elig_idx (same min_trials_per_side gate as other structured nulls).
+    sim_model = fit.get('sim_model')
+    theta = fit['params']
+
     while n_done < nrand:
         need = nrand - n_done
         n_gen = max(need, min(null_batch_size, need + max(need // 5, 5)))
-        out = syn.synthetic_sessions_from_trials(
-            trials, n=n_gen, eid=str(eid), subject='bwm',
-            params=fit['params'], seed=seed_base + gen_offset, fast=True)
+        if mode == 'fixedstim':
+            out = syn.synthetic_choices_fixed_stim(
+                trials, params=theta, n=n_gen,
+                seed=seed_base + gen_offset, model=sim_model)
+            ch_mat = np.asarray(out['choice'], dtype=float)
+            if ch_mat.ndim == 1:
+                ch_mat = ch_mat[None, :]
+            side_mat = pleft_mat = None
+        else:
+            out = syn.synthetic_sessions_from_trials(
+                trials, n=n_gen, eid=str(eid), subject='bwm',
+                params=theta, seed=seed_base + gen_offset, fast=True)
+            ch_mat = np.asarray(out['choice'], dtype=float)
+            side_mat = np.asarray(out['stim_side'], dtype=float)
+            pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
         gen_offset += n_gen
-        ch_mat = np.asarray(out['choice'], dtype=float)
-        for i in range(n_gen):
-            ys = ch_mat[i, elig_idx] == 1
+
+        for i in range(ch_mat.shape[0]):
+            if mode == 'strat':
+                ch = ch_mat[i]
+                side = side_mat[i]
+                if 'act' in split:
+                    _, p_strat = action_kernel_priors(alpha, list(ch))
+                elif 'bayes' in split:
+                    _, p_strat = bayesian_priors(side < 0)
+                else:
+                    p_strat = pleft_mat[i]
+                mask = _stratum_mask_stim_pleft(side, p_strat, split)
+                ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
+            else:
+                ys = ch_mat[i, elig_idx] == 1
             if not _ok(ys):
                 continue
             label_perms.append(ys)
@@ -1185,24 +1334,21 @@ def _compute_control_D_actkernel_choice(
             n_done += 1
             if n_done >= nrand:
                 break
-        if n_gen > 0 and n_done < nrand and gen_offset > nrand * 20:
-            # Pathological: fall back to single-draw sampler with circular shift.
-            print('WARNING: actkernel BWM null: too many rejected draws; '
-                  'falling back to per-draw make_synthetic_session')
-            while n_done < nrand:
-                ys = _sample_actkernel_choice_ys(
-                    elig_idx, trials, fit, rng=rng)
-                label_perms.append(ys)
-                _append_perm(
-                    b[ys].mean(axis=0), b[~ys].mean(axis=0),
-                    b[ys].var(axis=0), b[~ys].var(axis=0),
-                    ys,
-                )
-                n_done += 1
-            break
+        # No sampler / unconstrained fallback: skip insertion if acceptance
+        # rate is too low to fill nrand (logged as split skip upstream).
+        if n_done < nrand and gen_offset > nrand * 20:
+            raise InsufficientTrials(
+                f'actkernel {mode} null [{split}]: only {n_done}/{nrand} '
+                f'balanced draws after {gen_offset} synthetic sessions; '
+                f'skipping insertion')
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
+    scheme = {
+        'strat': 'synthetic_choice_pseudo_strat',
+        'fixedstim': 'synthetic_choice_pseudo_fixed',
+        'unconstrained': 'synthetic_choice_pseudosession',
+    }[mode]
     return {
         'acs': acs,
         'acs1': acs1,
@@ -1211,7 +1357,8 @@ def _compute_control_D_actkernel_choice(
         'ws': np.array([m0_true, m1_true])[:ntravis],
         'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
         'D': D,
-        'null_scheme': 'synthetic_choice_pseudosession',
+        'null_scheme': scheme,
+        'actkernel_null_mode': mode,
         'actkernel_fit_mode': fit.get('mode'),
         'actkernel_params': np.asarray(fit['params'], dtype=float),
     }
@@ -1239,7 +1386,8 @@ def _bin_spike_events(spikes, clusters, events, split):
 
 def _get_d_vars_session_shuffle(
         split, trials, spikes, clusters, mapping, control, nrand,
-        null_batch_size, donor_bank, eid, actkernel_choice_null=False):
+        null_batch_size, donor_bank, eid, actkernel_choice_null=False,
+        actkernel_null_mode=None):
     '''
     Choice L vs R under fixed stim (± prior/block), with structured nulls.
 
@@ -1247,8 +1395,9 @@ def _get_d_vars_session_shuffle(
     eligible trial indices and the neural tensor ``b``. Observed distance uses
     real choices on those trials. Nulls:
 
-    - ``actkernel_choice_null``: BWM-style ActionKernel pseudo-sessions
-      (new stim/blocks + choices under fitted θ); labels at ``elig_idx``.
+    - ``actkernel_choice_null``: ActionKernel synthetic-choice nulls
+      (``strat`` / ``fixedstim`` / ``unconstrained``; see
+      ``_compute_control_D_actkernel_choice``).
     - else (Harris): index another eid's full choice sequence at the same
       ``elig_idx`` trial numbers (no donor-side stratification).
     '''
@@ -1285,7 +1434,9 @@ def _get_d_vars_session_shuffle(
     events_all = trials[alignment].to_numpy()[elig_idx]
     n_left = int(np.sum(choices_true == 1))
     n_right = int(np.sum(choices_true == -1))
-    null_tag = ('actkernel-choice null' if actkernel_choice_null
+    ak_mode = _resolve_actkernel_null_mode(
+        actkernel_choice_null, actkernel_null_mode)
+    null_tag = (f'actkernel-choice null ({ak_mode})' if ak_mode
                 else 'harris session-permutation null')
     print('#trials per condition: ', n_left, n_right,
           f'(eligible={len(elig_idx)}, {null_tag})')
@@ -1314,18 +1465,19 @@ def _get_d_vars_session_shuffle(
     b = b[:, goodcells, :]
 
     if control:
-        if actkernel_choice_null:
+        if ak_mode is not None:
             return _compute_control_D_actkernel_choice(
                 b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
                 trials=trials, elig_idx=elig_idx, eid=eid,
                 null_batch_size=null_batch_size,
+                actkernel_null_mode=ak_mode,
             )
         if not donor_bank:
-            print('WARNING: empty donor_bank; harris-null falls back to '
-                  'circular shifts of own eligible choices')
+            raise InsufficientTrials(
+                f'harris-null [{split}]: empty donor_bank; skipping insertion')
         return _compute_control_D_harris(
             b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
-            donor_bank=donor_bank or {}, eid=eid, elig_idx=elig_idx,
+            donor_bank=donor_bank, eid=eid, elig_idx=elig_idx,
             null_batch_size=null_batch_size,
         )
 
@@ -1628,6 +1780,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                null_batch_size=NULL_BATCH_SIZE, donor_bank=None,
                session_shuffle_null=False,
                actkernel_choice_null=False,
+               actkernel_null_mode=None,
                exclude_sticky_trials=False,
                sticky_late_frac=STICKY_LATE_FRAC,
                sticky_min_run=STICKY_MIN_RUN):
@@ -1641,10 +1794,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     the time-efficient path. When None, loads from ONE as before (identical result).
 
     ``actkernel_choice_null``: if True and split is choice_stim* /
-    choice_duringstim*, use BWM-style ActionKernel synthetic-session nulls
-    (``synthetic_sessions_from_trials`` / ``make_synthetic_session``: new
-    pseudo stim/blocks + choices under fitted θ; null labels at real
-    ``elig_idx``). Takes precedence over session_shuffle_null.
+    choice_duringstim*, use ActionKernel synthetic-choice nulls. Mode via
+    ``actkernel_null_mode`` (default ``strat``: new pseudo + stim×prior
+    stratum labels; also ``fixedstim``, ``unconstrained``). Takes precedence
+    over session_shuffle_null.
 
     ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
     use literal Harris session-permutation nulls: stratify stim×prior only on
@@ -1718,12 +1871,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             raise InsufficientTrials('no trials left after sticky exclusion')
 
     # Structured nulls for choice L–R: actkernel / Harris session-permutation.
-    if ((actkernel_choice_null or session_shuffle_null)
+    ak_on = _resolve_actkernel_null_mode(
+        actkernel_choice_null, actkernel_null_mode) is not None
+    if ((ak_on or session_shuffle_null)
             and is_choice_lr_split(split)):
         D = _get_d_vars_session_shuffle(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid,
-            actkernel_choice_null=bool(actkernel_choice_null))
+            actkernel_choice_null=bool(actkernel_choice_null),
+            actkernel_null_mode=actkernel_null_mode)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
@@ -2648,6 +2804,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              shard_idx=None, n_shards=None, finalize=True,
                              session_shuffle_null=False,
                              actkernel_choice_null=False,
+                             actkernel_null_mode=None,
                              exclude_sticky_trials=False,
                              sticky_late_frac=STICKY_LATE_FRAC,
                              sticky_min_run=STICKY_MIN_RUN):
@@ -2685,9 +2842,12 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     '''
     if exclude_sticky_trials:
         configure_excl_sticky_output_dirs()
+    ak_mode = _resolve_actkernel_null_mode(
+        actkernel_choice_null, actkernel_null_mode)
     configure_null_file_suffix(
         actkernel_choice_null=actkernel_choice_null,
-        session_shuffle_null=session_shuffle_null and not actkernel_choice_null,
+        session_shuffle_null=session_shuffle_null and ak_mode is None,
+        actkernel_null_mode=actkernel_null_mode,
     )
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
@@ -2711,23 +2871,24 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
           'shard', shard_idx, '/', n_shards, 'finalize', finalize,
           'session_shuffle_null', session_shuffle_null,
           'actkernel_choice_null', actkernel_choice_null,
+          'actkernel_null_mode', actkernel_null_mode,
           'exclude_sticky_trials', exclude_sticky_trials)
 
     donor_bank = None
     use_donor = (session_shuffle_null
-                 and not actkernel_choice_null
+                 and ak_mode is None
                  and any(is_choice_lr_split(sp) for sp in splits_list))
     if use_donor:
         donor_bank = load_choice_donor_bank()
         print(f'harris donor bank: {len(donor_bank)} eids')
-    elif session_shuffle_null and not actkernel_choice_null:
+    elif session_shuffle_null and ak_mode is None:
         print('WARNING: --session-shuffle-null set but no choice_stim*/'
               'choice_duringstim* splits in list')
-    elif actkernel_choice_null and any(
+    elif ak_mode is not None and any(
             is_choice_lr_split(sp) for sp in splits_list):
-        print('actkernel BWM synthetic-session null enabled for choice L–R splits')
-    elif actkernel_choice_null:
-        print('WARNING: --actkernel-choice-null set but no choice_stim*/'
+        print(f'actkernel null mode={ak_mode} enabled for choice L–R splits')
+    elif ak_mode is not None:
+        print('WARNING: actkernel null set but no choice_stim*/'
               'choice_duringstim* splits in list')
 
     if eids_plus is None:
@@ -2787,6 +2948,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                                 donor_bank=donor_bank,
                                 session_shuffle_null=session_shuffle_null,
                                 actkernel_choice_null=actkernel_choice_null,
+                                actkernel_null_mode=actkernel_null_mode,
                                 exclude_sticky_trials=exclude_sticky_trials,
                                 sticky_late_frac=sticky_late_frac,
                                 sticky_min_run=sticky_min_run)

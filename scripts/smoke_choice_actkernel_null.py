@@ -1,18 +1,13 @@
 #!/usr/bin/env python
 """
-Smoke-test BWM-style ActionKernel synthetic-session nulls.
+Smoke-test ActionKernel choice nulls (strat / fixedstim / unconstrained).
 
-Runs get_d_vars with --actkernel-choice-null on the first insertion_cache
-entry that has enough trials for a choice_stim* / choice_duringstim* split.
+Runs get_d_vars on the first insertion_cache entry that works for a
+choice_stim* / choice_duringstim* split.
 
-Uses a short MCMC (ACTKERNEL_NB_STEPS, default 80) so the fit finishes
-quickly; short fits write under a separate actkernel_fits/*_nbN dir and do
-not overwrite paper-length pickles.
-
-  conda activate iblenv   # needs torch; behavior_models from third_party/ submodule
-  # fresh clone: git submodule update --init --recursive
+  conda activate iblenv
   python scripts/smoke_choice_actkernel_null.py
-  ONE_CACHE_DIR=/orcd/data/.../alyx SMOKE_NRAND=8 ACTKERNEL_NB_STEPS=50 \\
+  ACTKERNEL_NULL_MODE=fixedstim SMOKE_NRAND=8 \\
     python scripts/smoke_choice_actkernel_null.py
 """
 from __future__ import annotations
@@ -31,15 +26,28 @@ if str(ROOT) not in sys.path:
 import block_analysis_allsplits as ba  # noqa: E402
 
 SPLITS = [
+    # Prefer production act splits (preset choice_lr_session_null_all).
+    'choice_stim_l_block_l_act', 'choice_stim_r_block_r_act',
+    'choice_duringstim_l_block_l_act', 'choice_duringstim_r_block_r_act',
     'choice_stim_l', 'choice_stim_r',
     'choice_stim_l_block_l', 'choice_stim_l_block_r',
     'choice_duringstim_l', 'choice_duringstim_r',
 ]
 
+EXPECTED_SCHEME = {
+    'strat': 'synthetic_choice_pseudo_strat',
+    'fixedstim': 'synthetic_choice_pseudo_fixed',
+    'unconstrained': 'synthetic_choice_pseudosession',
+}
+
 
 def main():
-    # Short MCMC for smoke only (separate pickle path via get_actkernel_choice_fit).
     os.environ.setdefault('ACTKERNEL_NB_STEPS', '80')
+    mode = os.environ.get('ACTKERNEL_NULL_MODE', 'strat').strip().lower()
+    if mode not in EXPECTED_SCHEME:
+        raise SystemExit(
+            f'ACTKERNEL_NULL_MODE must be one of {list(EXPECTED_SCHEME)}, '
+            f'got {mode!r}')
 
     cache = Path(os.environ.get(
         'ONE_CACHE_DIR',
@@ -55,7 +63,7 @@ def main():
         raise SystemExit('No insertion_cache/*.npy')
 
     nrand = int(os.environ.get('SMOKE_NRAND', '8'))
-    print(f'actkernel smoke: nrand={nrand} '
+    print(f'actkernel smoke: mode={mode} nrand={nrand} '
           f'ACTKERNEL_NB_STEPS={os.environ.get("ACTKERNEL_NB_STEPS")}',
           flush=True)
 
@@ -68,7 +76,8 @@ def main():
             try:
                 D = ba.get_d_vars(
                     split, pid, control=True, nrand=nrand, cached=c,
-                    actkernel_choice_null=True)
+                    actkernel_choice_null=True,
+                    actkernel_null_mode=mode)
             except ba.InsufficientTrials as exc:
                 print(f'  skip {fpath.name} {split}: {exc}', flush=True)
                 continue
@@ -76,12 +85,13 @@ def main():
                 print(f'  fail {fpath.name} {split}: {type(exc).__name__}: {exc}',
                       flush=True)
                 continue
-            if not isinstance(D, dict) or D.get('null_scheme') != (
-                    'synthetic_choice_pseudosession'):
+            want = EXPECTED_SCHEME[mode]
+            if not isinstance(D, dict) or D.get('null_scheme') != want:
                 raise SystemExit(
                     f'Unexpected return for {split}: '
-                    f'{D.get("null_scheme") if isinstance(D, dict) else type(D)}')
-            print(f'OK {split} eid={eid}', flush=True)
+                    f'{D.get("null_scheme") if isinstance(D, dict) else type(D)} '
+                    f'(want {want})')
+            print(f'OK {split} eid={eid} mode={mode}', flush=True)
             print(f'  null_scheme={D["null_scheme"]} '
                   f'n_regs={len(D.get("D", {}))} uperms={D.get("uperms")}',
                   flush=True)
