@@ -45,6 +45,6 @@ python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
 SUFFIX=""
-[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_actkernel"
+[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_pseudosession"
 [[ "$SESSION_SHUFFLE_NULL" == "1" && "$ACTKERNEL_CHOICE_NULL" != "1" ]] && SUFFIX="_harris"
 ls -lh "$RES_ROOT/${SPLIT}${SUFFIX}"*.npy 2>/dev/null || true

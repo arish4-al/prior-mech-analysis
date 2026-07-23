@@ -486,13 +486,14 @@ RES_FILE_SUFFIX = ''
 def configure_null_file_suffix(actkernel_choice_null=False, session_shuffle_null=False):
     '''Tag pooled / stream_acc filenames by null scheme; shuffle keeps plain names.
 
-    - ``--actkernel-choice-null`` → ``{split}_actkernel*.npy``
+    - ``--actkernel-choice-null`` → ``{split}_pseudosession*.npy``
+      (BWM pseudo stim/blocks + ActionKernel choices)
     - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy``
     - default label shuffle → ``{split}*.npy`` (unchanged)
     '''
     global RES_FILE_SUFFIX
     if actkernel_choice_null:
-        RES_FILE_SUFFIX = '_actkernel'
+        RES_FILE_SUFFIX = '_pseudosession'
     elif session_shuffle_null:
         RES_FILE_SUFFIX = '_harris'
     else:
@@ -1210,7 +1211,7 @@ def _compute_control_D_actkernel_choice(
         'ws': np.array([m0_true, m1_true])[:ntravis],
         'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
         'D': D,
-        'null_scheme': 'synthetic_choice_actkernel',
+        'null_scheme': 'synthetic_choice_pseudosession',
         'actkernel_fit_mode': fit.get('mode'),
         'actkernel_params': np.asarray(fit['params'], dtype=float),
     }
@@ -1344,7 +1345,7 @@ def _get_d_vars_session_shuffle(
         'd_eucs': d_euc,
         'ws': ws[:ntravis],
         'null_scheme': (
-            'synthetic_choice_actkernel' if actkernel_choice_null
+            'synthetic_choice_pseudosession' if actkernel_choice_null
             else 'harris_session_permutation'),
     }
 

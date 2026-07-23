@@ -77,7 +77,7 @@ def main():
                       flush=True)
                 continue
             if not isinstance(D, dict) or D.get('null_scheme') != (
-                    'synthetic_choice_actkernel'):
+                    'synthetic_choice_pseudosession'):
                 raise SystemExit(
                     f'Unexpected return for {split}: '
                     f'{D.get("null_scheme") if isinstance(D, dict) else type(D)}')

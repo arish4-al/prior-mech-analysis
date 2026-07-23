@@ -79,7 +79,7 @@ def combine_four_splits(
     """Sum regde across splits (same as d_var_stacked_multi combine) → amp/p_euc.
 
     ``split_suffix`` is appended to each split basename on disk
-    (e.g. ``_actkernel`` → ``choice_stim_l_block_l_act_actkernel_regde.npy``).
+    (e.g. ``_pseudosession`` → ``choice_stim_l_block_l_act_pseudosession_regde.npy``).
     Combined output names also include the suffix so they do not overwrite
     label-shuffle combines.
     """
@@ -371,7 +371,7 @@ def main():
                     help='Short label for second arm (column / file names)')
     ap.add_argument('--arm-split-suffix', default='',
                     help='On-disk suffix for arm split files '
-                         '(e.g. _actkernel or _harris; empty = plain shuffle names)')
+                         '(e.g. _pseudosession or _harris; empty = plain shuffle names)')
     ap.add_argument('--out-prefix', default=None,
                     help='Filename prefix under meta/ (default: table_choice_{tag}_vs_shuffle)')
     ap.add_argument('--meta-dir', type=Path, default=_default_meta())
@@ -382,13 +382,18 @@ def main():
     arm_res = args.excl_res if args.excl_res is not None else args.arm_res
     # Infer suffix from tag if not set
     suffix = args.arm_split_suffix
-    if not suffix and args.arm_tag in ('actkernel', 'harris'):
-        suffix = f'_{args.arm_tag}'
+    tag_aliases = {
+        'pseudosession': '_pseudosession',
+        'actkernel': '_pseudosession',  # legacy alias
+        'harris': '_harris',
+    }
+    if not suffix and args.arm_tag in tag_aliases:
+        suffix = tag_aliases[args.arm_tag]
     build_comparison_table(
         openalyx_res=args.openalyx_res,
         arm_res=arm_res,
         meta_dir=args.meta_dir,
-        arm_tag=args.arm_tag,
+        arm_tag=('pseudosession' if args.arm_tag == 'actkernel' else args.arm_tag),
         ptype=args.ptype,
         alpha=args.alpha,
         force_combine=args.force_combine,

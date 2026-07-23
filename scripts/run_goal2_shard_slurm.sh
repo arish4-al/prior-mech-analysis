@@ -71,6 +71,6 @@ echo "Shard done: $(date)"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
 SUFFIX=""
-[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_actkernel"
+[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_pseudosession"
 [[ "$SESSION_SHUFFLE_NULL" == "1" && "$ACTKERNEL_CHOICE_NULL" != "1" ]] && SUFFIX="_harris"
 ls -lh "$RES_ROOT/_stream_acc/${SPLIT}${SUFFIX}.shard${SHARD_IDX}.npy" 2>/dev/null || true

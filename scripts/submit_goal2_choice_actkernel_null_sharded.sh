@@ -118,8 +118,8 @@ done
 
 echo "Done. Monitor: squeue -u \$USER"
 echo "Null scheme: BWM ActionKernel synthetic sessions when ACTKERNEL_CHOICE_NULL=1"
-echo "Pooled filenames: {split}_actkernel*.npy (label shuffle stays {split}*.npy)"
+echo "Pooled filenames: {split}_pseudosession*.npy (label shuffle stays {split}*.npy)"
 echo "Smoke (optional): scripts/smoke_choice_actkernel_null.py"
-echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}_actkernel.shard{k}.npy"
-echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}_actkernel.npy"
+echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}_pseudosession.shard{k}.npy"
+echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}_pseudosession.npy"
 echo "Fits cache: \$ONE_CACHE_DIR/manifold/actkernel_fits/"
