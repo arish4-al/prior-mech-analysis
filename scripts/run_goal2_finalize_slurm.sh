@@ -28,16 +28,23 @@ export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbra
 
 SPLIT="${SPLIT:?Set SPLIT=}"
 EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
+SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
+ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT exclude_sticky=$EXCLUDE_STICKY_TRIALS"
+echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT exclude_sticky=$EXCLUDE_STICKY_TRIALS session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 ARGS=(--finalize-only --splits "$SPLIT")
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(--exclude-sticky-trials)
+[[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
+[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
-ls -lh "$RES_ROOT/${SPLIT}"*.npy 2>/dev/null || true
+SUFFIX=""
+[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_pseudosession"
+[[ "$SESSION_SHUFFLE_NULL" == "1" && "$ACTKERNEL_CHOICE_NULL" != "1" ]] && SUFFIX="_harris"
+ls -lh "$RES_ROOT/${SPLIT}${SUFFIX}"*.npy 2>/dev/null || true

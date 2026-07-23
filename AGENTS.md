@@ -47,3 +47,9 @@ Source: [research_journal_2026-06-18.md](journals/research_journal_2026-06-18.md
 - When journaling: check out / work on `develop`; put new files in `journals/`.
 - `main` is for code/scripts needed to run analyses (e.g. ORCD); keep journals off it.
 - If asked to start a journal while on `main`, switch to `develop` first (or warn the user).
+
+### Git — no commits/pushes without approval
+
+- **Do not** `git commit` or `git push` unless the user explicitly asks in that turn.
+- Cursor rule: `.cursor/rules/git-commits-require-approval.mdc` (always applied).
+- When porting code to `main` for ORCD, prepare the change and wait for approval before committing.

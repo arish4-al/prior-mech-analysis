@@ -51,7 +51,7 @@ Continuation of [2026-07-12 Goal 2](research_journal_2026-07-12.md). Primary str
 
 ### 2026-07-21 — Goal 3: `scripts/simulate_synthetic_choices.py` audit + wiring
 
-**Source:** user-added [`scripts/simulate_synthetic_choices.py`](../scripts/simulate_synthetic_choices.py) (wraps IBL [`behavior_models`](https://github.com/int-brain-lab/behavior_models) `ActionKernel`). Package is a **git submodule** at [`third_party/behavior_models`](../third_party/behavior_models) (path-prepended); remote Slurm only needs the repo checkout + `torch` in conda — not a cluster `pip install`. Init: `git submodule update --init --recursive`.
+**Source:** user-added [`scripts/simulate_synthetic_choices.py`](../scripts/simulate_synthetic_choices.py) (wraps IBL [`behavior_models`](https://github.com/int-brain-lab/behavior_models) `ActionKernel`). Package is a **git submodule** at [`third_party/behavior_models`](../third_party/behavior_models) (path-prepended); remote Slurm needs the repo checkout + **`torch`** and **`sobol_seq`** in conda (MCMC init) — not a cluster `pip install behavior_models`. Init: `git submodule update --init --recursive`.
 
 | API | Keeps real stim/block? | Use for our choice L–R null? |
 |-----|------------------------|------------------------------|
@@ -59,12 +59,59 @@ Continuation of [2026-07-12 Goal 2](research_journal_2026-07-12.md). Primary str
 | `fit_action_kernel` + `simulate_choices(stim, side, params)` | **Yes** — if you pass the real session's stim/side | Available helper; **not** the wired null |
 | `synthetic_choices_fixed_stim` (added) | **Yes** — thin wrapper of the above | Available helper; **not** the wired null |
 
-**Null path wired (2026-07-23 update):** `--actkernel-choice-null` → fit ActionKernel once per eid (MCMC under `manifold/actkernel_fits/`), then for each null draw generate a **BWM synthetic session** (new stim/blocks + choices under fitted θ via `synthetic_sessions_from_trials`); null labels for neural `b` are those choices at the real session’s stratified `elig_idx`. Tag: `null_scheme: synthetic_choice_actkernel`.
+**Null path wired (2026-07-23 update):** `--actkernel-choice-null` → tag
+`null_scheme: synthetic_choice_pseudosession`. Ported to **`main`** for ORCD
+(`152d0af`; submodule init required).
 
-Rationale for regenerating stim (vs fixing the real stream): the action-kernel prior is updated from the stimulus-conditioned choice process; holding the recorded stim schedule couples the null choices to the same sensory sequence that drove the neural tensor. The paper’s null is meant to be behaviour under a **fresh** task schedule with the animal’s fitted policy — so regenerating stim/blocks is the correct analogue of Harris “other session’s behaviour,” with unlimited Monte Carlo draws.
+#### Steps for `synthetic_choice_pseudosession` (per insertion × choice L–R split)
+
+1. **Load / prepare trials** (same as other choice L–R paths): insertion cache →
+   trials; apply act/bayes prior overwrite if the split name asks for it; optional
+   `--exclude-sticky-trials` trim.
+2. **Stratify on the real session only** (stim side ± block/prior from the split
+   name) → eligible trial indices `elig_idx`. Bin spikes on those trials → neural
+   tensor `b` (rows = eligible trials). Observed choices =
+   `trials.choice[elig_idx]`.
+3. **Observed distance:** split `b` by real L vs R choices; region distances as usual
+   (true permutation index 0 in `D[reg]['d_*']`).
+4. **Fit ActionKernel once per `eid`** (`get_actkernel_choice_fit`): MCMC on the
+   **real** session’s choice / stim / side → posterior-mean
+   \(\hat{\bm\theta}=[\hat\alpha,\hat\zeta,\widehat{\mathrm{lapse}}_+,\widehat{\mathrm{lapse}}_-]\).
+   Pickle under `manifold/actkernel_fits/` (shared across probes of the same eid).
+5. **For each of `nrand` null draws** (`synthetic_sessions_from_trials`, BWM paper):
+   - Draw a **new** pseudo stim/block schedule (`generate_pseudo_session` /
+     vectorized equivalent) of the same length as the real session.
+   - Simulate a full-session choice sequence under \(\hat{\bm\theta}\)
+     (`ActionKernel.simulate` / `simulate_parallel`) — prior updates from the
+     **simulated** choices on that fake stim stream.
+   - Null labels for neural data: `ys = (synthetic_choice[elig_idx] == 1)` —
+     same trial numbers as the real stratification; **do not** re-stratify by
+     the pseudo stim.
+   - Reject draws with &lt; `min_trials_per_side` L or R on `elig_idx`; keep
+     sampling until `nrand` valid draws.
+   - Recompute region distances on fixed `b` under those labels (null distribution).
+6. **Pool / p-values** as for other control runs (`uperms` counts unique label
+   patterns).
+
+**What is frozen vs resampled**
+
+| Piece | Real / observed | Under null |
+|-------|-----------------|------------|
+| Neural `b` | fixed (real spikes @ real `elig_idx`) | fixed |
+| Which trial indices | stim×prior stratification on **real** session | same `elig_idx` |
+| Stim / block stream | real (only for defining `elig_idx` + fit) | **new** pseudo each draw |
+| Choices | real | simulated under \(\hat{\bm\theta}\) on pseudo stim |
+| \(\bm\theta\) | fitted once on real session | held fixed |
+
+Rationale for regenerating stim (vs fixing the real stream): the paper’s choice null
+is behaviour under a **fresh** task schedule with the animal’s fitted policy.
+Holding the recorded stim would couple null choices to the same sensory sequence
+that drove `b`. Indexing at real `elig_idx` keeps the neural tensor aligned while
+still allowing unlimited Monte Carlo draws (unlike Harris’s finite donor bank).
 
 ```bash
 conda activate iblenv   # needs torch; behavior_models from third_party/ submodule
+# fresh clone: git submodule update --init --recursive
 python scripts/run_goal2_splits.py --preset choice_lr_session_null_all \
   --actkernel-choice-null --nrand 200
 # shards:
@@ -73,18 +120,72 @@ python scripts/run_goal2_splits.py --preset choice_lr_session_null_all \
 #   python scripts/smoke_choice_actkernel_null.py
 ```
 
-**Smoke (2026-07-23):** `scripts/smoke_choice_actkernel_null.py` on local insertion_cache → `null_scheme=synthetic_choice_actkernel` (`choice_stim_l`, short MCMC `ACTKERNEL_NB_STEPS=40`). Submitter: `scripts/submit_goal2_choice_actkernel_null_sharded.sh` (`ACTKERNEL_CHOICE_NULL=1`, optional `SMOKE_FIRST=1`).
+**Smoke (2026-07-23):** `scripts/smoke_choice_actkernel_null.py` on local
+insertion_cache → `null_scheme=synthetic_choice_pseudosession` (`choice_stim_l`,
+short MCMC `ACTKERNEL_NB_STEPS=40`). Same smoke also passed on `main` after the
+ORCD port. Submitter: `scripts/submit_goal2_choice_actkernel_null_sharded.sh`
+(`ACTKERNEL_CHOICE_NULL=1`, optional `SMOKE_FIRST=1`).
 
-**Next:** compare null width / p-values vs `--session-shuffle-null` (Harris) and label shuffle; cache fits carefully (MCMC is slow on first eid).
+**Next:** compare null width / p-values vs `--session-shuffle-null` (Harris) and
+label shuffle; first eid MCMC is slow (later probes reuse the pickle).
 
-**To be resolved:** currently act-prior labels for analysis use a **fixed** `α=0.2` via `action_kernel_priors` on each session’s choice sequence (same α everywhere), then results are pooled into the supersession. Should we instead run `fit_action_kernel` **per session** (MCMC → session-specific `α`, and optionally the full `[α, ζ, lapse±]`), recompute that session’s continuous/binary act priors from the fitted kernel, and **only then** pool into the supersession for all act-conditioned analyses?
+**To be resolved:** currently act-prior labels for analysis use a **fixed**
+`α=0.2` via `action_kernel_priors` on each session’s choice sequence (same α
+everywhere), then results are pooled into the supersession. Should we instead run
+`fit_action_kernel` **per session** (MCMC → session-specific `α`, and optionally
+the full `[α, ζ, lapse±]`), recompute that session’s continuous/binary act priors
+from the fitted kernel, and **only then** pool into the supersession for all
+act-conditioned analyses?
 
-### 2026-07-20 — Revised Goal 3 (0% choice-conditioned) tables
+### 2026-07-23 — Choice L–R actkernel ORCD run: **invalid** (missing `sobol_seq`)
 
-BWM finalize landed in `alyx.../manifold/res/new/`. Combined choice-L + choice-R
-gain/offset tables at FDR α=0.05 / 0.01: see
-[07-06 §2026-07-20](research_journal_2026-07-06.md). Brief: **2**/185 regions
-(MRN, SCm) at α=0.05 (offset-driven); **0** at α=0.01.
+Default submitter preset `choice_lr_session_null_all` **does** include all 8 act
+splits (duringchoice `choice_stim_*` + duringstim `choice_duringstim_*`).
+
+**Failure:** every insertion failed with `No module named 'sobol_seq'` (ActionKernel
+MCMC init in `behavior_models`). Shard logs e.g.
+`goal2_shard_g2ak_choice_stim_r_block_l_act_s0_*.out`: `ok 0/1 splits`,
+`MISSING shard …/choice_stim_…shard0.npy`. Duringstim shards failed the same way
+(confirmed). Pooled `*_pseudosession*` files under local `res/new` are **not** a
+successful BWM null run — duringchoice mtimes are **Jul 14** (old, renamed);
+duringstim Jul 23 finalize had nothing usable from this null.
+
+**Deps for re-run (ibl conda on ORCD):** `torch` + **`pip install sobol_seq`**
+(plus usual numpy/pandas/scipy/tqdm/iblutil/brainbox). `joblib` /
+`paper-brain-wide-map` not required for our path. Clear
+`manifold/actkernel_fits/` and failed `res/_stream_acc/choice_*` /
+stale `res/choice_*_pseudosession*.npy` before resubmitting; then smoke
+(`SMOKE_FIRST=1` or `scripts/smoke_choice_actkernel_null.py`).
+
+**Filename tagging (code):** pooled / stream_acc append null suffix; label shuffle
+stays plain.
+
+| Null | On-disk basename |
+|------|------------------|
+| label shuffle (default) | `{split}.npy` / `{split}_regde.npy` |
+| `--actkernel-choice-null` (BWM pseudo-sessions) | `{split}_pseudosession.npy` / `_regde` / stream `{split}_pseudosession.shard{k}.npy` |
+| `--session-shuffle-null` (Harris) | `{split}_harris.npy` / … |
+
+Tag: `null_scheme: synthetic_choice_pseudosession`.
+
+**Invalid comparison tables (do not trust):** earlier FDR/retention numbers vs
+openalyx shuffle used those broken/renamed `res/new` choice files. Sibling arms
+in the same `res/new` folder (`act_block_duringstim_*`, `stim_block_*_bayes`)
+retain ~62–63k cells / ~207–209 regions (match last-year openalyx) — same
+dataset is fine; only the failed choice L–R actkernel pool looked “short.”
+Re-plot after a clean ORCD re-run:
+
+```bash
+conda activate iblenv
+python scripts/plot_choice_null_comparison_table.py \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag pseudosession --force-combine --alpha 0.05
+```
+
+**ORCD:** sync `_pseudosession` suffix code onto `main`; finalize must export
+`ACTKERNEL_CHOICE_NULL=1`. BWM gain/offset tables at FDR α=0.05 / 0.01 (separate
+from this null): [07-06 §2026-07-20](research_journal_2026-07-06.md) — **2**/185
+(MRN, SCm) at α=0.05; **0** at α=0.01.
 
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 

@@ -1,0 +1,12 @@
+---
+description: Never commit or push without explicit user approval
+alwaysApply: true
+---
+
+# Git commits and pushes — approval required
+
+- **Never** create a git commit unless the user explicitly asks to commit in that message (or a standing user rule they reaffirm).
+- **Never** `git push` (or force-push) unless the user explicitly asks to push.
+- Drafting a commit message or staging for review is fine when asked; do **not** run `git commit` or `git push` proactively after finishing a task.
+- If unclear whether to commit, ask first.
+- This overrides any impulse to “finish” work by committing onto `main` / `develop` without approval.
