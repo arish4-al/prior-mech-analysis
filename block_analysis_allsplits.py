@@ -473,10 +473,43 @@ ba = AllenAtlas()
 br = BrainRegions()
 
 # save results for plotting here
-pth_res = Path(one.cache_dir, 'manifold', 'res') 
+pth_res = Path(one.cache_dir, 'manifold', 'res')
 pth_res.mkdir(parents=True, exist_ok=True)
 pth_stream_acc = pth_res / '_stream_acc'
 pth_stream_acc.mkdir(parents=True, exist_ok=True)
+
+# Appended to on-disk basenames for structured choice nulls ('' = label shuffle).
+# Logical split names used in analysis are unchanged.
+RES_FILE_SUFFIX = ''
+
+
+def configure_null_file_suffix(actkernel_choice_null=False, session_shuffle_null=False):
+    '''Tag pooled / stream_acc filenames by null scheme; shuffle keeps plain names.
+
+    - ``--actkernel-choice-null`` → ``{split}_actkernel*.npy``
+    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy``
+    - default label shuffle → ``{split}*.npy`` (unchanged)
+    '''
+    global RES_FILE_SUFFIX
+    if actkernel_choice_null:
+        RES_FILE_SUFFIX = '_actkernel'
+    elif session_shuffle_null:
+        RES_FILE_SUFFIX = '_harris'
+    else:
+        RES_FILE_SUFFIX = ''
+    if RES_FILE_SUFFIX:
+        print(f'null-tagged file suffix: *{{split}}{RES_FILE_SUFFIX}*.npy '
+              f'(stream_acc + res pooled)')
+    return RES_FILE_SUFFIX
+
+
+def output_split_name(split):
+    '''Logical split → on-disk basename (adds RES_FILE_SUFFIX if set).'''
+    if not RES_FILE_SUFFIX:
+        return split
+    if str(split).endswith(RES_FILE_SUFFIX):
+        return split
+    return f'{split}{RES_FILE_SUFFIX}'
 
 # null shuffles processed in batches inside get_d_vars (control=True) to cap RAM
 NULL_BATCH_SIZE = 100
@@ -581,15 +614,20 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
 
 
 def _stream_acc_path(split, shard=None):
-    '''Checkpoint path. shard=None → {split}.npy; else {split}.shard{k}.npy.'''
+    '''Checkpoint path. shard=None → {split}.npy; else {split}.shard{k}.npy.
+
+    ``split`` may be logical; ``RES_FILE_SUFFIX`` is applied for on-disk names.
+    '''
+    name = output_split_name(split)
     if shard is None:
-        return pth_stream_acc / f'{split}.npy'
-    return pth_stream_acc / f'{split}.shard{int(shard)}.npy'
+        return pth_stream_acc / f'{name}.npy'
+    return pth_stream_acc / f'{name}.shard{int(shard)}.npy'
 
 
 def _stream_acc_shard_paths(split):
     '''All existing shard checkpoint files for a split (sorted by shard index).'''
-    paths = sorted(pth_stream_acc.glob(f'{split}.shard*.npy'))
+    name = output_split_name(split)
+    paths = sorted(pth_stream_acc.glob(f'{name}.shard*.npy'))
     return paths
 
 
@@ -2244,7 +2282,7 @@ class SplitPoolAccumulator:
             self.regdv0, self.regde0, self.min_reg, save=save,
         )
         if save and cleanup_checkpoint:
-            final = Path(pth_res, f'{self.split}.npy')
+            final = Path(pth_res, f'{output_split_name(self.split)}.npy')
             if final.exists():
                 for path in [_stream_acc_path(self.split)] + _stream_acc_shard_paths(self.split):
                     if path.exists():
@@ -2389,12 +2427,13 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
         all_result['n_regions'] = len(regde0)
 
     if save:
-        np.save(Path(pth_res, f'{split}.npy'), r, allow_pickle=True)
-        np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
-        np.save(Path(pth_res, f'{split}_all.npy'), all_result, allow_pickle=True)
+        out_base = output_split_name(split)
+        np.save(Path(pth_res, f'{out_base}.npy'), r, allow_pickle=True)
+        np.save(Path(pth_res, f'{out_base}_regde.npy'), regde, allow_pickle=True)
+        np.save(Path(pth_res, f'{out_base}_all.npy'), all_result, allow_pickle=True)
         if all_regde is not None:
             np.save(
-                Path(pth_res, f'{split}_all_regde.npy'),
+                Path(pth_res, f'{out_base}_all_regde.npy'),
                 all_regde,
                 allow_pickle=True,
             )
@@ -2645,6 +2684,10 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     '''
     if exclude_sticky_trials:
         configure_excl_sticky_output_dirs()
+    configure_null_file_suffix(
+        actkernel_choice_null=actkernel_choice_null,
+        session_shuffle_null=session_shuffle_null and not actkernel_choice_null,
+    )
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
     if (shard_idx is None) ^ (n_shards is None):
@@ -3648,9 +3691,10 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
 
     # Process each split as before, and pool for combined
     for split in splits:
-        if (Path(pth_res, f'{split}.npy').exists()
-                and Path(pth_res, f'{split}_regde.npy').exists()):
-            print(f'Skipping {split}: already finalized in res/')
+        out = output_split_name(split)
+        if (Path(pth_res, f'{out}.npy').exists()
+                and Path(pth_res, f'{out}_regde.npy').exists()):
+            print(f'Skipping {split}: already finalized in res/ as {out}')
             continue
         print(f"Processing split: {split}")
         pth = Path(one.cache_dir, 'manifold', split)
@@ -3731,9 +3775,10 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
             r[reg] = res
             
         # Save regde for this split
-        np.save(Path(pth_res, f'{split}_regde.npy'), regde, allow_pickle=True)
-        np.save(Path(pth_res, f'{split}_regxn.npy'), regxn, allow_pickle=True)
-        np.save(Path(pth_res, f'{split}.npy'), r, allow_pickle=True)
+        out = output_split_name(split)
+        np.save(Path(pth_res, f'{out}_regde.npy'), regde, allow_pickle=True)
+        np.save(Path(pth_res, f'{out}_regxn.npy'), regxn, allow_pickle=True)
+        np.save(Path(pth_res, f'{out}.npy'), r, allow_pickle=True)
 
     if uperms_:
         return all_uperms
@@ -3743,7 +3788,8 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
     combined_regxn = {}
     for split in splits:
         # Euclidean aggregation
-        split_regde_file = Path(pth_res, f"{split}_regde.npy")
+        out = output_split_name(split)
+        split_regde_file = Path(pth_res, f"{out}_regde.npy")
         if split_regde_file.exists():
             split_regde = np.load(split_regde_file, allow_pickle=True).item()
             for reg, curves in split_regde.items():
@@ -3753,7 +3799,7 @@ def d_var_stacked_multi(splits, min_reg=min_reg, uperms_=False):
                     combined_regde[reg][0] += curves[0]
                     combined_regde[reg][1] += np.array(curves[1:])
         # Crossnobis aggregation
-        split_regxn_file = Path(pth_res, f"{split}_regxn.npy")
+        split_regxn_file = Path(pth_res, f"{out}_regxn.npy")
         if split_regxn_file.exists():
             split_regxn = np.load(split_regxn_file, allow_pickle=True).item()
             for reg, curves in split_regxn.items():
@@ -3888,7 +3934,8 @@ if __name__ == '__main__':
 
     # Pool across insertions per split / split-group (skip splits already finalized).
     for split in intertrial_splits:
-        if not Path(pth_res, f'{split}.npy').exists():
+        out = output_split_name(split)
+        if not Path(pth_res, f'{out}.npy').exists():
             d_var_stacked(split)
     for timeframe, splits in run_align.items():
         d_var_stacked_multi(splits)

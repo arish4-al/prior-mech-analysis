@@ -298,13 +298,20 @@ def main():
     if args.finalize_only:
         if args.exclude_sticky_trials:
             ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
+        ba.configure_null_file_suffix(
+            actkernel_choice_null=args.actkernel_choice_null,
+            session_shuffle_null=(
+                args.session_shuffle_null and not args.actkernel_choice_null),
+        )
         print('ONE cache:', ba.one.cache_dir)
-        print('Finalize splits:', splits, 'res=', ba.pth_res)
+        print('Finalize splits:', splits, 'res=', ba.pth_res,
+              'suffix=', repr(ba.RES_FILE_SUFFIX))
         for sp in splits:
             ba.finalize_stream_shards(sp)
+            out = ba.output_split_name(sp)
             for name in (
-                f'{sp}.npy', f'{sp}_regde.npy',
-                f'{sp}_all.npy', f'{sp}_all_regde.npy',
+                f'{out}.npy', f'{out}_regde.npy',
+                f'{out}_all.npy', f'{out}_all_regde.npy',
             ):
                 fp = ba.pth_res / name
                 tag = 'OK' if fp.exists() else 'MISSING'
@@ -329,6 +336,12 @@ def main():
     if args.exclude_sticky_trials:
         ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
 
+    ba.configure_null_file_suffix(
+        actkernel_choice_null=args.actkernel_choice_null,
+        session_shuffle_null=(
+            args.session_shuffle_null and not args.actkernel_choice_null),
+    )
+
     # bycontrast=False: contrast is read from the split name (..._0.125).
     ba.get_all_d_vars_allsplits(
         splits,
@@ -349,12 +362,14 @@ def main():
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,
     )
-    print('Done. Outputs under:', ba.pth_res)
+    print('Done. Outputs under:', ba.pth_res,
+          'suffix=', repr(ba.RES_FILE_SUFFIX))
     if finalize:
         for sp in splits:
+            out = ba.output_split_name(sp)
             for name in (
-                f'{sp}.npy', f'{sp}_regde.npy',
-                f'{sp}_all.npy', f'{sp}_all_regde.npy',
+                f'{out}.npy', f'{out}_regde.npy',
+                f'{out}_all.npy', f'{out}_all_regde.npy',
             ):
                 fp = ba.pth_res / name
                 if fp.exists():
@@ -363,7 +378,7 @@ def main():
                     print(f'  MISSING {fp}')
     elif args.n_shards is not None:
         for sp in splits:
-            fp = ba.pth_stream_acc / f'{sp}.shard{args.shard_idx}.npy'
+            fp = ba.pth_stream_acc / f'{ba.output_split_name(sp)}.shard{args.shard_idx}.npy'
             if fp.exists():
                 print(f'  OK shard {fp} ({fp.stat().st_size/1e6:.1f} MB)')
             else:

@@ -111,14 +111,15 @@ for sp in "${SPLITS[@]}"; do
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2ak_fin_${TAG}" \
-    --export=ALL,SPLIT="$sp" \
+    --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
     scripts/run_goal2_finalize_slurm.sh)
   echo "  $sp finalize -> $FID (after $DEP)"
 done
 
 echo "Done. Monitor: squeue -u \$USER"
 echo "Null scheme: BWM ActionKernel synthetic sessions when ACTKERNEL_CHOICE_NULL=1"
+echo "Pooled filenames: {split}_actkernel*.npy (label shuffle stays {split}*.npy)"
 echo "Smoke (optional): scripts/smoke_choice_actkernel_null.py"
-echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}.shard{k}.npy"
-echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}.npy"
+echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}_actkernel.shard{k}.npy"
+echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}_actkernel.npy"
 echo "Fits cache: \$ONE_CACHE_DIR/manifold/actkernel_fits/"

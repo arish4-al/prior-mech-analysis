@@ -109,13 +109,14 @@ for sp in "${SPLITS[@]}"; do
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2_fin_${TAG}" \
-    --export=ALL,SPLIT="$sp" \
+    --export=ALL,SPLIT="$sp",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
     scripts/run_goal2_finalize_slurm.sh)
   echo "  $sp finalize -> $FID (after $DEP)"
 done
 
 echo "Done. Monitor: squeue -u \$USER"
 echo "Null scheme: Harris session-permutation when SESSION_SHUFFLE_NULL=1"
+echo "Pooled filenames: {split}_harris*.npy (label shuffle stays {split}*.npy)"
 echo "Donor bank job (compute node): scripts/run_goal2_choice_donors_slurm.sh"
-echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}.shard{k}.npy"
-echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}.npy"
+echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}_harris.shard{k}.npy"
+echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}_harris.npy"
