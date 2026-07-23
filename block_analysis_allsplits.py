@@ -480,15 +480,104 @@ pth_stream_acc.mkdir(parents=True, exist_ok=True)
 
 # null shuffles processed in batches inside get_d_vars (control=True) to cap RAM
 NULL_BATCH_SIZE = 100
-# Retries per null draw when transplanting donor choices (empty side / short donor).
-SESSION_SHUFFLE_MAX_TRIES = 50
-# Retries per null draw when sampling synthetic sticky choices (empty side).
-SYNTHETIC_CHOICE_MAX_TRIES = 50
+# Retries per null draw when indexing donor session choices (empty side / short donor).
+HARRIS_MAX_TRIES = 50
+SESSION_SHUFFLE_MAX_TRIES = HARRIS_MAX_TRIES  # back-compat alias
 # Trial exclusion for drift×stickiness sensitivity (choice L–R).
 STICKY_LATE_FRAC = 0.20
 STICKY_MIN_RUN = 10
-# Per-process cache: (eid, prior_tag) → sticky-choice fit params.
-_sticky_choice_fit_cache = {}
+# Per-process cache: eid → ActionKernel fit (params + reusable sim model).
+_actkernel_choice_fit_cache = {}
+
+# scripts/simulate_synthetic_choices.py (user-added ActionKernel wrapper).
+def _load_syn_choices():
+    import importlib.util
+    from pathlib import Path as _Path
+    path = _Path(__file__).resolve().parent / 'scripts' / 'simulate_synthetic_choices.py'
+    spec = importlib.util.spec_from_file_location(
+        'simulate_synthetic_choices', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_syn_choices = None
+
+
+def _syn():
+    global _syn_choices
+    if _syn_choices is None:
+        _syn_choices = _load_syn_choices()
+    return _syn_choices
+
+
+def _actkernel_model_dir():
+    '''Cache fitted ActionKernel pickles under the ONE manifold root.'''
+    root = Path(getattr(one, 'cache_dir', Path.home() / 'Downloads' / 'ONE'))
+    d = root / 'manifold' / 'actkernel_fits'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_actkernel_choice_fit(eid, trials, nb_steps=None):
+    '''Fit ActionKernel once per eid (MCMC); cache under manifold/actkernel_fits/.
+
+    ``nb_steps`` overrides package default. If unset, ``ACTKERNEL_NB_STEPS`` env
+    is honored (for short smoke fits). Short-step fits use a separate pickle
+    directory so they do not overwrite paper-length MCMC caches.
+    '''
+    import os
+    if nb_steps is None and os.environ.get('ACTKERNEL_NB_STEPS'):
+        nb_steps = int(os.environ['ACTKERNEL_NB_STEPS'])
+    key = str(eid)
+    cache_key = f'{key}:nb={nb_steps}' if nb_steps is not None else key
+    if cache_key in _actkernel_choice_fit_cache:
+        return _actkernel_choice_fit_cache[cache_key]
+    syn = _syn()
+    tag = key.replace('-', '')[:8]
+    if nb_steps is not None:
+        tag = f'{tag}_nb{int(nb_steps)}'
+    model, params = syn.fit_action_kernel(
+        trials, eid=key, subject='bwm',
+        model_dir=_actkernel_model_dir() / tag,
+        nb_steps=nb_steps)
+    fit = {
+        'eid': key,
+        'params': np.asarray(params, dtype=float),
+        'mode': 'mcmc',
+        'nb_steps': nb_steps,
+        'model': model,
+        'sim_model': syn._sim_model(),
+    }
+    _actkernel_choice_fit_cache[cache_key] = fit
+    return fit
+
+
+def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
+                                max_tries=HARRIS_MAX_TRIES):
+    '''
+    BWM-style ActionKernel null labels: draw a pseudo-session (new stim/blocks
+    via ``generate_pseudo_session``), simulate choices under fitted θ, then
+    read choices at the recipient's stratified trial indices ``elig_idx``.
+    '''
+    def _ok(ys):
+        return (int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    syn = _syn()
+    theta = fit['params'] if isinstance(fit, dict) else fit
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    for _ in range(max_tries):
+        seed = None if rng is None else int(rng.integers(0, 2**31 - 1))
+        ps = syn.make_synthetic_session(trials, theta, seed=seed)
+        ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
+        ys = ch[elig_idx] == 1
+        if _ok(ys):
+            return ys
+    seed = None if rng is None else int(rng.integers(0, 2**31 - 1))
+    ps = syn.make_synthetic_session(trials, theta, seed=seed)
+    ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
+    return ch[elig_idx] == 1
 
 
 def _stream_acc_path(split, shard=None):
@@ -768,60 +857,14 @@ def _normalize_donor_rec(rec):
     }
 
 
-def _donor_choice_stream(rec, split):
-    '''
-    Contiguous-capable choice subsequence matching this split's stim×block
-    eligibility (same rules as ``_get_d_vars_session_shuffle``).
-
-    For act/bayes splits, block labels are recomputed on the donor from its
-    own action kernel / Bayes prior (not the recipient's).
-
-    Legacy bank entries (choice array only) return empty → circular-shift fallback.
-    '''
-    rec = _normalize_donor_rec(rec)
-    if rec.get('_legacy'):
-        return np.array([], dtype=float)
-
-    choice = rec['choice']
-    stim_is_left = rec['stim_is_left']
-    pleft = rec['pleft_true']
-
-    if 'stim_l' in split:
-        stim_ok = stim_is_left
-    elif 'stim_r' in split:
-        stim_ok = ~stim_is_left
-    else:
-        stim_ok = np.ones(len(choice), dtype=bool)
-
-    if 'block_l' in split:
-        p_target = 0.8
-    elif 'block_r' in split:
-        p_target = 0.2
-    else:
-        p_target = None
-
-    if p_target is not None:
-        if 'act' in split:
-            _, pleft = action_kernel_priors(alpha, list(choice))
-            pleft = np.asarray(pleft, dtype=float)
-        elif 'bayes' in split:
-            _, pleft = bayesian_priors(stim_is_left)
-            pleft = np.asarray(pleft, dtype=float)
-        block_ok = np.isclose(pleft, p_target)
-    else:
-        block_ok = np.ones(len(choice), dtype=bool)
-
-    return choice[stim_ok & block_ok]
-
-
 def build_choice_donor_bank(restart=True):
     '''
     Scan manifold/insertion_cache for unique-eid trial metadata.
 
     Saved to manifold/choice_donors.npy as
-    ``{eid: {choice, stim_is_left, pleft_true}}`` so session-permutation
-    nulls can transplant **stim×block–matched** choice subsequences
-    (true / act / bayes block labels resolved at sample time).
+    ``{eid: {choice, stim_is_left, pleft_true}}``. Harris nulls use the full
+    ``choice`` sequence indexed by the recipient's stratified trial numbers;
+    stim/pleft fields remain for diagnostics / legacy tools.
     '''
     path = _choice_donors_path()
     if restart and path.exists():
@@ -884,300 +927,79 @@ def load_choice_donor_bank():
     return build_choice_donor_bank(restart=False)
 
 
-def _sticky_prior_tag(split):
-    if 'act' in split:
-        return 'act'
-    if 'bayes' in split:
-        return 'bayes'
-    return 'true'
 
+def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
+                      max_tries=HARRIS_MAX_TRIES, rng=None):
+    """
+    Harris-style null labels: take another session's **full** choice sequence
+    and read choices at the recipient's stratified trial indices ``elig_idx``.
 
-def _choice_model_covariates(trials, prior_col='probabilityLeft'):
-    '''
-    Covariates for the sticky psychometric, in session temporal order.
-
-    s: +1 left stim / −1 right / 0 unknown
-    c: signed contrast (same sign as s)
-    p: prior column (true / act / bayes already written into probabilityLeft)
-    choice: ±1 (NaN/other kept as-is for lag handling)
-    '''
-    cl = np.asarray(
-        trials['contrastLeft'].to_numpy()
-        if hasattr(trials['contrastLeft'], 'to_numpy')
-        else trials['contrastLeft'], dtype=float)
-    cr = np.asarray(
-        trials['contrastRight'].to_numpy()
-        if hasattr(trials['contrastRight'], 'to_numpy')
-        else trials['contrastRight'], dtype=float)
-    choice = np.asarray(
-        trials['choice'].to_numpy()
-        if hasattr(trials['choice'], 'to_numpy')
-        else trials['choice'], dtype=float)
-    pleft = np.asarray(
-        trials[prior_col].to_numpy()
-        if hasattr(trials[prior_col], 'to_numpy')
-        else trials[prior_col], dtype=float)
-
-    stim_left = np.isnan(cr)
-    stim_right = np.isnan(cl)
-    s = np.zeros(len(cl), dtype=float)
-    s[stim_left] = 1.0
-    s[stim_right] = -1.0
-    mag = np.zeros(len(cl), dtype=float)
-    mag[stim_left] = np.nan_to_num(cl[stim_left], nan=0.0)
-    mag[stim_right] = np.nan_to_num(cr[stim_right], nan=0.0)
-    c = s * mag
-    return s, c, pleft, choice
-
-
-def _lag_prev_choice(choice):
-    '''a_{t-1}: previous ±1 choice; 0 if first trial or previous invalid.'''
-    a_prev = np.zeros(len(choice), dtype=float)
-    for t in range(1, len(choice)):
-        prev = choice[t - 1]
-        if prev == 1 or prev == -1:
-            a_prev[t] = prev
-    return a_prev
-
-
-def _sigmoid(x):
-    x = np.clip(x, -30.0, 30.0)
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-def _empirical_sticky_fallback(s, c, pleft, choice, valid):
-    '''Cell-rate P(left|stim,block) + lag-1 stickiness when MLE fails.'''
-    cell_p = {}
-    cell_n = {}
-    for i in np.where(valid)[0]:
-        key = (int(np.sign(s[i])), float(pleft[i]))
-        cell_n[key] = cell_n.get(key, 0) + 1
-        cell_p[key] = cell_p.get(key, 0.0) + float(choice[i] == 1)
-    for key in list(cell_p.keys()):
-        cell_p[key] = cell_p[key] / max(cell_n[key], 1)
-
-    same = 0
-    tot = 0
-    idx = np.where(valid)[0]
-    for k in range(1, len(idx)):
-        i0, i1 = idx[k - 1], idx[k]
-        if i1 != i0 + 1:
-            continue
-        if choice[i0] in (-1, 1) and choice[i1] in (-1, 1):
-            tot += 1
-            same += int(choice[i0] == choice[i1])
-    stick = (same / tot) if tot >= 5 else 0.55
-    # Excess stickiness above 0.5, clipped.
-    stick_w = float(np.clip(2.0 * (stick - 0.5), 0.0, 0.8))
-    return {
-        'mode': 'empirical',
-        'cell_p': cell_p,
-        'stick_w': stick_w,
-        'global_p': float(np.mean(choice[valid] == 1)),
-    }
-
-
-def fit_sticky_choice_model(trials, prior_col='probabilityLeft',
-                            drop_unbiased=False):
-    '''
-    Fit logit P(choice=L) = b0 + bs*s + bc*c + bp*(p-0.5) + blag*a_{t-1}.
-
-    Returns a params dict used by ``sample_synthetic_choices``. Falls back to
-    empirical cell rates × lag-1 stickiness if MLE fails.
-    '''
-    s, c, pleft, choice = _choice_model_covariates(trials, prior_col=prior_col)
-    valid = np.isin(choice, [-1.0, 1.0])
-    if drop_unbiased:
-        valid = valid & (pleft != 0.5)
-    n_valid = int(valid.sum())
-    if n_valid < 20:
-        return _empirical_sticky_fallback(s, c, pleft, choice, valid)
-
-    a_prev = _lag_prev_choice(choice)
-    y = (choice[valid] == 1).astype(float)
-    X = np.column_stack([
-        np.ones(n_valid),
-        s[valid],
-        c[valid],
-        pleft[valid] - 0.5,
-        a_prev[valid],
-    ])
-
-    def nll(beta):
-        p = _sigmoid(X @ beta)
-        p = np.clip(p, 1e-6, 1.0 - 1e-6)
-        return -np.sum(y * np.log(p) + (1.0 - y) * np.log(1.0 - p))
-
-    # Start near chance + positive stim sensitivity.
-    x0 = np.array([0.0, 1.0, 2.0, 1.0, 0.3], dtype=float)
-    try:
-        res = optimize.minimize(nll, x0, method='L-BFGS-B')
-        if (not res.success) or (not np.all(np.isfinite(res.x))):
-            return _empirical_sticky_fallback(s, c, pleft, choice, valid)
-        # Unidentified lag → empirical fallback for stickiness.
-        if abs(res.x[4]) < 1e-6 and n_valid < 50:
-            return _empirical_sticky_fallback(s, c, pleft, choice, valid)
-        return {
-            'mode': 'mle',
-            'beta': np.asarray(res.x, dtype=float),
-            'prior_col': prior_col,
-        }
-    except Exception:
-        return _empirical_sticky_fallback(s, c, pleft, choice, valid)
-
-
-def sample_synthetic_choices(trials, params, rng=None):
-    '''
-    Sequentially sample ±1 choices given fixed stim / contrast / prior covariates.
-
-    Prior labels are frozen (do not recompute act from synthetic choices).
-    '''
+    Stratification (stim×prior) is applied only on the real session to define
+    which trial numbers enter the neural tensor; the donor is not re-stratified.
+    """
     if rng is None:
         rng = np.random.default_rng()
     elif isinstance(rng, np.random.RandomState):
         rng = np.random.default_rng(rng.randint(0, 2**31 - 1))
 
-    prior_col = params.get('prior_col', 'probabilityLeft')
-    s, c, pleft, _choice_obs = _choice_model_covariates(
-        trials, prior_col=prior_col)
-    n = len(s)
-    out = np.zeros(n, dtype=float)
-    a_prev = 0.0
-
-    if params.get('mode') == 'mle':
-        b0, bs, bc, bp, blag = params['beta']
-        for t in range(n):
-            logit = (b0 + bs * s[t] + bc * c[t]
-                     + bp * (pleft[t] - 0.5) + blag * a_prev)
-            p_l = float(_sigmoid(logit))
-            ch = 1.0 if rng.random() < p_l else -1.0
-            out[t] = ch
-            a_prev = ch
-        return out
-
-    # Empirical fallback: blend cell P(left) with stickiness toward previous.
-    cell_p = params.get('cell_p') or {}
-    stick_w = float(params.get('stick_w', 0.0))
-    global_p = float(params.get('global_p', 0.5))
-    for t in range(n):
-        key = (int(np.sign(s[t])), float(pleft[t]))
-        p_cell = cell_p.get(key, global_p)
-        if a_prev == 1.0:
-            p_l = (1.0 - stick_w) * p_cell + stick_w * 1.0
-        elif a_prev == -1.0:
-            p_l = (1.0 - stick_w) * p_cell + stick_w * 0.0
-        else:
-            p_l = p_cell
-        p_l = float(np.clip(p_l, 1e-3, 1.0 - 1e-3))
-        ch = 1.0 if rng.random() < p_l else -1.0
-        out[t] = ch
-        a_prev = ch
-    return out
-
-
-def get_sticky_choice_fit(eid, split, trials, drop_unbiased=False):
-    '''Fit once per (eid, prior tag); reuse across probes of the same session.'''
-    key = (str(eid), _sticky_prior_tag(split))
-    if key in _sticky_choice_fit_cache:
-        return _sticky_choice_fit_cache[key]
-    params = fit_sticky_choice_model(
-        trials, prior_col='probabilityLeft', drop_unbiased=drop_unbiased)
-    params = dict(params)
-    params['prior_col'] = 'probabilityLeft'
-    params['eid'] = str(eid)
-    params['prior_tag'] = key[1]
-    _sticky_choice_fit_cache[key] = params
-    return params
-
-
-def _sample_synthetic_choice_ys(elig_idx, trials, params, rng=None,
-                                max_tries=SYNTHETIC_CHOICE_MAX_TRIES):
-    '''Sample full-session synthetic choices; return ys on eligible trials.'''
-    def _ok(ys):
-        return (int(ys.sum()) >= min_trials_per_side
-                and int((~ys).sum()) >= min_trials_per_side)
-
-    for _ in range(max_tries):
-        syn = sample_synthetic_choices(trials, params, rng=rng)
-        ys = syn[elig_idx] == 1
-        if _ok(ys):
-            return ys
-    # Last resort: use final draw even if unbalanced.
-    syn = sample_synthetic_choices(trials, params, rng=rng)
-    return syn[elig_idx] == 1
-
-
-def _sample_session_shuffle_ys(n_elig, choices_true, donor_bank, eid,
-                               split=None, donor_streams=None,
-                               max_tries=SESSION_SHUFFLE_MAX_TRIES):
-    '''
-    One Harris null label vector: ys[i]=True iff transplanted choice == +1 (left).
-
-    Prefer a random contiguous window from another eid's **stim×block–matched**
-    choice stream (same eligibility as this split). Fall back to circular shift
-    of this session's eligible choices. Resample until both sides have
-    ≥ min_trials_per_side trials.
-
-    ``donor_streams``: optional precomputed list of stratified choice arrays
-    (avoids recomputing act/bayes per null draw).
-    '''
     eid = str(eid)
-    warned_fallback = False
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    n_elig = len(elig_idx)
+    need = int(elig_idx.max()) + 1 if n_elig else 0
 
     def _ok(ys):
         return (int(ys.sum()) >= min_trials_per_side
                 and int((~ys).sum()) >= min_trials_per_side)
 
-    if donor_streams is None:
-        donor_streams = []
-        for e, rec in (donor_bank or {}).items():
-            if e == eid:
-                continue
-            stream = (_donor_choice_stream(rec, split) if split
-                      else np.asarray(
-                          rec['choice'] if isinstance(rec, dict) else rec,
-                          dtype=float))
-            if len(stream) >= n_elig:
-                donor_streams.append(stream)
+    candidates = []
+    for e, rec in (donor_bank or {}).items():
+        if str(e) == eid:
+            continue
+        ch = _normalize_donor_rec(rec)['choice']
+        if len(ch) >= need:
+            candidates.append(np.asarray(ch, dtype=float))
 
+    warned = False
     for _ in range(max_tries):
-        if donor_streams:
-            ch = random.choice(donor_streams)
-            start = random.randint(0, len(ch) - n_elig)
-            cand = np.asarray(ch[start:start + n_elig], dtype=float)
+        if candidates:
+            ch = candidates[int(rng.integers(0, len(candidates)))]
+            cand = ch[elig_idx]
         else:
-            if not warned_fallback:
-                print('session-shuffle: no long-enough stratified donor; '
-                      'circular-shift own eligible choices')
-                warned_fallback = True
-            if n_elig <= 1:
-                cand = np.asarray(choices_true, dtype=float)
+            if not warned:
+                print('harris-null: no donor with len≥'
+                      f'{need}; circular-shift own eligible choices')
+                warned = True
+            if choices_true is None or n_elig <= 1:
+                cand = np.asarray(choices_true, dtype=float) if choices_true is not None else np.ones(n_elig)
             else:
                 cand = np.roll(np.asarray(choices_true, dtype=float),
-                               random.randint(1, n_elig - 1))
+                               int(rng.integers(1, n_elig)))
         ys = cand == 1
         if _ok(ys):
             return ys
 
-    for _ in range(max_tries):
-        if n_elig <= 1:
-            break
-        ys = np.roll(np.asarray(choices_true, dtype=float),
-                     random.randint(1, n_elig - 1)) == 1
-        if _ok(ys):
-            return ys
-    return np.asarray(choices_true, dtype=float) == 1
+    if choices_true is not None and n_elig > 1:
+        for _ in range(max_tries):
+            ys = np.roll(np.asarray(choices_true, dtype=float),
+                         int(rng.integers(1, n_elig))) == 1
+            if _ok(ys):
+                return ys
+    if choices_true is not None:
+        return np.asarray(choices_true, dtype=float) == 1
+    return np.zeros(n_elig, dtype=bool)
 
 
-def _compute_control_D_session_shuffle(
+def _compute_control_D_harris(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
-        donor_bank, eid, null_batch_size=NULL_BATCH_SIZE):
-    '''
-    Session-permutation nulls (Harris 2020): transplant donor-session choices
-    onto this session's eligible-trial neural tensor ``b`` (temporal order).
+        donor_bank, eid, elig_idx, null_batch_size=NULL_BATCH_SIZE):
+    """
+    Literal Harris session-permutation null (behavior of another eid onto this
+    session's neural tensor).
 
-    Donor windows are taken from the same stim×block stratum stream as ``split``.
-    '''
+    Observed distance uses real choices on stim×prior–eligible trials.
+    Each null draw indexes another session's full choice sequence at the same
+    ``elig_idx`` trial numbers (no donor-side stratification).
+    """
     choices_true = np.asarray(choices_true, dtype=float)
     ys_true = choices_true == 1
     m0_true = b[ys_true].mean(axis=0)
@@ -1208,93 +1030,21 @@ def _compute_control_D_session_shuffle(
 
     _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
 
-    # Precompute stratified donor streams once per (insertion, split).
     eid = str(eid)
-    donor_streams = []
-    for e, rec in (donor_bank or {}).items():
-        if e == eid:
-            continue
-        stream = _donor_choice_stream(rec, split)
-        if len(stream) >= ntr:
-            donor_streams.append(stream)
-    if not donor_streams:
-        print(f'session-shuffle [{split}]: 0 stratified donors with '
-              f'len≥{ntr}; will circular-shift')
-
-    for batch_start in range(0, nrand, null_batch_size):
-        batch_end = min(batch_start + null_batch_size, nrand)
-        for _ in range(batch_start, batch_end):
-            ys = _sample_session_shuffle_ys(
-                ntr, choices_true, donor_bank, eid, split=split,
-                donor_streams=donor_streams)
-            label_perms.append(ys)
-            _append_perm(
-                b[ys].mean(axis=0), b[~ys].mean(axis=0),
-                b[ys].var(axis=0), b[~ys].var(axis=0),
-                ys,
-            )
-
-    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
-    d_euc = (m0_true - m1_true) ** 2
-    return {
-        'acs': acs,
-        'acs1': acs1,
-        'd_vars': d_var,
-        'd_eucs': d_euc,
-        'ws': np.array([m0_true, m1_true])[:ntravis],
-        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
-        'D': D,
-        'null_scheme': 'session_shuffle_stratified',
-    }
-
-
-def _compute_control_D_synthetic_choice(
-        b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
-        trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE):
-    '''
-    Synthetic-choice nulls: keep neural tensor ``b`` and stim×block eligibility
-    fixed; resample choices from a session-fitted sticky psychometric.
-    '''
-    choices_true = np.asarray(choices_true, dtype=float)
-    ys_true = choices_true == 1
-    m0_true = b[ys_true].mean(axis=0)
-    m1_true = b[~ys_true].mean(axis=0)
-    v0_true = b[ys_true].var(axis=0)
-    v1_true = b[~ys_true].var(axis=0)
-
-    regs = list(Counter(acs).keys())
-    reg_masks = {reg: (acs == reg) for reg in regs}
-    D = {
-        reg: {
-            'nclus': int(np.sum(acs1 == reg)),
-            'd_vars': [],
-            'd_eucs': [],
-            'd_xnobis': [],
-        }
-        for reg in regs
-    }
-    label_perms = [ys_true]
-
-    def _append_perm(m0, m1, v0, v1, ys):
-        for reg in regs:
-            dv, de, dxn = _region_perm_metrics(
-                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
-            D[reg]['d_vars'].append(dv)
-            D[reg]['d_eucs'].append(de)
-            D[reg]['d_xnobis'].append(dxn)
-
-    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
-
-    params = get_sticky_choice_fit(eid, split, trials, drop_unbiased=False)
-    print(f'synthetic-choice [{split}]: fit mode={params.get("mode")} '
-          f'prior_tag={params.get("prior_tag")}')
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    need = int(elig_idx.max()) + 1 if len(elig_idx) else 0
+    n_ok = sum(
+        1 for e, rec in (donor_bank or {}).items()
+        if str(e) != eid and len(_normalize_donor_rec(rec)['choice']) >= need)
+    print(f'harris-null [{split}]: {n_ok} donors with len≥{need} '
+          f'(elig={len(elig_idx)})')
 
     rng = np.random.default_rng()
     for batch_start in range(0, nrand, null_batch_size):
         batch_end = min(batch_start + null_batch_size, nrand)
         for _ in range(batch_start, batch_end):
-            ys = _sample_synthetic_choice_ys(
-                elig_idx, trials, params, rng=rng)
+            ys = _sample_harris_ys(
+                elig_idx, donor_bank, eid, choices_true=choices_true, rng=rng)
             label_perms.append(ys)
             _append_perm(
                 b[ys].mean(axis=0), b[~ys].mean(axis=0),
@@ -1312,8 +1062,119 @@ def _compute_control_D_synthetic_choice(
         'ws': np.array([m0_true, m1_true])[:ntravis],
         'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
         'D': D,
-        'null_scheme': 'synthetic_choice_sticky',
-        'sticky_fit_mode': params.get('mode'),
+        'null_scheme': 'harris_session_permutation',
+    }
+
+def _compute_control_D_actkernel_choice(
+        b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
+        trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE):
+    '''
+    BWM-style ActionKernel synthetic-session nulls.
+
+    Fit ActionKernel once on the real session. Each null draw regenerates a
+    pseudo stim/block stream (``generate_pseudo_session``) and simulates
+    choices under the fitted θ (``synthetic_sessions_from_trials`` /
+    ``make_synthetic_session``). Null labels for neural ``b`` are those
+    synthetic choices at the real session's stratified ``elig_idx`` (same
+    indexing pattern as Harris).
+    '''
+    choices_true = np.asarray(choices_true, dtype=float)
+    ys_true = choices_true == 1
+    m0_true = b[ys_true].mean(axis=0)
+    m1_true = b[~ys_true].mean(axis=0)
+    v0_true = b[ys_true].var(axis=0)
+    v1_true = b[~ys_true].var(axis=0)
+
+    regs = list(Counter(acs).keys())
+    reg_masks = {reg: (acs == reg) for reg in regs}
+    D = {
+        reg: {
+            'nclus': int(np.sum(acs1 == reg)),
+            'd_vars': [],
+            'd_eucs': [],
+            'd_xnobis': [],
+        }
+        for reg in regs
+    }
+    label_perms = [ys_true]
+
+    def _append_perm(m0, m1, v0, v1, ys):
+        for reg in regs:
+            dv, de, dxn = _region_perm_metrics(
+                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
+            D[reg]['d_vars'].append(dv)
+            D[reg]['d_eucs'].append(de)
+            D[reg]['d_xnobis'].append(dxn)
+
+    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
+
+    fit = get_actkernel_choice_fit(eid, trials)
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    print(f'actkernel-choice [{split}]: BWM pseudo-session null; '
+          f'fit mode={fit.get("mode")} '
+          f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
+
+    def _ok(ys):
+        return (int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    syn = _syn()
+    rng = np.random.default_rng()
+    seed_base = int(rng.integers(0, 2**31 - 1))
+    n_done = 0
+    gen_offset = 0
+    # Batch-generate BWM synthetic sessions; reject draws with too few L/R
+    # on elig_idx (same min_trials_per_side gate as other structured nulls).
+    while n_done < nrand:
+        need = nrand - n_done
+        n_gen = max(need, min(null_batch_size, need + max(need // 5, 5)))
+        out = syn.synthetic_sessions_from_trials(
+            trials, n=n_gen, eid=str(eid), subject='bwm',
+            params=fit['params'], seed=seed_base + gen_offset, fast=True)
+        gen_offset += n_gen
+        ch_mat = np.asarray(out['choice'], dtype=float)
+        for i in range(n_gen):
+            ys = ch_mat[i, elig_idx] == 1
+            if not _ok(ys):
+                continue
+            label_perms.append(ys)
+            _append_perm(
+                b[ys].mean(axis=0), b[~ys].mean(axis=0),
+                b[ys].var(axis=0), b[~ys].var(axis=0),
+                ys,
+            )
+            n_done += 1
+            if n_done >= nrand:
+                break
+        if n_gen > 0 and n_done < nrand and gen_offset > nrand * 20:
+            # Pathological: fall back to single-draw sampler with circular shift.
+            print('WARNING: actkernel BWM null: too many rejected draws; '
+                  'falling back to per-draw make_synthetic_session')
+            while n_done < nrand:
+                ys = _sample_actkernel_choice_ys(
+                    elig_idx, trials, fit, rng=rng)
+                label_perms.append(ys)
+                _append_perm(
+                    b[ys].mean(axis=0), b[~ys].mean(axis=0),
+                    b[ys].var(axis=0), b[~ys].var(axis=0),
+                    ys,
+                )
+                n_done += 1
+            break
+
+    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
+    d_euc = (m0_true - m1_true) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': np.array([m0_true, m1_true])[:ntravis],
+        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
+        'D': D,
+        'null_scheme': 'synthetic_choice_actkernel',
+        'actkernel_fit_mode': fit.get('mode'),
+        'actkernel_params': np.asarray(fit['params'], dtype=float),
     }
 
 
@@ -1339,16 +1200,18 @@ def _bin_spike_events(spikes, clusters, events, split):
 
 def _get_d_vars_session_shuffle(
         split, trials, spikes, clusters, mapping, control, nrand,
-        null_batch_size, donor_bank, eid, synthetic_choice_null=False):
+        null_batch_size, donor_bank, eid, actkernel_choice_null=False):
     '''
-    Choice L vs R under fixed stim (± block), with structured nulls.
+    Choice L vs R under fixed stim (± prior/block), with structured nulls.
 
-    Bins ALL eligible trials (stim±block, no choice filter), then splits by
-    this session's choices (true) or null labels:
+    Stratification (stim×prior) is applied only on this session to define
+    eligible trial indices and the neural tensor ``b``. Observed distance uses
+    real choices on those trials. Nulls:
 
-    - ``synthetic_choice_null``: session-fitted sticky psychometric samples
-      (preferred Goal-2 structured null; keeps stim×block covariates fixed).
-    - else: stim×block–matched donor-window transplant (comparison surrogate).
+    - ``actkernel_choice_null``: BWM-style ActionKernel pseudo-sessions
+      (new stim/blocks + choices under fitted θ); labels at ``elig_idx``.
+    - else (Harris): index another eid's full choice sequence at the same
+      ``elig_idx`` trial numbers (no donor-side stratification).
     '''
     alignment = align[split]
     # choice_stim_* / choice_duringstim_* route via substring stim_l / stim_r.
@@ -1383,8 +1246,8 @@ def _get_d_vars_session_shuffle(
     events_all = trials[alignment].to_numpy()[elig_idx]
     n_left = int(np.sum(choices_true == 1))
     n_right = int(np.sum(choices_true == -1))
-    null_tag = ('synthetic-choice null' if synthetic_choice_null
-                else 'session-shuffle null')
+    null_tag = ('actkernel-choice null' if actkernel_choice_null
+                else 'harris session-permutation null')
     print('#trials per condition: ', n_left, n_right,
           f'(eligible={len(elig_idx)}, {null_tag})')
     if n_left < min_trials_per_side or n_right < min_trials_per_side:
@@ -1412,18 +1275,18 @@ def _get_d_vars_session_shuffle(
     b = b[:, goodcells, :]
 
     if control:
-        if synthetic_choice_null:
-            return _compute_control_D_synthetic_choice(
+        if actkernel_choice_null:
+            return _compute_control_D_actkernel_choice(
                 b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
                 trials=trials, elig_idx=elig_idx, eid=eid,
                 null_batch_size=null_batch_size,
             )
         if not donor_bank:
-            print('WARNING: empty donor_bank; session-shuffle falls back to '
-                  'circular shifts of own choices')
-        return _compute_control_D_session_shuffle(
+            print('WARNING: empty donor_bank; harris-null falls back to '
+                  'circular shifts of own eligible choices')
+        return _compute_control_D_harris(
             b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
-            donor_bank=donor_bank or {}, eid=eid,
+            donor_bank=donor_bank or {}, eid=eid, elig_idx=elig_idx,
             null_batch_size=null_batch_size,
         )
 
@@ -1443,8 +1306,8 @@ def _get_d_vars_session_shuffle(
         'd_eucs': d_euc,
         'ws': ws[:ntravis],
         'null_scheme': (
-            'synthetic_choice_sticky' if synthetic_choice_null
-            else 'session_shuffle'),
+            'synthetic_choice_actkernel' if actkernel_choice_null
+            else 'harris_session_permutation'),
     }
 
 
@@ -1724,7 +1587,8 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
 def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                control=True, nrand=2000, bycontrast=False, cached=None,
                null_batch_size=NULL_BATCH_SIZE, donor_bank=None,
-               session_shuffle_null=False, synthetic_choice_null=False,
+               session_shuffle_null=False,
+               actkernel_choice_null=False,
                exclude_sticky_trials=False,
                sticky_late_frac=STICKY_LATE_FRAC,
                sticky_min_run=STICKY_MIN_RUN):
@@ -1737,13 +1601,17 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     provided, spikes/clusters/trials are reused (no per-split reload), which is
     the time-efficient path. When None, loads from ONE as before (identical result).
 
-    ``synthetic_choice_null``: if True and split is choice_stim* /
-    choice_duringstim*, use sticky psychometric synthetic-choice nulls
-    (stim×block covariates fixed). Takes precedence over session_shuffle_null.
+    ``actkernel_choice_null``: if True and split is choice_stim* /
+    choice_duringstim*, use BWM-style ActionKernel synthetic-session nulls
+    (``synthetic_sessions_from_trials`` / ``make_synthetic_session``: new
+    pseudo stim/blocks + choices under fitted θ; null labels at real
+    ``elig_idx``). Takes precedence over session_shuffle_null.
 
     ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
-    use stim×block–matched donor-window nulls (requires ``donor_bank``).
-    Default False → label shuffle.
+    use literal Harris session-permutation nulls: stratify stim×prior only on
+    this session to define ``elig_idx`` / neural ``b``; null labels are another
+    eid's full choice sequence indexed at those trial numbers (requires
+    ``donor_bank``). Default False → label shuffle.
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
     the **tail** of perseveration runs (≥ ``sticky_min_run`` same choice poorly
@@ -1810,13 +1678,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         if len(trials) == 0:
             raise InsufficientTrials('no trials left after sticky exclusion')
 
-    # Structured nulls for choice L–R: synthetic sticky (preferred) or donor surrogate.
-    if ((synthetic_choice_null or session_shuffle_null)
+    # Structured nulls for choice L–R: actkernel / Harris session-permutation.
+    if ((actkernel_choice_null or session_shuffle_null)
             and is_choice_lr_split(split)):
         D = _get_d_vars_session_shuffle(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid,
-            synthetic_choice_null=bool(synthetic_choice_null))
+            actkernel_choice_null=bool(actkernel_choice_null))
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
@@ -2739,7 +2607,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              null_batch_size=NULL_BATCH_SIZE, nrand=nrand,
                              shard_idx=None, n_shards=None, finalize=True,
                              session_shuffle_null=False,
-                             synthetic_choice_null=False,
+                             actkernel_choice_null=False,
                              exclude_sticky_trials=False,
                              sticky_late_frac=STICKY_LATE_FRAC,
                              sticky_min_run=STICKY_MIN_RUN):
@@ -2762,12 +2630,14 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
   ``save_per_insertion``: write manifold/{split}/{eid_probe}.npy (default False
     when stream_pool else True). ``restart``: skip (split, insertion) already done.
 
-    ``synthetic_choice_null``: if True, choice_stim* / choice_duringstim* use
-    sticky psychometric synthetic-choice nulls (preferred Goal-2 structured
-    null). Takes precedence over session_shuffle_null.
+    ``actkernel_choice_null``: if True, choice_stim* / choice_duringstim* use
+    BWM-style ActionKernel synthetic-session nulls
+    (``scripts/simulate_synthetic_choices.synthetic_sessions_from_trials``).
+    Takes precedence over session_shuffle_null.
 
     ``session_shuffle_null``: if True, choice_stim* / choice_duringstim* use
-    donor-window surrogate nulls (loads donor bank). Default False.
+    literal Harris session-permutation nulls (loads donor bank; indexes donor
+    choice sequences at recipient ``elig_idx``). Default False.
 
     ``exclude_sticky_trials``: drop late-session + perseveration trials before
     distance/null (see ``apply_sticky_trial_exclusion``). Prefer directing
@@ -2796,23 +2666,24 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
           'stream_pool', stream_pool, 'null_batch_size', null_batch_size,
           'shard', shard_idx, '/', n_shards, 'finalize', finalize,
           'session_shuffle_null', session_shuffle_null,
-          'synthetic_choice_null', synthetic_choice_null,
+          'actkernel_choice_null', actkernel_choice_null,
           'exclude_sticky_trials', exclude_sticky_trials)
 
     donor_bank = None
-    use_donor = (session_shuffle_null and not synthetic_choice_null
+    use_donor = (session_shuffle_null
+                 and not actkernel_choice_null
                  and any(is_choice_lr_split(sp) for sp in splits_list))
     if use_donor:
         donor_bank = load_choice_donor_bank()
-        print(f'session-shuffle donor bank: {len(donor_bank)} eids')
-    elif session_shuffle_null and not synthetic_choice_null:
+        print(f'harris donor bank: {len(donor_bank)} eids')
+    elif session_shuffle_null and not actkernel_choice_null:
         print('WARNING: --session-shuffle-null set but no choice_stim*/'
               'choice_duringstim* splits in list')
-    elif synthetic_choice_null and any(
+    elif actkernel_choice_null and any(
             is_choice_lr_split(sp) for sp in splits_list):
-        print('synthetic-choice sticky null enabled for choice L–R splits')
-    elif synthetic_choice_null:
-        print('WARNING: --synthetic-choice-null set but no choice_stim*/'
+        print('actkernel BWM synthetic-session null enabled for choice L–R splits')
+    elif actkernel_choice_null:
+        print('WARNING: --actkernel-choice-null set but no choice_stim*/'
               'choice_duringstim* splits in list')
 
     if eids_plus is None:
@@ -2871,7 +2742,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                                 null_batch_size=null_batch_size, nrand=nrand,
                                 donor_bank=donor_bank,
                                 session_shuffle_null=session_shuffle_null,
-                                synthetic_choice_null=synthetic_choice_null,
+                                actkernel_choice_null=actkernel_choice_null,
                                 exclude_sticky_trials=exclude_sticky_trials,
                                 sticky_late_frac=sticky_late_frac,
                                 sticky_min_run=sticky_min_run)

@@ -2,7 +2,7 @@
 
 ## Standing context (carry-forward)
 
-- **Real-data stack:** [2026-07-06](research_journal_2026-07-06.md) / [2026-07-12](research_journal_2026-07-12.md) — `block_analysis_allsplits.py`, insertion cache, contrast-stratified duringstim splits, ORCD sharding, structured choice nulls (synthetic-choice / excl-sticky).
+- **Real-data stack:** [2026-07-06](research_journal_2026-07-06.md) / [2026-07-12](research_journal_2026-07-12.md) — `block_analysis_allsplits.py`, insertion cache, contrast-stratified duringstim splits, ORCD sharding, structured choice nulls (Harris / excl-sticky / actkernel).
 - **Canonical prior-distance defaults:** 80 ms S / 150 ms I–M, fill-from-next-ITI, contrast-matched null — see `AGENTS.md` / `simulate_recovery.py`.
 - **Earlier today (logged under 07-12):** perseveration-tail exclusion counts and excl-sticky submit notes (`2026-07-20a–b` in that file).
 
@@ -35,9 +35,49 @@ so that planned **refits** are feasible at useful `n_sessions` / `nrand` / grid 
 
 **Success criteria (provisional):** profile hotspots; land concrete speedups (vectorization, caching, fewer redundant builds, parallel fit steps) without changing canonical analysis defaults or statistical conclusions of the Phase 4b sanity check.
 
+### Goal 3 — Behavior-model synthetic choices for structured choice nulls (cont. of 07-12 Goal 2)
+
+Continuation of [2026-07-12 Goal 2](research_journal_2026-07-12.md). Primary structured nulls for choice L–R: Harris session-permutation (`--session-shuffle-null`) and BWM-style ActionKernel synthetic sessions (`--actkernel-choice-null`).
+
+**Questions:**
+1. Can `synthetic_sessions_from_trials` generate artificial choices while holding the real **stim** and **block** sequences fixed? → **No** (it regenerates both via `generate_pseudo_session`). That is the **intended** BWM paper null.
+2. Wire that BWM path into choice L–R neural distance? → **Yes** (`--actkernel-choice-null`, updated 2026-07-23). Null labels = synthetic choices at the real session’s stratified `elig_idx` (same indexing as Harris).
+
+**Approach:** audit `scripts/simulate_synthetic_choices.py`; use paper synthetic sessions for the AK null; compare vs Harris / label shuffle.
+
 ---
 
 ## Notes / results
+
+### 2026-07-21 — Goal 3: `scripts/simulate_synthetic_choices.py` audit + wiring
+
+**Source:** user-added [`scripts/simulate_synthetic_choices.py`](../scripts/simulate_synthetic_choices.py) (wraps IBL [`behavior_models`](https://github.com/int-brain-lab/behavior_models) `ActionKernel`). Package is a **git submodule** at [`third_party/behavior_models`](../third_party/behavior_models) (path-prepended); remote Slurm only needs the repo checkout + `torch` in conda — not a cluster `pip install`. Init: `git submodule update --init --recursive`.
+
+| API | Keeps real stim/block? | Use for our choice L–R null? |
+|-----|------------------------|------------------------------|
+| `synthetic_sessions_from_trials` / `make_synthetic_session` | **No** — draws *pseudo* blocks+contrasts via `generate_pseudo_session`, then simulates choices | **Yes** — BWM paper null (wired) |
+| `fit_action_kernel` + `simulate_choices(stim, side, params)` | **Yes** — if you pass the real session's stim/side | Available helper; **not** the wired null |
+| `synthetic_choices_fixed_stim` (added) | **Yes** — thin wrapper of the above | Available helper; **not** the wired null |
+
+**Null path wired (2026-07-23 update):** `--actkernel-choice-null` → fit ActionKernel once per eid (MCMC under `manifold/actkernel_fits/`), then for each null draw generate a **BWM synthetic session** (new stim/blocks + choices under fitted θ via `synthetic_sessions_from_trials`); null labels for neural `b` are those choices at the real session’s stratified `elig_idx`. Tag: `null_scheme: synthetic_choice_actkernel`.
+
+Rationale for regenerating stim (vs fixing the real stream): the action-kernel prior is updated from the stimulus-conditioned choice process; holding the recorded stim schedule couples the null choices to the same sensory sequence that drove the neural tensor. The paper’s null is meant to be behaviour under a **fresh** task schedule with the animal’s fitted policy — so regenerating stim/blocks is the correct analogue of Harris “other session’s behaviour,” with unlimited Monte Carlo draws.
+
+```bash
+conda activate iblenv   # needs torch; behavior_models from third_party/ submodule
+python scripts/run_goal2_splits.py --preset choice_lr_session_null_all \
+  --actkernel-choice-null --nrand 200
+# shards:
+#   bash scripts/submit_goal2_choice_actkernel_null_sharded.sh
+# smoke:
+#   python scripts/smoke_choice_actkernel_null.py
+```
+
+**Smoke (2026-07-23):** `scripts/smoke_choice_actkernel_null.py` on local insertion_cache → `null_scheme=synthetic_choice_actkernel` (`choice_stim_l`, short MCMC `ACTKERNEL_NB_STEPS=40`). Submitter: `scripts/submit_goal2_choice_actkernel_null_sharded.sh` (`ACTKERNEL_CHOICE_NULL=1`, optional `SMOKE_FIRST=1`).
+
+**Next:** compare null width / p-values vs `--session-shuffle-null` (Harris) and label shuffle; cache fits carefully (MCMC is slow on first eid).
+
+**To be resolved:** currently act-prior labels for analysis use a **fixed** `α=0.2` via `action_kernel_priors` on each session’s choice sequence (same α everywhere), then results are pooled into the supersession. Should we instead run `fit_action_kernel` **per session** (MCMC → session-specific `α`, and optionally the full `[α, ζ, lapse±]`), recompute that session’s continuous/binary act priors from the fitted kernel, and **only then** pool into the supersession for all act-conditioned analyses?
 
 ### 2026-07-20 — Revised Goal 3 (0% choice-conditioned) tables
 

@@ -1,0 +1,243 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\title{Action-kernel behavioural model\\
+\large\textit{fit\_action\_kernel} / IBL \texttt{behavior\_models.ActionKernel}}
+\author{prior-mech-analysis notes}
+\date{2026-07-22}
+
+\begin{document}
+\maketitle
+
+\section{Context}
+
+For act-conditioned analyses we currently estimate priors with a
+\textbf{fixed} learning rate \(\alpha = 0.2\) via
+\texttt{action\_kernel\_priors}, applied the same way on every session
+before pooling into the supersession.
+
+\texttt{fit\_action\_kernel} (in
+\texttt{scripts/simulate\_synthetic\_choices.py}) instead fits the full
+IBL \texttt{ActionKernel} choice model by MCMC on one session's real
+behaviour and returns a posterior-mean parameter vector. Open question
+(journal 2026-07-20): whether those session-specific fits should replace
+the fixed-\(\alpha\) prior for act labels before supersession pooling.
+
+\paragraph{Data.} Fitting uses
+\[
+(\text{actions},\ \text{stimuli},\ \text{stim\_side})
+= \texttt{format\_data}(\texttt{trials}),
+\]
+i.e.\ choices \(a_t\in\{-1,+1\}\) (0 = no-go), signed contrast
+\(c_t\in[-1,1]\), and stimulus side \(s_t\in\{-1,+1\}\).
+Task \(\texttt{probabilityLeft}\) is \emph{not} a covariate in this
+likelihood: the prior is the evolving action kernel.
+
+\section{Parameters (\texttt{single\_zeta=True})}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Symbol & Code name & Role & Bounds \\
+\midrule
+\(\alpha\) & \texttt{alpha} & Learning rate of the action-history prior & \([0,1]\) \\
+\(\zeta\) & \texttt{zeta} & Sensory noise (shared across sides) & \([0,1]\) \\
+\(\ell_+\) & \texttt{lapse\_pos} & Lapse when stim side is left (\(s_t>0\)) & \([0,0.5]\) \\
+\(\ell_-\) & \texttt{lapse\_neg} & Lapse when stim side is right (\(s_t<0\)) & \([0,0.5]\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Posterior mean
+\(\hat{\bm\theta}=(\hat\alpha,\hat\zeta,\hat\ell_+,\hat\ell_-)\)
+is what \texttt{get\_parameters(parameter\_type="posterior\_mean")}
+returns after MCMC.
+
+\section{Model equations}
+
+\paragraph{Notation (probabilities).}
+Three different probabilities appear below---do not conflate them:
+\begin{itemize}
+\item \(\pi_t^{\mathrm{L}}\) (and \(p_t\) in the analysis helper):
+  \textbf{prior belief} that the next / current trial favours left,
+  from the action-kernel EMA over past choices.
+  \emph{Not} the instantaneous choice probability.
+\item \(\tilde P(\mathrm{L}_t)\):
+  \textbf{pre-lapse probability of choosing left}
+  given current contrast \(c_t\) and prior \(\pi_t^{\mathrm{L}}\).
+\item \(P(\mathrm{L}_t)\):
+  \textbf{probability of choosing left after lapses}
+  (what is scored in the likelihood and sampled in simulation).
+  Then \(P(\mathrm{R}_t)=1-P(\mathrm{L}_t)\).
+\end{itemize}
+
+\subsection{Action-kernel prior}
+
+Let \(\bm\pi_t=(\pi_t^{\mathrm{R}},\pi_t^{\mathrm{L}})\) be a probability
+vector over \{right, left\}, initialised at
+\(\bm\pi_0=(1/2,1/2)\). With learning rate \(\alpha\),
+
+\begin{equation}
+\label{eq:prior-update}
+\bm\pi_t
+=
+\begin{cases}
+(1-\alpha)\,\bm\pi_{t-1}
++ \alpha\,\mathbf{e}_{a_{t-1}}
+& \text{if } a_{t-1}\neq 0,\\[0.4em]
+\bm\pi_{t-1}
+& \text{if } a_{t-1}=0\ \text{(no-go)},
+\end{cases}
+\end{equation}
+where \(\mathbf{e}_{a}\) is the one-hot indicator of the previous choice
+(\(a=+1\) \(\Rightarrow\) left, \(a=-1\) \(\Rightarrow\) right).
+The scalar left-prior used below is \(\pi_t^{\mathrm{L}}=\bm\pi_t[1]\).
+
+\paragraph{Range.}
+The continuous left-prior is a probability:
+\[
+\pi_t^{\mathrm{L}}\in(0,1)
+\quad\text{(equivalently }p_t\in(0,1)\text{ in \eqref{eq:simple-prior})}.
+\]
+It is initialised at \(1/2\) and stays in \((0,1)\) under the EMA update
+(convex combination of a probability and \(\{0,1\}\)).
+In \texttt{ActionKernel}, values are additionally clipped to
+\([10^{-7},\,1-10^{-7}]\) before entering \eqref{eq:combine}
+(so \(\Phi^{-1}(1-\pi)\) stays finite).
+For act L/R \emph{splits} in analysis, \texttt{action\_kernel\_priors}
+binarises the continuous prior to the discrete labels
+\(\{0.8,\,0.2\}\) (\(\ge 1/2\mapsto 0.8\), else \(0.2\))---those are
+conditioning labels, not the continuous \(\pi_t^{\mathrm{L}}\) used inside
+the fitted choice model.
+
+\paragraph{Analysis helper (fixed \(\alpha\) only).}
+Our \texttt{action\_kernel\_priors} implements the same EMA on a scalar
+\(p_t\):
+\begin{equation}
+\label{eq:simple-prior}
+p_0 = \tfrac12,\qquad
+p_t = \alpha\,\mathbf{1}[a_{t-1}>0] + (1-\alpha)\,p_{t-1},
+\end{equation}
+then binarises \(p_t\mapsto\{0.8,0.2\}\) for L/R-prior splits.
+It does \emph{not} fit \(\zeta\) or lapses.
+
+\subsection{Sensory likelihood combined with prior}
+
+Signed contrast \(c_t\) is combined with the prior belief
+\(\pi_t^{\mathrm{L}}\) under sensory noise \(\zeta\)
+(\texttt{combine\_lkd\_prior}; fixed \(\sigma=0.49\))
+to produce the \emph{choice} probability before lapses:
+\begin{equation}
+\label{eq:combine}
+\begin{aligned}
+\sigma^\star
+&=
+\bigl(\sigma^{-2}+\zeta^{-2}\bigr)^{-1/2},
+\\
+\tilde P(\mathrm{L}_t)
+&\equiv
+\tilde P(\text{choose left}\mid c_t,\pi_t^{\mathrm{L}},\zeta)
+\\
+&=
+\Phi\!\left(
+\frac{c_t}{\zeta}
+-
+\frac{\zeta}{\sigma^\star}\,
+\Phi^{-1}\!\bigl(1-\pi_t^{\mathrm{L}}\bigr)
+\right),
+\end{aligned}
+\end{equation}
+where \(\Phi\) is the standard normal CDF.
+(Equivalently
+\(\tilde P(\mathrm{L}_t)
+=\Phi\bigl(c_t/\zeta+(\zeta/\sigma^\star)\Phi^{-1}(\pi_t^{\mathrm{L}})\bigr)\)
+since \(\Phi^{-1}(1-\pi)=-\Phi^{-1}(\pi)\).)
+
+\subsection{Lapses}
+
+Side-dependent lapse rate
+\begin{equation}
+\ell_t
+=
+\begin{cases}
+\ell_+ & s_t > 0\ \text{(stim left)},\\
+\ell_- & s_t < 0\ \text{(stim right)},\\
+\tfrac12(\ell_++\ell_-) & s_t=0,
+\end{cases}
+\end{equation}
+mixes the pre-lapse \emph{choice} probability with chance:
+\begin{equation}
+\label{eq:lapse}
+P(\mathrm{L}_t)
+\equiv
+P(\text{choose left}\mid c_t,\pi_t,\bm\theta)
+=
+(1-\ell_t)\,\tilde P(\mathrm{L}_t)
++
+\frac{\ell_t}{2}.
+\end{equation}
+With probability \(1-\ell_t\) the animal follows \(\tilde P\);
+with probability \(\ell_t\) it guesses \(50/50\)
+(hence the \(\ell_t/2\) term).
+Always \(P(\mathrm{R}_t)=1-P(\mathrm{L}_t)\).
+
+\subsection{Likelihood}
+
+For observed choices \(\{a_t\}\),
+\begin{equation}
+\label{eq:lkd}
+\mathcal{L}(\bm\theta)
+=
+\prod_{t:\,a_t\in\{\pm1\}}
+P(a_t\mid c_t,\bm\pi_t,\bm\theta).
+\end{equation}
+MCMC targets the posterior of \(\bm\theta\) under this likelihood
+(box priors on the bounds above). Early stopping uses
+Gelman--Rubin diagnostics across chains.
+
+\section{Simulation (\texttt{simulate\_choices})}
+
+Given fixed \((c_t,s_t)\) and fitted \(\hat{\bm\theta}\),
+\texttt{ActionKernel.simulate} runs the same forward pass
+\eqref{eq:prior-update}--\eqref{eq:lapse}, but updates \(\bm\pi_t\) from
+\textbf{previously simulated} choices (generative), and samples
+\(a_t\sim\mathrm{Bernoulli}\bigl(P(\mathrm{L}_t)\bigr)\) each trial.
+Stim/side (hence the empirical block schedule) stay fixed; only choices
+are random.
+
+\section{Relation to current analysis pipeline}
+
+\begin{itemize}
+\item \textbf{Act prior labels (current):}
+  \eqref{eq:simple-prior} with \(\alpha=0.2\) on each session, then pool.
+\item \textbf{ActKernel choice null (\texttt{--actkernel-choice-null}):}
+  fit \(\bm\theta\) per \texttt{eid}, then BWM-style synthetic sessions
+  (\texttt{generate\_pseudo\_session} stim/blocks + \texttt{simulate\_choices}
+  under \(\hat{\bm\theta}\)); null labels are synthetic choices at the real
+  session's stratified \texttt{elig\_idx}.
+\item \textbf{Open:} replace fixed-\(\alpha\) labels with
+  session-fitted \(\hat\alpha\) (or full kernel-derived priors) before
+  supersession pooling.
+\end{itemize}
+
+\section*{References}
+
+\begin{itemize}
+\item Package:
+  \url{https://github.com/int-brain-lab/behavior_models}
+  (\texttt{ActionKernel}, \texttt{utils.combine\_lkd\_prior});
+  vendored as submodule \texttt{third\_party/behavior\_models}.
+\item Local wrapper:
+  \texttt{scripts/simulate\_synthetic\_choices.py}
+  (\texttt{fit\_action\_kernel}, \texttt{simulate\_choices},
+  \texttt{synthetic\_sessions\_from\_trials}).
+\item Analysis prior helper:
+  \texttt{block\_analysis\_allsplits.action\_kernel\_priors}
+  (\(\alpha=0.2\)).
+\end{itemize}
+
+\end{document}

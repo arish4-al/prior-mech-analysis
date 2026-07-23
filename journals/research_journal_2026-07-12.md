@@ -14,7 +14,7 @@ Real-data pipeline only — see [prior journal](research_journal_2026-07-06.md) 
 | Contrast splits | `'{base}_{contrast}'` on duringstim / duringchoice (act + non-act), incl. 0% |
 | Min trials | ≥5 per split side (`InsufficientTrials` → skip) |
 | Sharding | `scripts/submit_goal2_*` / `submit_goal3_sharded.sh` (ORCD `mit_normal`) |
-| Null (current) | label shuffle within condition (contrast-matched where applicable); choice L–R: `--synthetic-choice-null` or `--exclude-sticky-trials` (opt-in) |
+| Null (current) | label shuffle within condition (contrast-matched where applicable); choice L–R: `--session-shuffle-null` (Harris) or `--exclude-sticky-trials` (opt-in) |
 
 ---
 
@@ -42,30 +42,31 @@ Motivation: block identity and recent outcomes can pull in opposite directions; 
 - **Prior:** true block labels are explicitly block-autocorrelated. `block_only` already generates pseudo-blocks, but other prior-distance splits currently use unrestricted permutations and can destroy this structure. Action-kernel and Bayes-derived priors are also temporally structured.
 - **Stimulus:** stimulus identities are randomized by the task, so a task-matched pseudo-session/shuffle remains appropriate; stimulus significance is not the main target of this correction.
 
-**Important terminology / implementation correction:** the opt-in donor-window code added on 2026-07-13 is a **stim×block-matched donor surrogate**, not a literal Harris (2020) session-permutation test. It transplants a donor choice subsequence independently for each insertion/null draw. A Harris test instead permutes complete behavioral sessions against complete neural sessions, uses one coherent session mapping for every probe from the same `eid`, and evaluates an aggregate session-level statistic. Keep the current method labeled as a matched donor surrogate unless it is redesigned accordingly.
+**Important terminology / implementation note:** earlier donor-window code
+(2026-07-13) transplanted stim×block–matched choice subsequences and was a
+**matched donor surrogate**, not literal Harris. That path is replaced by the
+Harris implementation below (`--session-shuffle-null` →
+`null_scheme: harris_session_permutation`).
 
-**Literal Harris session-permutation setup:**
-1. Treat each unique `eid` as the exchangeable unit; all probes from that `eid` must share the same donor assignment.
-2. Predefine a scalar association statistic for each region/session from the trial-resolved neural tensor and the complete behavioral history. Apply deterministic, permutation-independent trial trimming so paired sessions have compatible lengths.
-3. The observed statistic is the aggregate over matched sessions, \(T_{\mathrm{obs}}=\sum_s A(X_s,B_s)\), with a fixed weighting rule so sessions with multiple probes are not implicitly over-weighted.
-4. For each null draw, sample a bijection \(\pi\) of compatible sessions (preferably a derangement), pair \(X_s\) with the **complete** behavioral history \(B_{\pi(s)}\), and compute \(T_\pi=\sum_s A(X_s,B_{\pi(s)})\). Use the same \(\pi\) for all probes/regions in that draw.
-5. Compute \(p=(1+\#\{T_\pi\ge T_{\mathrm{obs}}\})/(1+N_{\mathrm{perm}})\), then apply the planned across-region correction.
+**Literal Harris session-permutation (implemented):**
+1. On the **real** session only: stratify by stim (± prior/block) to get
+   eligible trial indices `elig_idx` and neural tensor `b` on those trials.
+   Observed distance uses this session's real choices on `elig_idx`.
+2. For each null draw: sample another `eid`'s **full** choice sequence from the
+   donor bank; null labels = `donor_choice[elig_idx]` (same trial numbers; **no**
+   donor-side stratification).
+3. Distance under null = re-split `b` by those labels. Tag:
+   `null_scheme: harris_session_permutation`.
+4. CLI: `--session-shuffle-null` in `scripts/run_goal2_splits.py`.
 
-**Conditional-choice caveat:** transplanting only donor choices after filtering each donor to a recipient-like stim×block stratum is not literal session permutation, and skipping intervening trials changes the relevant lag structure. Moreover, a Harris permutation of complete sessions directly tests neural–behavioral independence, whereas “choice beyond stimulus and block” is a partial-association question.
+Stratification only on real data is enough to argue that the measured choice
+neural distance is not driven by stim/prior composition; the null is
+session-permuted behavior onto the same neural trials.
 
-**Implemented primary structured null (2026-07-18):** sticky psychometric **synthetic-choice** null for `choice_stim*` / `choice_duringstim*`:
-
-- Keep neural tensor `b` and stim×block eligibility fixed (real stim / contrast / prior covariates frozen — including act/bayes overwrites; do **not** recompute act from synthetic choices).
-- Per `eid`, fit  
-  \(\operatorname{logit} P(\mathrm{choice}_t=\mathrm{L})=\beta_0+\beta_s s_t+\beta_c c_t+\beta_p(p_t-0.5)+\beta_{\mathrm{lag}} a_{t-1}\)  
-  (MLE; empirical cell-rate × lag-1 stickiness fallback).
-- Null draws: sequentially sample full-session synthetic ±1 choices; split eligible trials by those labels.
-- CLI: `--synthetic-choice-null` in `scripts/run_goal2_splits.py` → `null_scheme: synthetic_choice_sticky`.
-- Donor-window `--session-shuffle-null` remains a comparison surrogate; label shuffle stays the default until width/p-value validation.
-
-Not the same as `brainbox.generate_pseudo_session` (i.i.d. within contrast×side×block cells — destroys stickiness) and not a literal Harris session permutation.
-
-**Validation:** compare unrestricted label shuffle, the matched donor surrogate, and synthetic-choice using both null width and region-level p-values. The choice-run analysis establishes that label structure exists; it does not by itself show that neural-distance significance changes.
+**Validation:** compare unrestricted label shuffle vs Harris using both null
+width and region-level p-values. The choice-run analysis establishes that label
+structure exists; it does not by itself show that neural-distance significance
+changes.
 
 ---
 
@@ -187,20 +188,12 @@ python scripts/analyze_choice_epochs.py --cache-dir $ONE_CACHE_DIR --nrand 200
 
 Goal 3 contrast retention + gain/offset tables: see [07-06 journal](research_journal_2026-07-06.md) §2026-07-14.
 
-### 2026-07-18 — Synthetic-choice sticky null (choice L–R)
+### 2026-07-18 — Sticky psychometric synthetic-choice null (removed)
 
-Implemented preferred Goal-2 structured null for stratified choice contrasts:
-
-| Piece | Detail |
-|-------|--------|
-| Model | \(\operatorname{logit}P(L)=\beta_0+\beta_s s+\beta_c c+\beta_p(p-0.5)+\beta_{\mathrm{lag}}a_{t-1}\) |
-| Fit | per `eid` (cached across probes); MLE with empirical+stickiness fallback |
-| Null | sample full-session synthetic choices; apply to fixed eligible `b` |
-| Tag | `null_scheme: synthetic_choice_sticky` |
-| CLI | `--synthetic-choice-null` (`scripts/run_goal2_splits.py`) |
-| Smoke | `python scripts/smoke_synthetic_choice_null.py` |
-
-Donor `--session-shuffle-null` kept for comparison; default still label shuffle until null-width validation.
+Implemented briefly as `--synthetic-choice-null` /
+`null_scheme: synthetic_choice_sticky`, then **removed** (2026-07-23) in favor of
+literal Harris session-permutation (`--session-shuffle-null` →
+`harris_session_permutation`). See Goal 2 section above.
 
 ### 2026-07-20 — Late + perseveration trial exclusion (choice L–R sensitivity)
 
@@ -231,7 +224,7 @@ bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 PRESET=choice_lr_excl_sticky_true bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 ```
 
-Use as a robustness arm next to synthetic-choice nulls; not a complete replacement for a temporally structured null.
+Use as a robustness arm next to Harris session-permutation; not a complete replacement for a temporally structured null.
 
 ### 2026-07-20b — Perseveration counts over all BWM sessions
 
@@ -255,5 +248,69 @@ Plot + CSV: `manifold/choice_epoch_diag/perseveration_exclusion_distributions.pn
 python scripts/analyze_perseveration_counts.py \
   --cache-dir $HOME/Downloads/ONE/openalyx.internationalbrainlab.org
 ```
+
+### 2026-07-21 — Choice L–R: excl-sticky vs openalyx within-stim×block shuffle
+
+Compared four-split combined choice sensitivity (same path as prior: sum `*_regde` → `p_mean` → BH-FDR → amp×sig table) for:
+
+| Arm | Cache | Null |
+|-----|-------|------|
+| shuffle | openalyx `manifold/res/` | label shuffle within stim×block (existing) |
+| excl | alyx `manifold/res_excl_sticky/` | late 20% ∪ perseveration-tail drop, then same shuffle |
+
+```bash
+python scripts/plot_choice_excl_sticky_comparison_table.py --alpha 0.05
+```
+
+Plots (alyx `meta/`). PNGs have **no column headers** — left→right order:
+
+**2-col** `table_choice_excl_sticky_vs_shuffle_duringchoice_p_mean_c_0.05.png` (during-choice combined, 4 stim×block splits):
+
+| col | meaning |
+|----:|---------|
+| 1 | `choice_shuffle` — openalyx label shuffle within stim×block |
+| 2 | `choice_excl_sticky` — alyx late∪pers-tail exclusion, then same shuffle |
+
+**4-col** `table_choice_excl_sticky_vs_shuffle_p_mean_c_0.05.png`:
+
+| col | meaning |
+|----:|---------|
+| 1 | `choice_s` — duringstim, openalyx shuffle |
+| 2 | `choice_s_excl` — duringstim, excl sticky |
+| 3 | `choice_m` — duringchoice, openalyx shuffle |
+| 4 | `choice_m_excl` — duringchoice, excl sticky |
+
+Cell color = normalized `amp_euc` if FDR `p_mean_c`≤0.05, else blank. Region rows = Beryl order (`region_order.txt`); left strip = cosmos color.
+
+CSV companion: `table_choice_excl_sticky_vs_shuffle_p_mean_c_0.05.csv` (raw amp / `p_mean_c` / sig).
+
+FDR@0.05 among 205 regions present in both caches:
+
+| epoch | shuffle | excl | lost (sig→ns) | gained (ns→sig) | kept |
+|-------|--------:|-----:|--------------:|----------------:|-----:|
+| duringstim | 71 | 95 | 9 | 33 | — |
+| duringchoice | 106 | 123 | 16 | 33 | 90 |
+
+Exclusion does **not** shrink the significant set (net +17 during-choice). Primary readout: two-column during-choice table — regional pattern largely preserved (90/106 shuffle hits kept).
+
+### 2026-07-21b — SC regtype table with excl-sticky choice
+
+Same layout as openalyx `table_stimchoice_act_regtype_p_mean_c_0.01.png`, but choice L–R amps from `res_excl_sticky` (stim / short / stim1 still openalyx). Does **not** overwrite the original.
+
+```bash
+python scripts/plot_stimchoice_regtype_excl_sticky.py --alpha 0.01
+```
+
+Output: `alyx.../meta/table_stimchoice_act_regtype_excl_sticky_p_mean_c_0.01.png` (+ `.csv`).
+
+Columns L→R (no headers on PNG):
+
+| col | meaning |
+|----:|---------|
+| 1 | region (Beryl / cosmos strip) |
+| 2 | `sc_duringchoice_regtype` — move=1, integrator=0.5 |
+| 3 | `sc_duringstim_regtype` — move=1, integrator=0.5, early=0.1, stim=0 |
+
+Counts @α=0.01 (excl choice): duringchoice — integrator 75, move 22; duringstim — stim 3, early 14, integrator 48, move 22.
 
 

@@ -218,15 +218,17 @@ def main():
                    help='Only build manifold/insertion_cache')
     p.add_argument('--build-choice-donors', action='store_true',
                    help='Rebuild manifold/choice_donors.npy from insertion_cache '
-                        '(choice + stim + pLeft for stratified Harris nulls)')
+                        '(full-session choice sequences for Harris nulls)')
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
-                   help='Use stim×block–stratified donor-window nulls '
-                        'for choice_stim*/choice_duringstim* (default: label shuffle)')
-    p.add_argument('--synthetic-choice-null', action='store_true', default=False,
-                   help='Use sticky psychometric synthetic-choice nulls for '
-                        'choice_stim*/choice_duringstim* (preferred Goal-2 '
-                        'structured null; takes precedence over '
-                        '--session-shuffle-null)')
+                   help='Harris session-permutation nulls for '
+                        'choice_stim*/choice_duringstim*: stratify stim×prior '
+                        'on the real session only; null labels = another eid\'s '
+                        'choices at the same trial indices (default: label shuffle)')
+    p.add_argument('--actkernel-choice-null', action='store_true', default=False,
+                   help='BWM-style ActionKernel synthetic-session nulls '
+                        '(generate_pseudo_session stim/blocks + simulate_choices '
+                        'under fitted θ; labels at real elig_idx). '
+                        'Takes precedence over --session-shuffle-null')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -321,7 +323,7 @@ def main():
           'stream_pool:', args.stream_pool, 'save_cache:', args.save_cache,
           'shard:', args.shard_idx, '/', args.n_shards, 'finalize:', finalize,
           'session_shuffle_null:', args.session_shuffle_null,
-          'synthetic_choice_null:', args.synthetic_choice_null,
+          'actkernel_choice_null:', args.actkernel_choice_null,
           'exclude_sticky_trials:', args.exclude_sticky_trials)
 
     if args.exclude_sticky_trials:
@@ -342,7 +344,7 @@ def main():
         n_shards=args.n_shards,
         finalize=finalize,
         session_shuffle_null=args.session_shuffle_null,
-        synthetic_choice_null=args.synthetic_choice_null,
+        actkernel_choice_null=args.actkernel_choice_null,
         exclude_sticky_trials=args.exclude_sticky_trials,
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,
