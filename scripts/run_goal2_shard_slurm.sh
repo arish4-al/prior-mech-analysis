@@ -11,13 +11,9 @@
 #SBATCH -o goal2_shard_%x_%j.out
 
 # One insertion shard for one split (no finalize).
-# Peak RSS (stream_pool, nrand=2000): ~1.5–2.5 GB (journal 07-10b); stream_acc
-# grows with insertions in the shard. Default 6G ≈ 2–4× headroom (was 12G).
-# Submitters override via --mem= (see submit_goal2_stimOn_act_sharded.sh).
-#
-#   SPLIT=act_block_duringstim_l SHARD_IDX=0 N_SHARDS=4 sbatch \
-#     --export=ALL,SPLIT,SHARD_IDX,N_SHARDS \
-#     --job-name=g2_stim_l_s0 scripts/run_goal2_shard_slurm.sh
+# Env: SPLIT, SHARD_IDX, N_SHARDS, NRAND, RESTART,
+#      SESSION_SHUFFLE_NULL, ACTKERNEL_CHOICE_NULL, ACTKERNEL_NULL_MODE,
+#      EXCLUDE_STICKY_TRIALS, ...
 
 set -euo pipefail
 
@@ -38,20 +34,24 @@ EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
 STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
 STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
 ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
+ACTKERNEL_NULL_MODE="${ACTKERNEL_NULL_MODE:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-if [[ "$ACTKERNEL_CHOICE_NULL" == "1" && ! -d third_party/behavior_models/behavior_models ]]; then
-  echo "ERROR: ACTKERNEL_CHOICE_NULL=1 but missing submodule third_party/behavior_models" >&2
-  echo "  git submodule update --init --recursive" >&2
-  exit 1
+if [[ "$ACTKERNEL_CHOICE_NULL" == "1" || -n "$ACTKERNEL_NULL_MODE" ]]; then
+  if [[ ! -d third_party/behavior_models/behavior_models ]]; then
+    echo "ERROR: missing submodule third_party/behavior_models" >&2
+    echo "  git submodule update --init --recursive" >&2
+    exit 1
+  fi
 fi
 
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
-echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL exclude_sticky=$EXCLUDE_STICKY_TRIALS actkernel_choice=$ACTKERNEL_CHOICE_NULL"
+echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
+echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
@@ -60,6 +60,7 @@ ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
 ARGS+=(--stream-pool)
 [[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
 [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
+[[ -n "$ACTKERNEL_NULL_MODE" ]] && ARGS+=(--actkernel-null-mode "$ACTKERNEL_NULL_MODE")
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(
   --exclude-sticky-trials
   --sticky-late-frac "$STICKY_LATE_FRAC"
@@ -71,6 +72,15 @@ echo "Shard done: $(date)"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
 SUFFIX=""
-[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && SUFFIX="_pseudosession"
-[[ "$SESSION_SHUFFLE_NULL" == "1" && "$ACTKERNEL_CHOICE_NULL" != "1" ]] && SUFFIX="_harris"
+if [[ -n "$ACTKERNEL_NULL_MODE" ]]; then
+  case "$ACTKERNEL_NULL_MODE" in
+    strat) SUFFIX=_pseudo_strat ;;
+    fixedstim) SUFFIX=_pseudo_fixed ;;
+    unconstrained) SUFFIX=_pseudosession ;;
+  esac
+elif [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
+  SUFFIX=_pseudo_strat
+elif [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
+  SUFFIX=_harris
+fi
 ls -lh "$RES_ROOT/_stream_acc/${SPLIT}${SUFFIX}.shard${SHARD_IDX}.npy" 2>/dev/null || true

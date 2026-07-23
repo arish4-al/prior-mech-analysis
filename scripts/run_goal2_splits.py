@@ -225,10 +225,15 @@ def main():
                         'on the real session only; null labels = another eid\'s '
                         'choices at the same trial indices (default: label shuffle)')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,
-                   help='BWM-style ActionKernel synthetic-session nulls '
-                        '(generate_pseudo_session stim/blocks + simulate_choices '
-                        'under fitted θ; labels at real elig_idx). '
+                   help='Enable ActionKernel synthetic-choice nulls for '
+                        'choice_stim*/choice_duringstim* (default mode: strat). '
                         'Takes precedence over --session-shuffle-null')
+    p.add_argument('--actkernel-null-mode', default=None,
+                   choices=['strat', 'fixedstim', 'unconstrained'],
+                   help='AK null variant: strat=stim×block–stratified pseudo '
+                        '(opt 1); fixedstim=real stim×block sequence (opt 2); '
+                        'unconstrained=legacy calendar-index pseudo. '
+                        'Implies AK null even without --actkernel-choice-null')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -298,10 +303,14 @@ def main():
     if args.finalize_only:
         if args.exclude_sticky_trials:
             ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
+        ak_mode = args.actkernel_null_mode
         ba.configure_null_file_suffix(
             actkernel_choice_null=args.actkernel_choice_null,
             session_shuffle_null=(
-                args.session_shuffle_null and not args.actkernel_choice_null),
+                args.session_shuffle_null
+                and ba._resolve_actkernel_null_mode(
+                    args.actkernel_choice_null, ak_mode) is None),
+            actkernel_null_mode=ak_mode,
         )
         print('ONE cache:', ba.one.cache_dir)
         print('Finalize splits:', splits, 'res=', ba.pth_res,
@@ -331,6 +340,7 @@ def main():
           'shard:', args.shard_idx, '/', args.n_shards, 'finalize:', finalize,
           'session_shuffle_null:', args.session_shuffle_null,
           'actkernel_choice_null:', args.actkernel_choice_null,
+          'actkernel_null_mode:', args.actkernel_null_mode,
           'exclude_sticky_trials:', args.exclude_sticky_trials)
 
     if args.exclude_sticky_trials:
@@ -339,7 +349,10 @@ def main():
     ba.configure_null_file_suffix(
         actkernel_choice_null=args.actkernel_choice_null,
         session_shuffle_null=(
-            args.session_shuffle_null and not args.actkernel_choice_null),
+            args.session_shuffle_null
+            and ba._resolve_actkernel_null_mode(
+                args.actkernel_choice_null, args.actkernel_null_mode) is None),
+        actkernel_null_mode=args.actkernel_null_mode,
     )
 
     # bycontrast=False: contrast is read from the split name (..._0.125).
@@ -358,6 +371,7 @@ def main():
         finalize=finalize,
         session_shuffle_null=args.session_shuffle_null,
         actkernel_choice_null=args.actkernel_choice_null,
+        actkernel_null_mode=args.actkernel_null_mode,
         exclude_sticky_trials=args.exclude_sticky_trials,
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,

@@ -146,46 +146,121 @@ splits (duringchoice `choice_stim_*` + duringstim `choice_duringstim_*`).
 MCMC init in `behavior_models`). Shard logs e.g.
 `goal2_shard_g2ak_choice_stim_r_block_l_act_s0_*.out`: `ok 0/1 splits`,
 `MISSING shard …/choice_stim_…shard0.npy`. Duringstim shards failed the same way
-(confirmed). Pooled `*_pseudosession*` files under local `res/new` are **not** a
-successful BWM null run — duringchoice mtimes are **Jul 14** (old, renamed);
-duringstim Jul 23 finalize had nothing usable from this null.
+(confirmed). Pooled `*_pseudosession*` files under local `res/new` from that
+attempt are **not** a successful BWM null run.
 
-**Deps for re-run (ibl conda on ORCD):** `torch` + **`pip install sobol_seq`**
-(plus usual numpy/pandas/scipy/tqdm/iblutil/brainbox). `joblib` /
-`paper-brain-wide-map` not required for our path. Clear
-`manifold/actkernel_fits/` and failed `res/_stream_acc/choice_*` /
-stale `res/choice_*_pseudosession*.npy` before resubmitting; then smoke
-(`SMOKE_FIRST=1` or `scripts/smoke_choice_actkernel_null.py`).
+**Deps:** `torch` + **`pip install sobol_seq`** in ibl conda (plus usual stack).
+Clear `manifold/actkernel_fits/` and failed choice stream/pooled `_pseudosession`
+outputs before resubmitting.
 
-**Filename tagging (code):** pooled / stream_acc append null suffix; label shuffle
-stays plain.
+### 2026-07-23b — Re-run after `sobol_seq` (all 8 splits) + null bug
+
+**Re-run landed** in alyx `manifold/res/new/` (mtimes ~15:25–15:28). All 8
+`*_pseudosession` act splits present. Coverage still short of sibling
+`act_block` / openalyx (~62k): ~197–200 regions, ~49–54k cells / split
+(~79–89% vs oa; matched Δnclus vs `act_block_duringstim_l` ≈ −43 to −47).
+
+**Tables** (`meta/table_choice_pseudosession_vs_shuffle_*`):
+
+| α | epoch | shuffle | pseudosession | lost | gained | kept |
+|---|-------|--------:|---------------:|-----:|-------:|-----:|
+| 0.05 | duringstim | 71 | **204** | 0 | 133 | 71 |
+| 0.05 | duringchoice | 107 | **202** | 1 | 96 | 106 |
+| 0.01 | duringstim | 46 | **200** | 1 | 155 | 45 |
+| 0.01 | duringchoice | 84 | **201** | 1 | 118 | 83 |
+
+Pseudosession calls almost every region significant — **not** a tighter null.
+
+**Bug (under-dispersed null):** same insertion, same observed euc amp; AK
+pseudo-session null amps ≪ label-shuffle null amps (e.g. LD: shuffle null
+med ≈ 2.9 vs obs 3.6; AK null med ≈ 1.2, max 2.2 → false p≪0.05). Pooled
+regde (CP): shuffle null med ≈ obs; pseudo null med ≈ **½** obs and never
+exceeds it.
+
+**Mechanism:** eligibility is stim×prior (act-binary 0.8/0.2). Real choices on
+those trials are often **highly imbalanced** (e.g. 57 L vs 3 R). Label shuffle
+**preserves** that n_L/n_R → large noise-floor distances. BWM pseudo-sessions
+regenerate full stim/blocks, then we read choices at real `elig_idx` → ~**50/50**
+labels on the same neural trials → much smaller null euc distances → inflated
+significance. Confirmed: reshuffling those balanced AK labels still yields the
+low null floor; fixed-stim AK choices (real stim/block) partially restore
+imbalance but still below shuffle.
+
+**Not a `sobol_seq` / fit crash** on this re-run; statistical null construction
+bug relative to stratified choice L–R.
+
+#### Current null options (pending decision)
+
+Goal: restore realistic **n_L/n_R** (and temporal structure) on stim×block–
+stratified `elig_idx` without defeating the structured null.
+
+| # | Null | Stim×block | Choice process | Late-session stickiness | `nrand`≈2000? |
+|---|------|------------|----------------|-------------------------|---------------|
+| **1** | Pseudosession + **stim×block stratification** | New pseudo schedule, but stratified / constrained so eligible slots match real stim×block (bias context) | AK simulate under fitted θ | **No** explicit late stickiness (stationary `α` only; blocky runs via stim+history) | **Yes** — unlimited synthetic draws |
+| **2** | Pseudosession on **exact real stim×block sequence** | Pin recorded `(stim_side, pLeft)` (fixed-stim); only choices are synthetic | AK simulate under fitted θ | **No** (same as 1 — AK has no time-varying perseveration) | **Yes** — resample choices on the fixed stream |
+| **3** | **Harris / session transplant** (original): other sessions’ choice sequences at recipient `elig_idx`, conditioned on stim×block stratification | Real recipient stim×block defines eligibility; donor choices indexed in | Empirical choices from other eids | **Yes** — real mice carry late-session / sticky structure | **No** — donor pool ≪ 2000 unique usable sequences |
+
+**Notes:**
+- Unconstrained full BWM pseudo (calendar-index into mismatched stim×block;
+  former `_pseudosession` run) is **retired as default**: ~50/50 labels →
+  under-dispersed null. Kept only as legacy `unconstrained` mode if needed.
+- **1 vs 2 (AK synthetic choices):**
+  - **Shared:** both fit θ once per eid; both can draw `nrand≈2000`; both use
+    stationary AK `α` (no extra late-session perseveration beyond blocks +
+    choice history); both aim to restore stim×block–appropriate choice
+    imbalance on the labels applied to neural `elig` trials.
+  - **1 (stratified pseudo):** each null draws a **new** pseudo stim/block
+    stream + AK choices; labels = choices on the pseudo’s own stim×prior
+    stratum (same definition as the split: true-block or act-binary), taken in
+    temporal order and length-matched to `n_elig`. Breaks the recorded
+    stim/block schedule (stronger “new world” / BWM-like confound break) while
+    still evaluating choices that lived in the correct bias context. Stratum
+    size varies per draw → reject if too few trials.
+  - **2 (fixed real stim×block):** AK choices on the **exact** recorded
+    `(stim, side)` sequence; labels at real `elig_idx`. Strongest match to the
+    session’s bias timeline and usually closest n_L/n_R to observed; weaker as
+    a confound break because neurons and the null policy share the same stim
+    stream (choices remain stochastic under θ, not a copy of real choices).
+  - **When to prefer which:** use **1** if the scientific goal is closest to
+    BWM “behavior under an independent generative world”; use **2** if the
+    priority is a fair stratified null that matches imbalance/temporal bias
+    with minimal reject rate and maximum schedule fidelity.
+- **3** (`--session-shuffle-null` / `_harris`): empirical sticky structure;
+  donor pool ≪ 2000 unique sequences without replacement / circular shifts.
+- **Cluster:** `NULL_SCHEME=pseudo_strat|pseudo_fixed|harris` via
+  `scripts/submit_goal2_choice_null_sharded.sh`, or all three with
+  `scripts/submit_goal2_choice_null_all_schemes_sharded.sh`.
+
+**Filename tagging:**
 
 | Null | On-disk basename |
 |------|------------------|
-| label shuffle (default) | `{split}.npy` / `{split}_regde.npy` |
-| `--actkernel-choice-null` (BWM pseudo-sessions) | `{split}_pseudosession.npy` / `_regde` / stream `{split}_pseudosession.shard{k}.npy` |
-| `--session-shuffle-null` (Harris) | `{split}_harris.npy` / … |
-
-Tag: `null_scheme: synthetic_choice_pseudosession`.
-
-**Invalid comparison tables (do not trust):** earlier FDR/retention numbers vs
-openalyx shuffle used those broken/renamed `res/new` choice files. Sibling arms
-in the same `res/new` folder (`act_block_duringstim_*`, `stim_block_*_bayes`)
-retain ~62–63k cells / ~207–209 regions (match last-year openalyx) — same
-dataset is fine; only the failed choice L–R actkernel pool looked “short.”
-Re-plot after a clean ORCD re-run:
+| label shuffle | `{split}.npy` |
+| option 1 AK stratified pseudo | `{split}_pseudo_strat.npy` |
+| option 2 AK fixed stim×block | `{split}_pseudo_fixed.npy` |
+| option 3 Harris | `{split}_harris.npy` |
+| legacy unconstrained BWM index | `{split}_pseudosession.npy` |
 
 ```bash
-conda activate iblenv
 python scripts/plot_choice_null_comparison_table.py \
   --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
   --arm-tag pseudosession --force-combine --alpha 0.05
 ```
 
-**ORCD:** sync `_pseudosession` suffix code onto `main`; finalize must export
-`ACTKERNEL_CHOICE_NULL=1`. BWM gain/offset tables at FDR α=0.05 / 0.01 (separate
-from this null): [07-06 §2026-07-20](research_journal_2026-07-06.md) — **2**/185
-(MRN, SCm) at α=0.05; **0** at α=0.01.
+**ORCD:**
+```bash
+# all three schemes (opt 1–3)
+bash scripts/submit_goal2_choice_null_all_schemes_sharded.sh
+
+# or one at a time:
+NULL_SCHEME=pseudo_strat bash scripts/submit_goal2_choice_null_sharded.sh
+NULL_SCHEME=pseudo_fixed bash scripts/submit_goal2_choice_null_sharded.sh
+NULL_SCHEME=harris      bash scripts/submit_goal2_choice_null_sharded.sh
+```
+Needs `sobol_seq` + `torch` for AK schemes; Harris needs donor bank job
+(auto-submitted). Finalize must export the same `ACTKERNEL_NULL_MODE` /
+`SESSION_SHUFFLE_NULL` as shards. Do **not** interpret legacy unconstrained
+`_pseudosession` sig tables.
 
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 
