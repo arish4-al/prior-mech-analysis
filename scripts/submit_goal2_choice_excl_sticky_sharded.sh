@@ -12,9 +12,6 @@
 #   PRESET=choice_lr_excl_sticky_bayes \
 #     bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 #
-# Optional: also compare synthetic-choice null on the same excluded trials:
-#   SYNTHETIC_CHOICE_NULL=1 bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
-#
 # Assumes insertion cache already exists.
 
 set -euo pipefail
@@ -30,7 +27,6 @@ EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-1}"
 STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
 STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
 SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
-SYNTHETIC_CHOICE_NULL="${SYNTHETIC_CHOICE_NULL:-0}"
 MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
@@ -38,7 +34,7 @@ CPUS_FIN="${CPUS_FIN:-2}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export EXCLUDE_STICKY_TRIALS STICKY_LATE_FRAC STICKY_MIN_RUN
-export SESSION_SHUFFLE_NULL SYNTHETIC_CHOICE_NULL
+export SESSION_SHUFFLE_NULL
 
 module load miniforge 2>/dev/null || true
 if [[ -f "$HOME/conda_envs/ibl/bin/activate" ]]; then
@@ -63,7 +59,7 @@ fi
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "EXCLUDE_STICKY_TRIALS=$EXCLUDE_STICKY_TRIALS  late_frac=$STICKY_LATE_FRAC  min_run=$STICKY_MIN_RUN"
-echo "SESSION_SHUFFLE_NULL=$SESSION_SHUFFLE_NULL  SYNTHETIC_CHOICE_NULL=$SYNTHETIC_CHOICE_NULL"
+echo "SESSION_SHUFFLE_NULL=$SESSION_SHUFFLE_NULL"
 echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  shard_jobs=$n_shard_jobs"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_excl_sticky/"
 echo "Splits:"
@@ -82,7 +78,7 @@ for sp in "${SPLITS[@]}"; do
     JID=$(sbatch --parsable \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2x_${TAG}_s${k}" \
-      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL",SYNTHETIC_CHOICE_NULL="$SYNTHETIC_CHOICE_NULL" \
+      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
       scripts/run_goal2_shard_slurm.sh)
     SHARD_JOBS+=("$JID")
     echo "  $sp shard $k/$N_SHARDS -> $JID"

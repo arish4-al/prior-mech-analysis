@@ -11,8 +11,9 @@
 # Assumes insertion cache already exists (run_goal2_cache_slurm.sh done).
 #
 # Donor bank: submitted as a Slurm job (NOT on the login node). Shard jobs
-# depend on it (afterok). Bank stores choice + stim + pLeft; nulls transplant
-# stim×block–matched contiguous streams. SESSION_SHUFFLE_NULL=1 by default.
+# depend on it (afterok). Bank stores full-session choice sequences; Harris
+# nulls index donor choices at the recipient's stim×prior–eligible trial
+# numbers. SESSION_SHUFFLE_NULL=1 by default.
 #
 # Optional smoke inside the donor job (compute node):
 #   SMOKE_FIRST=1 bash scripts/submit_goal2_choice_session_null_sharded.sh
@@ -114,7 +115,7 @@ for sp in "${SPLITS[@]}"; do
 done
 
 echo "Done. Monitor: squeue -u \$USER"
-echo "Null scheme: stratified Harris session-permutation when SESSION_SHUFFLE_NULL=1"
+echo "Null scheme: Harris session-permutation when SESSION_SHUFFLE_NULL=1"
 echo "Donor bank job (compute node): scripts/run_goal2_choice_donors_slurm.sh"
 echo "Shard outputs: \$ONE_CACHE_DIR/manifold/res/_stream_acc/{split}.shard{k}.npy"
 echo "Final outputs: \$ONE_CACHE_DIR/manifold/res/{split}.npy"

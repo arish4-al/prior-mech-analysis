@@ -37,15 +37,21 @@ SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
 EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-0}"
 STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
 STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
-SYNTHETIC_CHOICE_NULL="${SYNTHETIC_CHOICE_NULL:-0}"
+ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
+if [[ "$ACTKERNEL_CHOICE_NULL" == "1" && ! -d third_party/behavior_models/behavior_models ]]; then
+  echo "ERROR: ACTKERNEL_CHOICE_NULL=1 but missing submodule third_party/behavior_models" >&2
+  echo "  git submodule update --init --recursive" >&2
+  exit 1
+fi
+
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
-echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL exclude_sticky=$EXCLUDE_STICKY_TRIALS synthetic_choice=$SYNTHETIC_CHOICE_NULL"
+echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND session_shuffle_null=$SESSION_SHUFFLE_NULL exclude_sticky=$EXCLUDE_STICKY_TRIALS actkernel_choice=$ACTKERNEL_CHOICE_NULL"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
@@ -53,7 +59,7 @@ ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
 [[ "$RESTART" == "1" ]] && ARGS+=(--restart) || ARGS+=(--no-restart)
 ARGS+=(--stream-pool)
 [[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
-[[ "$SYNTHETIC_CHOICE_NULL" == "1" ]] && ARGS+=(--synthetic-choice-null)
+[[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(
   --exclude-sticky-trials
   --sticky-late-frac "$STICKY_LATE_FRAC"

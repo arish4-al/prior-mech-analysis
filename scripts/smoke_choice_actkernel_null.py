@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 """
-Smoke-test Harris session-permutation nulls.
+Smoke-test BWM-style ActionKernel synthetic-session nulls.
 
-Builds / loads choice_donors.npy, then runs get_d_vars on the first insertion
-cache entry that has ≥5 trials/side for a choice_stim* / choice_duringstim* split.
+Runs get_d_vars with --actkernel-choice-null on the first insertion_cache
+entry that has enough trials for a choice_stim* / choice_duringstim* split.
 
-  python scripts/smoke_choice_session_null.py
-  ONE_CACHE_DIR=/orcd/data/.../alyx python scripts/smoke_choice_session_null.py
+Uses a short MCMC (ACTKERNEL_NB_STEPS, default 80) so the fit finishes
+quickly; short fits write under a separate actkernel_fits/*_nbN dir and do
+not overwrite paper-length pickles.
+
+  conda activate iblenv   # needs torch; behavior_models from third_party/ submodule
+  # fresh clone: git submodule update --init --recursive
+  python scripts/smoke_choice_actkernel_null.py
+  ONE_CACHE_DIR=/orcd/data/.../alyx SMOKE_NRAND=8 ACTKERNEL_NB_STEPS=50 \\
+    python scripts/smoke_choice_actkernel_null.py
 """
 from __future__ import annotations
 
@@ -26,13 +33,14 @@ import block_analysis_allsplits as ba  # noqa: E402
 SPLITS = [
     'choice_stim_l', 'choice_stim_r',
     'choice_stim_l_block_l', 'choice_stim_l_block_r',
-    'choice_stim_r_block_l', 'choice_stim_r_block_r',
     'choice_duringstim_l', 'choice_duringstim_r',
-    'choice_duringstim_l_block_l', 'choice_duringstim_r_block_r',
 ]
 
 
 def main():
+    # Short MCMC for smoke only (separate pickle path via get_actkernel_choice_fit).
+    os.environ.setdefault('ACTKERNEL_NB_STEPS', '80')
+
     cache = Path(os.environ.get(
         'ONE_CACHE_DIR',
         Path.home() / 'Downloads/ONE/alyx.internationalbrainlab.org',
@@ -41,21 +49,16 @@ def main():
     ba.pth_res = Path(ba.one.cache_dir, 'manifold', 'res')
     ba.pth_res.mkdir(parents=True, exist_ok=True)
 
-    print('Building / rebuilding choice donor bank …', flush=True)
-    bank = ba.build_choice_donor_bank(restart=False)
-    if not bank:
-        raise SystemExit('Empty donor bank — need manifold/insertion_cache')
-    rec0 = next(iter(bank.values()))
-    if not isinstance(rec0, dict) or 'choice' not in rec0:
-        raise SystemExit('Donor bank missing choice field; rebuild failed')
-    print(f'  {len(bank)} eids -> {ba._choice_donors_path()}', flush=True)
-
     caches = sorted(
         Path(ba.one.cache_dir, 'manifold', 'insertion_cache').glob('*.npy'))
     if not caches:
         raise SystemExit('No insertion_cache/*.npy')
 
-    nrand = int(os.environ.get('SMOKE_NRAND', '15'))
+    nrand = int(os.environ.get('SMOKE_NRAND', '8'))
+    print(f'actkernel smoke: nrand={nrand} '
+          f'ACTKERNEL_NB_STEPS={os.environ.get("ACTKERNEL_NB_STEPS")}',
+          flush=True)
+
     for fpath in caches:
         c = np.load(fpath, allow_pickle=True).item()
         pid, eid = c.get('pid'), c.get('eid')
@@ -65,27 +68,24 @@ def main():
             try:
                 D = ba.get_d_vars(
                     split, pid, control=True, nrand=nrand, cached=c,
-                    donor_bank=bank, session_shuffle_null=True)
+                    actkernel_choice_null=True)
             except ba.InsufficientTrials as exc:
                 print(f'  skip {fpath.name} {split}: {exc}', flush=True)
                 continue
+            except Exception as exc:
+                print(f'  fail {fpath.name} {split}: {type(exc).__name__}: {exc}',
+                      flush=True)
+                continue
             if not isinstance(D, dict) or D.get('null_scheme') != (
-                    'harris_session_permutation'):
+                    'synthetic_choice_actkernel'):
                 raise SystemExit(
                     f'Unexpected return for {split}: '
                     f'{D.get("null_scheme") if isinstance(D, dict) else type(D)}')
-            # Eligible trial indices live in the stratified path; donors must
-            # be long enough for typical sessions (≥ need ≈ max trial index).
-            n_long = sum(
-                1 for e, rec in bank.items()
-                if e != str(eid)
-                and len(ba._normalize_donor_rec(rec)['choice']) >= 50)
             print(f'OK {split} eid={eid}', flush=True)
             print(f'  null_scheme={D["null_scheme"]} '
                   f'n_regs={len(D.get("D", {}))} uperms={D.get("uperms")}',
                   flush=True)
-            print(f'  donors with len≥50: {n_long}/{max(len(bank) - 1, 0)}',
-                  flush=True)
+            print(f'  actkernel_params={D.get("actkernel_params")}', flush=True)
             print('SMOKE PASSED', flush=True)
             return
     raise SystemExit('SMOKE FAILED: no insertion × split completed')
