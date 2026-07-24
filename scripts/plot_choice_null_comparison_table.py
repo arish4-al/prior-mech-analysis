@@ -108,6 +108,20 @@ def combine_four_splits(
 
     r = {}
     for reg, (sum_real, controls) in combined_regde.items():
+        controls = np.asarray(controls)
+        # Drop exact-duplicate null curves (Harris unique-null / accidental
+        # repeats). Observed row is never deduped.
+        if controls.size and controls.ndim == 2 and len(controls) > 1:
+            uniq_rows = []
+            seen = set()
+            for row in controls:
+                key = np.ascontiguousarray(row).tobytes()
+                if key in seen:
+                    continue
+                seen.add(key)
+                uniq_rows.append(row)
+            controls = np.asarray(uniq_rows)
+            combined_regde[reg] = [sum_real, controls]
         amp_real = float(np.max(sum_real) - np.min(sum_real))
         amp_controls = [float(np.max(c) - np.min(c)) for c in controls]
         p_euc = float(np.mean(np.asarray(amp_controls) >= amp_real))
@@ -122,6 +136,7 @@ def combine_four_splits(
             'p_euc': p_euc,
             'p_mean': p_mean,
             'p_amp': p_amp,
+            'n_null': int(len(controls)),
             'lat_euc': np.nan,
             'p_gain': np.nan,
             'p_offset': np.nan,
@@ -389,7 +404,9 @@ def main():
         'strat': '_pseudo_strat',
         'pseudo_fixed': '_pseudo_fixed',
         'fixedstim': '_pseudo_fixed',
-        'harris': '_harris',
+        'harris': '_harris',  # legacy with-replacement (2026-07-24e)
+        'harris_unique': '_harris_unique',
+        'harris_u': '_harris_unique',
     }
     if not suffix and args.arm_tag in tag_aliases:
         suffix = tag_aliases[args.arm_tag]

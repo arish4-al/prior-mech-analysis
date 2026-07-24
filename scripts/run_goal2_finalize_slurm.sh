@@ -55,6 +55,6 @@ if [[ -n "$ACTKERNEL_NULL_MODE" ]]; then
 elif [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
   SUFFIX=_pseudo_strat
 elif [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
-  SUFFIX=_harris
+  SUFFIX=_harris_unique
 fi
 ls -lh "$RES_ROOT/${SPLIT}${SUFFIX}"*.npy 2>/dev/null || true

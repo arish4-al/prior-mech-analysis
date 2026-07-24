@@ -9,16 +9,16 @@
 #                   default PSEUDO_LEN_FACTOR=3; adaptive bump to 16 if needed
 #                   always writes {split}_pseudo_strat*.npy (overwrites prior strat)
 #   pseudo_fixed  — opt 2: AK on exact real stim×block sequence
-#   harris        — opt 3: session-transplant; donor re-filtered to same
-#                   stim×prior stratum (overwrites _harris; CLEAR_STREAM=1)
+#   harris / harris_unique — opt 3 unique-null: writes {split}_harris_unique*
+#                   (does NOT overwrite legacy with-replacement _harris)
 #
 # Strat rerun (recommended):
 #   bash scripts/submit_goal2_choice_strat_x3_sharded.sh
 #   # or:
 #   NULL_SCHEME=pseudo_strat bash scripts/submit_goal2_choice_null_sharded.sh
 #
-# Harris rerun (donor re-strat; clears prior _harris):
-#   NULL_SCHEME=harris bash scripts/submit_goal2_choice_null_sharded.sh
+# Harris unique-null (clears prior _harris_unique only; keeps legacy _harris):
+#   NULL_SCHEME=harris_unique bash scripts/submit_goal2_choice_null_sharded.sh
 #
 #   CLEAR_STREAM=0  — keep existing stream_acc / res (default clears for strat+harris)
 #   SMOKE_FIRST=1 NULL_SCHEME=pseudo_strat \
@@ -81,12 +81,13 @@ case "$_ORIG_SCHEME" in
     PSEUDO_LEN_FACTOR=""
     CLEAR_STREAM="${CLEAR_STREAM:-0}"
     ;;
-  harris|session)
-    NULL_SCHEME=harris
+  harris|harris_unique|session)
+    # Unique-null Harris → _harris_unique (legacy with-replacement _harris untouched)
+    NULL_SCHEME=harris_unique
     SESSION_SHUFFLE_NULL=1
-    CASE_TAG=harris
-    SUFFIX=_harris
-    JOB_PREFIX=g2h
+    CASE_TAG=harris_unique
+    SUFFIX=_harris_unique
+    JOB_PREFIX=g2hu
     PSEUDO_LEN_FACTOR=""
     CLEAR_STREAM="${CLEAR_STREAM:-1}"
     if [[ "${MEM_SHARD}" == "12G" ]]; then
@@ -94,7 +95,7 @@ case "$_ORIG_SCHEME" in
     fi
     ;;
   *)
-    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|harris (got $_ORIG_SCHEME)" >&2
+    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|harris_unique (got $_ORIG_SCHEME)" >&2
     exit 1
     ;;
 esac
@@ -130,15 +131,23 @@ if [[ ${#SPLITS[@]} -eq 0 ]]; then
 fi
 
 # Overwrite prior run for this SUFFIX (CLEAR_STREAM=1): drop stream_acc + pooled res.
-# Exact basename match so e.g. _pseudo_strat_x3 leftovers are left alone.
+# Exact basename match so e.g. _harris is never removed when SUFFIX=_harris_unique.
 if [[ "$CLEAR_STREAM" == "1" && -n "$SUFFIX" ]]; then
   RES_ROOT="$ONE_CACHE_DIR/manifold/res"
   ACC="$RES_ROOT/_stream_acc"
+  if [[ "$SUFFIX" == "_harris" ]]; then
+    echo "ERROR: refusing CLEAR_STREAM for legacy SUFFIX=_harris (use _harris_unique)" >&2
+    exit 1
+  fi
   echo "CLEAR_STREAM=1: removing prior ${SUFFIX} stream_acc + res under $RES_ROOT"
+  if [[ "$SUFFIX" == "_harris_unique" ]]; then
+    echo "  (legacy {split}_harris*.npy left untouched)"
+  fi
   for sp in "${SPLITS[@]}"; do
     base="${sp}${SUFFIX}"
     rm -f "$ACC/${base}.npy" "$ACC/${base}.shard"*.npy 2>/dev/null || true
-    rm -f "$RES_ROOT/${base}.npy" "$RES_ROOT/${base}_regde.npy" "$RES_ROOT/${base}_all.npy" \
+    rm -f "$RES_ROOT/${base}.npy" "$RES_ROOT/${base}_regde.npy" \
+      "$RES_ROOT/${base}_all.npy" "$RES_ROOT/${base}_all_regde.npy" \
       2>/dev/null || true
   done
 fi

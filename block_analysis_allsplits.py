@@ -532,7 +532,8 @@ def configure_null_file_suffix(
     - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (any len_factor)
     - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy``
     - AK ``unconstrained`` → ``{split}_pseudosession*.npy`` (legacy)
-    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy``
+    - ``--session-shuffle-null`` (Harris unique-null) → ``{split}_harris_unique*.npy``
+      (does **not** overwrite legacy with-replacement ``{split}_harris*.npy``)
     - default label shuffle → ``{split}*.npy``
     '''
     del actkernel_pseudo_len_factor  # unused for naming; kept for call-site compat
@@ -542,7 +543,7 @@ def configure_null_file_suffix(
     if mode is not None:
         RES_FILE_SUFFIX = _ACTKERNEL_MODE_SUFFIX[mode]
     elif session_shuffle_null:
-        RES_FILE_SUFFIX = '_harris'
+        RES_FILE_SUFFIX = '_harris_unique'
     else:
         RES_FILE_SUFFIX = ''
     if RES_FILE_SUFFIX:
@@ -577,6 +578,9 @@ def output_split_name(split):
 NULL_BATCH_SIZE = 100
 # Retries per null draw when indexing donor session choices (empty side / short donor).
 HARRIS_MAX_TRIES = 50
+# Stop Harris sampling after this many consecutive duplicate/reject draws with
+# no new unique label pattern (unique-null mode; see _compute_control_D_harris).
+HARRIS_UNIQUE_STALE_LIMIT = 200
 SESSION_SHUFFLE_MAX_TRIES = HARRIS_MAX_TRIES  # back-compat alias
 # Trial exclusion for drift×stickiness sensitivity (choice L–R).
 STICKY_LATE_FRAC = 0.20
@@ -1055,7 +1059,14 @@ def _compute_control_D(b, bins, acs, acs1, dx, half1, half2, ntr, nrand, split,
     }
 
 
+def _choice_donors_candidates():
+    '''Possible on-disk locations for the Harris donor bank.'''
+    root = Path(one.cache_dir, 'manifold')
+    return [root / 'choice_donors.npy', root / 'res' / 'choice_donors.npy']
+
+
 def _choice_donors_path():
+    '''Write path for a newly built bank (canonical ``manifold/choice_donors.npy``).'''
     return Path(one.cache_dir, 'manifold', 'choice_donors.npy')
 
 
@@ -1163,10 +1174,27 @@ def build_choice_donor_bank(restart=True):
 
 
 def load_choice_donor_bank():
-    '''Load donor bank; build from insertion_cache if missing.'''
-    path = _choice_donors_path()
-    if path.exists():
-        return np.load(path, allow_pickle=True).item()
+    '''Load donor bank; prefer the on-disk copy with the most eids.
+
+    Checks ``manifold/choice_donors.npy`` and ``manifold/res/choice_donors.npy``
+    so a tiny local smoke bank does not shadow a full ORCD export under res/.
+    Builds from insertion_cache if none exist.
+    '''
+    best_path, best_bank, best_n = None, None, -1
+    for path in _choice_donors_candidates():
+        if not path.exists():
+            continue
+        try:
+            bank = np.load(path, allow_pickle=True).item()
+        except Exception as exc:
+            print(f'WARNING: could not load donor bank {path}: {exc}')
+            continue
+        n = len(bank) if isinstance(bank, dict) else 0
+        if n > best_n:
+            best_path, best_bank, best_n = path, bank, n
+    if best_bank is not None:
+        print(f'choice donor bank (cached): {best_n} eids <- {best_path}')
+        return best_bank
     return build_choice_donor_bank(restart=False)
 
 
@@ -1252,6 +1280,11 @@ def _sample_harris_ys(n_elig, donor_bank, eid, split, choices_true=None,
     return None
 
 
+def _harris_label_key(ys):
+    '''Stable key for a boolean/0-1 choice label vector.'''
+    return np.asarray(ys, dtype=np.uint8).tobytes()
+
+
 def _compute_control_D_harris(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
         donor_bank, eid, elig_idx, null_batch_size=NULL_BATCH_SIZE):
@@ -1262,8 +1295,14 @@ def _compute_control_D_harris(
     Each null draw takes another eid's choices from the **same** stim×prior
     stratum (true-block / act-binary / bayes), length-matched to ``n_elig``.
 
-    If there are no stratum-matched donors, or ``nrand`` balanced draws cannot
-    be obtained, raises ``InsufficientTrials`` (insertion skipped upstream).
+    **Unique nulls:** only distinct label patterns are kept (with-replacement
+    duplicates are skipped). Sampling stops at ``nrand`` uniques, or earlier
+    when the unique pool is exhausted (``HARRIS_UNIQUE_STALE_LIMIT``
+    consecutive duplicate/reject draws). P-values then use this finite unique
+    set (see ``_euc_curve_summary``), not a padded 2000 with repeats.
+
+    If there are no stratum-matched donors, or no balanced unique draw can be
+    obtained, raises ``InsufficientTrials`` (insertion skipped upstream).
     """
     del null_batch_size  # reserved; sampling is one donor draw per try
     choices_true = np.asarray(choices_true, dtype=float)
@@ -1285,6 +1324,7 @@ def _compute_control_D_harris(
         for reg in regs
     }
     label_perms = [ys_true]
+    seen = {_harris_label_key(ys_true)}
 
     def _append_perm(m0, m1, v0, v1, ys):
         for reg in regs:
@@ -1317,20 +1357,29 @@ def _compute_control_D_harris(
     rng = np.random.default_rng()
     n_done = 0
     n_tries = 0
+    n_stale = 0
     max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
-    while n_done < nrand:
+    stale_limit = max(HARRIS_UNIQUE_STALE_LIMIT, nrand)
+    while n_done < nrand and n_stale < stale_limit:
         ys = _sample_harris_ys(
             n_elig, donor_bank, eid, split, rng=rng, candidates=candidates,
             max_tries=1)
         n_tries += 1
         if not _ok(ys):
-            if n_tries >= max_tries_total:
+            n_stale += 1
+            if n_done == 0 and n_tries >= max_tries_total:
                 raise InsufficientTrials(
-                    f'harris-null [{split}]: only {n_done}/{nrand} balanced '
-                    f'donor draws after {n_tries} tries '
+                    f'harris-null [{split}]: 0 balanced unique donor draws '
+                    f'after {n_tries} tries '
                     f'({len(candidates)} stratum-matched donors); '
                     f'skipping insertion')
             continue
+        key = _harris_label_key(ys)
+        if key in seen:
+            n_stale += 1
+            continue
+        seen.add(key)
+        n_stale = 0
         label_perms.append(ys)
         _append_perm(
             b[ys].mean(axis=0), b[~ys].mean(axis=0),
@@ -1338,6 +1387,15 @@ def _compute_control_D_harris(
             ys,
         )
         n_done += 1
+
+    if n_done == 0:
+        raise InsufficientTrials(
+            f'harris-null [{split}]: no balanced unique donor draws '
+            f'({len(candidates)} stratum-matched donors); skipping insertion')
+    if n_done < nrand:
+        print(f'harris-null [{split}]: unique pool saturated at '
+              f'{n_done}/{nrand} (stale={n_stale}, tries={n_tries}, '
+              f'donors={len(candidates)}); using unique null set only')
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
@@ -1347,10 +1405,11 @@ def _compute_control_D_harris(
         'd_vars': d_var,
         'd_eucs': d_euc,
         'ws': np.array([m0_true, m1_true])[:ntravis],
-        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
+        'uperms': len(label_perms),  # obs + unique nulls
         'D': D,
-        'null_scheme': 'harris_session_permutation',
+        'null_scheme': 'harris_session_permutation_unique',
         'harris_n_stratum_donors': len(candidates),
+        'harris_n_unique_nulls': int(n_done),
     }
 
 def _compute_control_D_actkernel_choice(
@@ -1647,7 +1706,7 @@ def _get_d_vars_session_shuffle(
         'ws': ws[:ntravis],
         'null_scheme': (
             'synthetic_choice_pseudosession' if actkernel_choice_null
-            else 'harris_session_permutation'),
+            else 'harris_session_permutation_unique'),
     }
 
 
@@ -2661,10 +2720,25 @@ def merge_stream_acc_shards(split, min_reg=min_reg, include_unsharded=True):
     return merged
 
 
-def finalize_stream_shards(split, min_reg=min_reg, cleanup=True):
-    '''Merge all shards for ``split`` and write manifold/res/{split}*.npy.'''
+def finalize_stream_shards(split, min_reg=min_reg, cleanup=None):
+    '''Merge all shards for ``split`` and write manifold/res/{split}*.npy.
+
+    ``cleanup``: remove stream_acc after a successful write. Default: keep
+    checkpoints for Harris unique-null (``RES_FILE_SUFFIX=_harris_unique`` or
+    env ``KEEP_STREAM_ACC=1``) so unique counts remain inspectable; otherwise
+    delete (legacy).
+    '''
+    if cleanup is None:
+        keep = (
+            str(os.environ.get('KEEP_STREAM_ACC', '')).lower() in (
+                '1', 'true', 'yes')
+            or RES_FILE_SUFFIX == '_harris_unique'
+            or str(RES_FILE_SUFFIX).startswith('_harris')
+        )
+        cleanup = not keep
     acc = merge_stream_acc_shards(split, min_reg=min_reg)
-    print(f'finalize {split}: {len(acc.pooled_keys)} insertions pooled')
+    print(f'finalize {split}: {len(acc.pooled_keys)} insertions pooled '
+          f'(cleanup_stream_acc={cleanup})')
     return acc.finalize(save=True, cleanup_checkpoint=cleanup)
 
 
@@ -2685,7 +2759,11 @@ def _euc_curve_summary(curves, split):
     '''Summary statistics for one true curve followed by its null curves.'''
     curves = np.asarray(curves)
     amps = np.ptp(curves, axis=1)
-    d_euc = curves[0] - np.mean(curves[1:], axis=0)
+    n_null = max(int(curves.shape[0]) - 1, 0)
+    # Exact-style p on the stored null set: (1 + #null≥obs) / (1 + n_null).
+    # Equivalent to mean(amps >= amps[0]) when row 0 is the observed curve.
+    p_euc = float(np.mean(amps >= amps[0])) if curves.shape[0] else np.nan
+    d_euc = curves[0] - np.mean(curves[1:], axis=0) if n_null else curves[0].copy()
     d_euc = d_euc - np.min(d_euc)
     amp_euc = float(np.max(d_euc))
     loc = np.where(d_euc > 0.7 * amp_euc)[0]
@@ -2695,11 +2773,49 @@ def _euc_curve_summary(curves, split):
         if len(loc) else np.nan
     )
     return {
-        'p_euc': float(np.mean(amps >= amps[0])),
+        'p_euc': p_euc,
         'd_euc': d_euc,
         'amp_euc': amp_euc,
         'lat_euc': lat_euc,
+        'n_null': n_null,
     }
+
+
+def _pool_insertion_curve_arrays(arrays, n_mc_null=None, rng_seed=0):
+    '''Sum per-insertion (1+U_i, T) curve stacks into one (1+n_null, T) stack.
+
+    Index-aligned ``nansum`` only when every insertion has the **full**
+    ``nrand`` nulls (classic equal-length MC). If any insertion saturated its
+    unique-null pool (``U_i < nrand``) or lengths differ, each pooled null is
+    one draw from the product of per-insertion unique sets (uniform over each
+    insertion's unique curves). Default ``n_mc_null`` is ``min(U_i)`` so
+    p-value resolution stays honest to unique-set size. Observed = sum of obs.
+    '''
+    arrays = [np.asarray(a, dtype=float) for a in arrays if a is not None]
+    if not arrays:
+        raise ValueError('no curve arrays to pool')
+    lengths = [a.shape[0] for a in arrays]
+    T = arrays[0].shape[-1]
+    obs = np.sum([a[0] for a in arrays], axis=0)
+    null_counts = [max(a.shape[0] - 1, 0) for a in arrays]
+    if any(c < 1 for c in null_counts):
+        raise ValueError('pool requires ≥1 null curve per insertion')
+    # Aligned sum only for a complete equal-length null stack (all filled nrand).
+    if len(set(lengths)) == 1 and null_counts[0] >= int(nrand):
+        stacked = np.nansum(arrays, axis=0)
+        stacked[0] = obs
+        return stacked
+    n_mc = int(n_mc_null if n_mc_null is not None else min(null_counts))
+    n_mc = max(n_mc, 1)
+    out = np.zeros((1 + n_mc, T), dtype=float)
+    out[0] = obs
+    rng = np.random.default_rng(rng_seed)
+    for k in range(n_mc):
+        acc = np.zeros(T, dtype=float)
+        for a, n_u in zip(arrays, null_counts):
+            acc += a[1 + int(rng.integers(0, n_u))]
+        out[k + 1] = acc
+    return out
 
 
 def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg,
@@ -2712,8 +2828,19 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
     regs0 = Counter(acs1_cat)
     regs = {reg: regs0[reg] for reg in regs0 if regs0[reg] > min_reg}
 
-    regdv = {reg: (np.nansum(regdv0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
-    regde = {reg: (np.nansum(regde0[reg], axis=0) / regs[reg]) ** 0.5 for reg in regs}
+    # Stable seed per split so ragged Harris product-MC is reproducible.
+    import hashlib
+    split_seed = int(hashlib.md5(str(split).encode()).hexdigest()[:8], 16)
+    regdv = {
+        reg: (_pool_insertion_curve_arrays(
+            regdv0[reg], rng_seed=split_seed + 17) / regs[reg]) ** 0.5
+        for reg in regs
+    }
+    regde = {
+        reg: (_pool_insertion_curve_arrays(
+            regde0[reg], rng_seed=split_seed + 31) / regs[reg]) ** 0.5
+        for reg in regs
+    }
 
     r = {}
     for reg in regs:
@@ -2730,10 +2857,16 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
     all_regde = None
     all_result = {}
     if all_nclus and regde0:
-        all_raw = np.nansum(
-            [np.nansum(arrays, axis=0) for arrays in regde0.values()],
-            axis=0,
-        )
+        # Per-region raw stacks (pre-normalization), then neuron-weighted pool.
+        # Use the same pooling rule as regde (aligned or ragged product-MC).
+        per_reg_raw = []
+        for reg, arrs in regde0.items():
+            per_reg_raw.append(_pool_insertion_curve_arrays(
+                arrs, rng_seed=split_seed + 47))
+        # Align null counts if product-MC lengths differ across regions
+        # (should match when using the same n_mc); truncate to min.
+        n_rows = min(a.shape[0] for a in per_reg_raw)
+        all_raw = np.sum([a[:n_rows] for a in per_reg_raw], axis=0)
         all_regde = np.sqrt(all_raw / all_nclus)
         all_result = _euc_curve_summary(all_regde, split)
         all_result['nclus'] = all_nclus
