@@ -9,14 +9,18 @@
 #                   default PSEUDO_LEN_FACTOR=3; adaptive bump to 16 if needed
 #                   always writes {split}_pseudo_strat*.npy (overwrites prior strat)
 #   pseudo_fixed  — opt 2: AK on exact real stim×block sequence
-#   harris        — opt 3: session-transplant choice sequences
+#   harris        — opt 3: session-transplant; donor re-filtered to same
+#                   stim×prior stratum (overwrites _harris; CLEAR_STREAM=1)
 #
 # Strat rerun (recommended):
 #   bash scripts/submit_goal2_choice_strat_x3_sharded.sh
 #   # or:
 #   NULL_SCHEME=pseudo_strat bash scripts/submit_goal2_choice_null_sharded.sh
 #
-#   CLEAR_STREAM=0  — keep existing stream_acc / res (default clears for strat)
+# Harris rerun (donor re-strat; clears prior _harris):
+#   NULL_SCHEME=harris bash scripts/submit_goal2_choice_null_sharded.sh
+#
+#   CLEAR_STREAM=0  — keep existing stream_acc / res (default clears for strat+harris)
 #   SMOKE_FIRST=1 NULL_SCHEME=pseudo_strat \
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
@@ -84,7 +88,7 @@ case "$_ORIG_SCHEME" in
     SUFFIX=_harris
     JOB_PREFIX=g2h
     PSEUDO_LEN_FACTOR=""
-    CLEAR_STREAM="${CLEAR_STREAM:-0}"
+    CLEAR_STREAM="${CLEAR_STREAM:-1}"
     if [[ "${MEM_SHARD}" == "12G" ]]; then
       MEM_SHARD=6G
     fi
@@ -125,8 +129,8 @@ if [[ ${#SPLITS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# Overwrite prior strat (or CLEAR_STREAM=1): drop stream_acc + pooled res for SUFFIX.
-# Exact basename match so _pseudo_strat_x3 leftovers are left alone.
+# Overwrite prior run for this SUFFIX (CLEAR_STREAM=1): drop stream_acc + pooled res.
+# Exact basename match so e.g. _pseudo_strat_x3 leftovers are left alone.
 if [[ "$CLEAR_STREAM" == "1" && -n "$SUFFIX" ]]; then
   RES_ROOT="$ONE_CACHE_DIR/manifold/res"
   ACC="$RES_ROOT/_stream_acc"

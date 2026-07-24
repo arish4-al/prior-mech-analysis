@@ -10,7 +10,8 @@
 #SBATCH --mail-type=FAIL
 #SBATCH -o goal2_choice_donors_%j.out
 
-# Rebuild manifold/choice_donors.npy from insertion_cache (stratified format).
+# Rebuild manifold/choice_donors.npy from insertion_cache (stim/pleft fields).
+# Harris nulls re-filter each donor to the recipient split's stim×prior stratum.
 # Optional: SMOKE_FIRST=1 also runs scripts/smoke_choice_session_null.py.
 #
 #   sbatch --export=ALL scripts/run_goal2_choice_donors_slurm.sh

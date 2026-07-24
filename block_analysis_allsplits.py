@@ -663,10 +663,28 @@ def _choice_lr_stratum_targets(split):
     return stim_is_left, pleft
 
 
+def _split_uses_act_prior(split):
+    '''True for ``*_act`` / ``*_act_*`` choice splits (not substring of duringstim).'''
+    s = split or ''
+    return s.endswith('_act') or '_act_' in s
+
+
+def _split_uses_bayes_prior(split):
+    return 'bayes' in (split or '')
+
+
+def _trials_stim_side(trials):
+    '''IBL stim side in {-1, +1}: left when ``contrastRight`` is NaN (same as donor bank).'''
+    cr = trials['contrastRight']
+    cr = cr.to_numpy() if hasattr(cr, 'to_numpy') else np.asarray(cr)
+    return np.where(np.isnan(cr.astype(float)), -1.0, 1.0)
+
+
 def _stratum_mask_stim_pleft(stim_side, pleft, split):
     '''Boolean mask: trials matching split's stim×prior stratum.
 
     ``stim_side`` in {-1, +1} (IBL: -1 left); ``pleft`` in {0.2, 0.8, ...}.
+    Same helper for real eligibility and pseudo/donor null strata.
     '''
     stim_is_left, p_target = _choice_lr_stratum_targets(split)
     stim_side = np.asarray(stim_side, dtype=float)
@@ -679,6 +697,31 @@ def _stratum_mask_stim_pleft(stim_side, pleft, split):
     if p_target is not None:
         mask &= np.isclose(pleft, p_target)
     return mask
+
+
+def _stratum_prior_for_stream(split, choice, stim_side, pleft_schedule=None):
+    '''Prior labels for stim×prior strata on a choice/stim stream.
+
+    Matches ``get_d_vars`` overwrite rules:
+      - ``*_act`` → action-kernel binary (0.8/0.2) from ``choice``
+      - ``*bayes*`` → Bayes-optimal binary from stim history
+      - else → true block ``pleft_schedule`` (BWM ``probabilityLeft``)
+    '''
+    if _split_uses_act_prior(split):
+        _, p = action_kernel_priors(alpha, list(np.asarray(choice, dtype=float).reshape(-1)))
+        return np.asarray(p, dtype=float)
+    if _split_uses_bayes_prior(split):
+        _, p = bayesian_priors(np.asarray(stim_side, dtype=float) < 0)
+        return np.asarray(p, dtype=float)
+    if pleft_schedule is None:
+        raise ValueError('true-block stratum requires pleft_schedule')
+    return np.asarray(pleft_schedule, dtype=float).reshape(-1)
+
+
+def _stratum_mask_for_stream(split, stim_side, choice, pleft_schedule=None):
+    '''Stim×prior mask on any stream (pseudo / donor); same targets as real elig.'''
+    p = _stratum_prior_for_stream(split, choice, stim_side, pleft_schedule)
+    return _stratum_mask_stim_pleft(stim_side, p, split)
 
 
 def _ys_from_stratum_choices(choice, stratum_mask, n_elig, rng):
@@ -739,13 +782,9 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
                 trials, theta, seed=seed, n_trials=n_pseudo)
             ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
             side = np.asarray(ps['stim_side'], dtype=float).reshape(-1)
-            if 'act' in (split or ''):
-                _, p_strat = action_kernel_priors(alpha, list(ch))
-            elif 'bayes' in (split or ''):
-                _, p_strat = bayesian_priors(side < 0)
-            else:
-                p_strat = np.asarray(ps['probabilityLeft'], dtype=float)
-            mask = _stratum_mask_stim_pleft(side, p_strat, split)
+            mask = _stratum_mask_for_stream(
+                split, side, ch,
+                pleft_schedule=np.asarray(ps['probabilityLeft'], dtype=float))
             ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
         else:
             ps = syn.make_synthetic_session(trials, theta, seed=seed)
@@ -1024,13 +1063,31 @@ def _normalize_donor_rec(rec):
     '''
     Donor bank entry → dict with choice, stim_is_left, pleft_true.
 
-    Backward compatible with legacy ``{eid: choice_array}``.
+    Backward compatible with legacy ``{eid: choice_array}`` and incomplete
+    dicts (missing stim/pleft → marked ``_legacy``, unusable for re-strat).
     '''
     if isinstance(rec, dict) and 'choice' in rec:
+        ch = np.asarray(rec['choice'], dtype=float)
+        if 'stim_is_left' not in rec or 'pleft_true' not in rec:
+            return {
+                'choice': ch,
+                'stim_is_left': np.zeros(len(ch), dtype=bool),
+                'pleft_true': np.full(len(ch), np.nan),
+                '_legacy': True,
+            }
+        stim = np.asarray(rec['stim_is_left'], dtype=bool)
+        pleft = np.asarray(rec['pleft_true'], dtype=float)
+        if not (len(ch) == len(stim) == len(pleft)):
+            return {
+                'choice': ch,
+                'stim_is_left': np.zeros(len(ch), dtype=bool),
+                'pleft_true': np.full(len(ch), np.nan),
+                '_legacy': True,
+            }
         return {
-            'choice': np.asarray(rec['choice'], dtype=float),
-            'stim_is_left': np.asarray(rec['stim_is_left'], dtype=bool),
-            'pleft_true': np.asarray(rec['pleft_true'], dtype=float),
+            'choice': ch,
+            'stim_is_left': stim,
+            'pleft_true': pleft,
         }
     ch = np.asarray(rec, dtype=float)
     return {
@@ -1046,9 +1103,9 @@ def build_choice_donor_bank(restart=True):
     Scan manifold/insertion_cache for unique-eid trial metadata.
 
     Saved to manifold/choice_donors.npy as
-    ``{eid: {choice, stim_is_left, pleft_true}}``. Harris nulls use the full
-    ``choice`` sequence indexed by the recipient's stratified trial numbers;
-    stim/pleft fields remain for diagnostics / legacy tools.
+    ``{eid: {choice, stim_is_left, pleft_true}}``. Harris nulls re-filter each
+    donor to the same stim×prior stratum as the recipient split, then
+    length-match choices to ``n_elig`` (same as ``pseudo_strat``).
     '''
     path = _choice_donors_path()
     if restart and path.exists():
@@ -1076,7 +1133,9 @@ def build_choice_donor_bank(restart=True):
         trials_by = cache.get('trials') or {}
         if not trials_by:
             continue
-        tdf = next(iter(trials_by.values()))
+        # Prefer the longest saturation-masked table (most trials → larger
+        # strata). Keys are satur types; values are trial DataFrames.
+        tdf = max(trials_by.values(), key=lambda d: len(d))
         choice = np.asarray(
             tdf['choice'].to_numpy() if hasattr(tdf['choice'], 'to_numpy')
             else tdf['choice'], dtype=float)
@@ -1111,31 +1170,58 @@ def load_choice_donor_bank():
     return build_choice_donor_bank(restart=False)
 
 
+def _donor_stratum_mask(rec, split):
+    '''Stim×prior mask on a donor session for ``split`` (None if unusable).'''
+    rec = _normalize_donor_rec(rec)
+    if rec.get('_legacy'):
+        return None
+    ch = rec['choice']
+    stim_side = np.where(rec['stim_is_left'], -1.0, 1.0)
+    try:
+        mask = _stratum_mask_for_stream(
+            split, stim_side, ch, pleft_schedule=rec['pleft_true'])
+    except ValueError:
+        return None
+    if len(mask) != len(ch):
+        return None
+    return mask
 
-def _harris_donor_candidates(elig_idx, donor_bank, eid):
-    '''Donors long enough to index ``elig_idx`` (excludes recipient eid).'''
+
+def _harris_donor_candidates(n_elig, donor_bank, eid, split):
+    '''Donors with ≥ ``n_elig`` trials in the same stim×prior stratum as ``split``.
+
+    Returns list of ``(choice, stratum_mask)`` (excludes recipient eid and
+    legacy choice-only records).
+    '''
     eid = str(eid)
-    elig_idx = np.asarray(elig_idx, dtype=int)
-    need = int(elig_idx.max()) + 1 if len(elig_idx) else 0
+    n_elig = int(n_elig)
     candidates = []
+    n_legacy = 0
+    n_short = 0
     for e, rec in (donor_bank or {}).items():
         if str(e) == eid:
             continue
+        mask = _donor_stratum_mask(rec, split)
+        if mask is None:
+            n_legacy += 1
+            continue
         ch = _normalize_donor_rec(rec)['choice']
-        if len(ch) >= need:
-            candidates.append(np.asarray(ch, dtype=float))
-    return candidates, need
+        if int(np.asarray(mask).sum()) < n_elig:
+            n_short += 1
+            continue
+        candidates.append((np.asarray(ch, dtype=float), np.asarray(mask, dtype=bool)))
+    return candidates, {'n_legacy': n_legacy, 'n_short': n_short}
 
 
-def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
+def _sample_harris_ys(n_elig, donor_bank, eid, split, choices_true=None,
                       max_tries=HARRIS_MAX_TRIES, rng=None,
                       candidates=None):
     """
-    Harris-style null labels: take another session's **full** choice sequence
-    and read choices at the recipient's stratified trial indices ``elig_idx``.
+    Harris-style null labels: another session's choices from the **same**
+    stim×prior stratum as ``split``, length-matched to ``n_elig``.
 
-    Stratification (stim×prior) is applied only on the real session to define
-    which trial numbers enter the neural tensor; the donor is not re-stratified.
+    Recipient stratification still defines which neural trials enter ``b``;
+    donor choices are re-filtered to that stratum (not calendar ``elig_idx``).
 
     Returns None if no usable donor or no balanced draw within ``max_tries``
     (no circular-shift / observed-label fallback).
@@ -1146,19 +1232,21 @@ def _sample_harris_ys(elig_idx, donor_bank, eid, choices_true=None,
     elif isinstance(rng, np.random.RandomState):
         rng = np.random.default_rng(rng.randint(0, 2**31 - 1))
 
-    elig_idx = np.asarray(elig_idx, dtype=int)
+    n_elig = int(n_elig)
     if candidates is None:
-        candidates, _need = _harris_donor_candidates(elig_idx, donor_bank, eid)
+        candidates, _stats = _harris_donor_candidates(
+            n_elig, donor_bank, eid, split)
     if not candidates:
         return None
 
     def _ok(ys):
-        return (int(ys.sum()) >= min_trials_per_side
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
                 and int((~ys).sum()) >= min_trials_per_side)
 
     for _ in range(max_tries):
-        ch = candidates[int(rng.integers(0, len(candidates)))]
-        ys = ch[elig_idx] == 1
+        ch, mask = candidates[int(rng.integers(0, len(candidates)))]
+        ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
         if _ok(ys):
             return ys
     return None
@@ -1168,16 +1256,16 @@ def _compute_control_D_harris(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
         donor_bank, eid, elig_idx, null_batch_size=NULL_BATCH_SIZE):
     """
-    Literal Harris session-permutation null (behavior of another eid onto this
-    session's neural tensor).
+    Harris session-permutation null with donor-side stim×prior re-filtering.
 
-    Observed distance uses real choices on stim×prior–eligible trials.
-    Each null draw indexes another session's full choice sequence at the same
-    ``elig_idx`` trial numbers (no donor-side stratification).
+    Observed distance uses real choices on recipient stim×prior–eligible trials.
+    Each null draw takes another eid's choices from the **same** stim×prior
+    stratum (true-block / act-binary / bayes), length-matched to ``n_elig``.
 
-    If there are no long-enough donors, or ``nrand`` balanced draws cannot be
-    obtained, raises ``InsufficientTrials`` (insertion skipped upstream).
+    If there are no stratum-matched donors, or ``nrand`` balanced draws cannot
+    be obtained, raises ``InsufficientTrials`` (insertion skipped upstream).
     """
+    del null_batch_size  # reserved; sampling is one donor draw per try
     choices_true = np.asarray(choices_true, dtype=float)
     ys_true = choices_true == 1
     m0_true = b[ys_true].mean(axis=0)
@@ -1210,13 +1298,16 @@ def _compute_control_D_harris(
 
     eid = str(eid)
     elig_idx = np.asarray(elig_idx, dtype=int)
-    candidates, need = _harris_donor_candidates(elig_idx, donor_bank, eid)
-    print(f'harris-null [{split}]: {len(candidates)} donors with len≥{need} '
-          f'(elig={len(elig_idx)})')
+    n_elig = len(elig_idx)
+    candidates, stats = _harris_donor_candidates(
+        n_elig, donor_bank, eid, split)
+    print(f'harris-null [{split}]: {len(candidates)} donors with '
+          f'stratum≥{n_elig} (elig={n_elig}; '
+          f'short={stats["n_short"]}, legacy={stats["n_legacy"]})')
     if not candidates:
         raise InsufficientTrials(
-            f'harris-null [{split}]: no donor with len≥{need}; '
-            f'skipping insertion (no circular-shift fallback)')
+            f'harris-null [{split}]: no donor with ≥{n_elig} stratum trials; '
+            f'skipping insertion (no calendar-index / circular-shift fallback)')
 
     def _ok(ys):
         return (ys is not None
@@ -1229,7 +1320,7 @@ def _compute_control_D_harris(
     max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
     while n_done < nrand:
         ys = _sample_harris_ys(
-            elig_idx, donor_bank, eid, rng=rng, candidates=candidates,
+            n_elig, donor_bank, eid, split, rng=rng, candidates=candidates,
             max_tries=1)
         n_tries += 1
         if not _ok(ys):
@@ -1237,7 +1328,8 @@ def _compute_control_D_harris(
                 raise InsufficientTrials(
                     f'harris-null [{split}]: only {n_done}/{nrand} balanced '
                     f'donor draws after {n_tries} tries '
-                    f'({len(candidates)} donors); skipping insertion')
+                    f'({len(candidates)} stratum-matched donors); '
+                    f'skipping insertion')
             continue
         label_perms.append(ys)
         _append_perm(
@@ -1258,6 +1350,7 @@ def _compute_control_D_harris(
         'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
         'D': D,
         'null_scheme': 'harris_session_permutation',
+        'harris_n_stratum_donors': len(candidates),
     }
 
 def _compute_control_D_actkernel_choice(
@@ -1270,9 +1363,10 @@ def _compute_control_D_actkernel_choice(
     Fit ActionKernel once on the real session. Null labels for neural ``b``:
 
     - ``strat``: new pseudo stim/blocks + AK choices; take choices from the
-      pseudo's stim×prior stratum (length-matched to ``elig_idx``).
-      ``actkernel_pseudo_len_factor`` > 1 draws longer BWM pseudos so strata
-      are large enough (congruent act splits).
+      pseudo's stim×prior stratum via ``_stratum_mask_for_stream`` (same
+      act/bayes/true prior rules as real ``elig_idx``), length-matched to
+      ``n_elig``. ``actkernel_pseudo_len_factor`` > 1 draws longer BWM
+      pseudos so strata are large enough (congruent act splits).
     - ``fixedstim``: AK choices on the real stim/side stream; labels at
       ``elig_idx``.
     - ``unconstrained``: legacy — pseudo choices at calendar ``elig_idx``.
@@ -1361,13 +1455,8 @@ def _compute_control_D_actkernel_choice(
             if mode == 'strat':
                 ch = ch_mat[i]
                 side = side_mat[i]
-                if 'act' in split:
-                    _, p_strat = action_kernel_priors(alpha, list(ch))
-                elif 'bayes' in split:
-                    _, p_strat = bayesian_priors(side < 0)
-                else:
-                    p_strat = pleft_mat[i]
-                mask = _stratum_mask_stim_pleft(side, p_strat, split)
+                mask = _stratum_mask_for_stream(
+                    split, side, ch, pleft_schedule=pleft_mat[i])
                 ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
             else:
                 ys = ch_mat[i, elig_idx] == 1
@@ -1456,46 +1545,38 @@ def _get_d_vars_session_shuffle(
         null_batch_size, donor_bank, eid, actkernel_choice_null=False,
         actkernel_null_mode=None, actkernel_pseudo_len_factor=None):
     '''
-    Choice L vs R under fixed stim (± prior/block), with structured nulls.
+    Choice L vs R under fixed stim (± prior), with structured nulls.
 
-    Stratification (stim×prior) is applied only on this session to define
-    eligible trial indices and the neural tensor ``b``. Observed distance uses
-    real choices on those trials. Nulls:
+    Stim×prior strata use the **same** definition for real eligibility and
+    nulls (``_stratum_mask_stim_pleft`` / ``_stratum_mask_for_stream``):
+      - ``*_act`` → action-kernel binary prior (0.8/0.2)
+      - ``*bayes*`` → Bayes-optimal binary prior
+      - else → true task ``probabilityLeft``
 
-    - ``actkernel_choice_null``: ActionKernel synthetic-choice nulls
-      (``strat`` / ``fixedstim`` / ``unconstrained``; see
-      ``_compute_control_D_actkernel_choice``).
-    - else (Harris): index another eid's full choice sequence at the same
-      ``elig_idx`` trial numbers (no donor-side stratification).
+    Real ``elig_idx`` / neural ``b`` use ``trials['probabilityLeft']`` after
+    ``get_d_vars`` prior overwrite. Pseudo/Harris null streams recompute that
+    same prior on the synthetic/donor choice×stim stream.
     '''
     alignment = align[split]
-    # choice_stim_* / choice_duringstim_* route via substring stim_l / stim_r.
-    if 'stim_l' in split:
-        stim_nan_col = 'contrastRight'  # left stimulus present
-    elif 'stim_r' in split:
-        stim_nan_col = 'contrastLeft'
+    # Stim×prior eligibility — identical mask helper as pseudo/donor strata.
+    # ``probabilityLeft`` is already act/bayes/true (set in get_d_vars).
+    stim_side = _trials_stim_side(trials)
+    pleft_col = trials['probabilityLeft']
+    pleft_col = (pleft_col.to_numpy() if hasattr(pleft_col, 'to_numpy')
+                 else np.asarray(pleft_col, dtype=float))
+    elig = _stratum_mask_stim_pleft(stim_side, pleft_col, split)
+    if _split_uses_act_prior(split):
+        prior_tag = 'act-binary'
+    elif _split_uses_bayes_prior(split):
+        prior_tag = 'bayes-binary'
     else:
-        print('what is the split?', split)
-        return None
-
-    if 'block_l' in split:
-        pleft = 0.8
-    elif 'block_r' in split:
-        pleft = 0.2
-    else:
-        pleft = None
-
-    elig = np.isnan(trials[stim_nan_col].to_numpy()
-                    if hasattr(trials[stim_nan_col], 'to_numpy')
-                    else trials[stim_nan_col])
-    if pleft is not None:
-        elig = np.asarray(elig) & (trials['probabilityLeft'].to_numpy() == pleft)
-    else:
-        elig = np.asarray(elig)
+        prior_tag = 'true-block'
 
     elig_idx = np.arange(len(trials))[elig]
     if len(elig_idx) == 0:
-        raise InsufficientTrials('no eligible trials for structured-choice null')
+        raise InsufficientTrials(
+            f'no eligible trials for structured-choice null '
+            f'(stratum={prior_tag})')
 
     choices_true = trials['choice'].to_numpy()[elig_idx].astype(float)
     events_all = trials[alignment].to_numpy()[elig_idx]
@@ -1506,7 +1587,7 @@ def _get_d_vars_session_shuffle(
     null_tag = (f'actkernel-choice null ({ak_mode})' if ak_mode
                 else 'harris session-permutation null')
     print('#trials per condition: ', n_left, n_right,
-          f'(eligible={len(elig_idx)}, {null_tag})')
+          f'(eligible={len(elig_idx)}, stratum={prior_tag}, {null_tag})')
     if n_left < min_trials_per_side or n_right < min_trials_per_side:
         raise InsufficientTrials(
             f'need ≥{min_trials_per_side} trials/side, got {n_left}, {n_right}')
@@ -1874,10 +1955,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     ``ACTKERNEL_PSEUDO_LEN_FACTOR_MAX``. Outputs always ``_pseudo_strat``.
 
     ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
-    use literal Harris session-permutation nulls: stratify stim×prior only on
-    this session to define ``elig_idx`` / neural ``b``; null labels are another
-    eid's full choice sequence indexed at those trial numbers (requires
-    ``donor_bank``). Default False → label shuffle.
+    use Harris session-permutation nulls: recipient stim×prior defines
+    ``elig_idx`` / neural ``b``; null labels are another eid's choices from the
+    **same** stim×prior stratum (donor re-filtered; requires ``donor_bank``).
+    Default False → label shuffle.
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
     the **tail** of perseveration runs (≥ ``sticky_min_run`` same choice poorly
@@ -1927,12 +2008,12 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                                trials['contrastLeft']>0.1])
         trials  = trials[~rm_trials]
         
-    if 'act' in split:
+    if _split_uses_act_prior(split):
         # calculate action kernel prior to use for analysis
         trials['true_priors'] = trials['probabilityLeft']
         actions = list(trials['choice'])
         trials['act_priors'], trials['probabilityLeft'] = action_kernel_priors(alpha, actions)
-    elif 'bayes' in split:
+    elif _split_uses_bayes_prior(split):
         # Bayes-optimal prior (stimulus-history inference); same 0.8/0.2 labels
         trials['true_priors'] = trials['probabilityLeft']
         trials['probabilityLeft'] = trials['_bayes_binary'].values
@@ -2909,8 +2990,9 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     Takes precedence over session_shuffle_null.
 
     ``session_shuffle_null``: if True, choice_stim* / choice_duringstim* use
-    literal Harris session-permutation nulls (loads donor bank; indexes donor
-    choice sequences at recipient ``elig_idx``). Default False.
+    Harris session-permutation nulls (loads donor bank; donor choices
+    re-filtered to the same stim×prior stratum as the recipient split).
+    Default False.
 
     ``exclude_sticky_trials``: drop late-session + perseveration trials before
     distance/null (see ``apply_sticky_trial_exclusion``). Prefer directing

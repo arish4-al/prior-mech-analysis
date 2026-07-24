@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Smoke-test Harris session-permutation nulls.
+Smoke-test Harris session-permutation nulls (donor stratum re-filter).
 
 Builds / loads choice_donors.npy, then runs get_d_vars on the first insertion
-cache entry that has ≥5 trials/side for a choice_stim* / choice_duringstim* split.
+cache entry that works for a choice_stim* / choice_duringstim* split.
 
   python scripts/smoke_choice_session_null.py
   ONE_CACHE_DIR=/orcd/data/.../alyx python scripts/smoke_choice_session_null.py
@@ -24,11 +24,12 @@ if str(ROOT) not in sys.path:
 import block_analysis_allsplits as ba  # noqa: E402
 
 SPLITS = [
+    # Prefer production act splits.
+    'choice_stim_l_block_l_act', 'choice_stim_r_block_r_act',
+    'choice_duringstim_l_block_l_act', 'choice_duringstim_r_block_r_act',
     'choice_stim_l', 'choice_stim_r',
     'choice_stim_l_block_l', 'choice_stim_l_block_r',
-    'choice_stim_r_block_l', 'choice_stim_r_block_r',
     'choice_duringstim_l', 'choice_duringstim_r',
-    'choice_duringstim_l_block_l', 'choice_duringstim_r_block_r',
 ]
 
 
@@ -48,6 +49,8 @@ def main():
     rec0 = next(iter(bank.values()))
     if not isinstance(rec0, dict) or 'choice' not in rec0:
         raise SystemExit('Donor bank missing choice field; rebuild failed')
+    if 'stim_is_left' not in rec0 or 'pleft_true' not in rec0:
+        raise SystemExit('Donor bank missing stim/pleft; rebuild required')
     print(f'  {len(bank)} eids -> {ba._choice_donors_path()}', flush=True)
 
     caches = sorted(
@@ -74,18 +77,12 @@ def main():
                 raise SystemExit(
                     f'Unexpected return for {split}: '
                     f'{D.get("null_scheme") if isinstance(D, dict) else type(D)}')
-            # Eligible trial indices live in the stratified path; donors must
-            # be long enough for typical sessions (≥ need ≈ max trial index).
-            n_long = sum(
-                1 for e, rec in bank.items()
-                if e != str(eid)
-                and len(ba._normalize_donor_rec(rec)['choice']) >= 50)
+            n_donors = D.get('harris_n_stratum_donors')
             print(f'OK {split} eid={eid}', flush=True)
             print(f'  null_scheme={D["null_scheme"]} '
                   f'n_regs={len(D.get("D", {}))} uperms={D.get("uperms")}',
                   flush=True)
-            print(f'  donors with len≥50: {n_long}/{max(len(bank) - 1, 0)}',
-                  flush=True)
+            print(f'  stratum-matched donors: {n_donors}', flush=True)
             print('SMOKE PASSED', flush=True)
             return
     raise SystemExit('SMOKE FAILED: no insertion × split completed')
