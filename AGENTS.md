@@ -11,7 +11,18 @@ All simulation / prior-distance experiments in this repo **must** use these defa
 | **Truncated trials** | **fill-from-next-ITI** | Never zero-pad; skip if next ITI too short |
 | **Null** | **contrast-matched shuffle** | Default CLI; `--label-shuffle-null` to override |
 | **Output root** | `<ONE cache>/manifold_sim` | Do not use repo `output/` unless `--allow-repo-output` |
-| **Environment** | `conda activate iblenv` | Run outside sandbox on this machine |
+| **Environment** | `conda activate iblenv` | Run **outside** sandbox on this machine (see below) |
+
+### Do not run ONE / analysis jobs in the Cursor sandbox
+
+Anything that touches ONE caches (`~/Downloads/ONE/...`), large `manifold/res/*.npy`,
+or `iblenv` analysis scripts **hangs or sits at 0% CPU inside the sandbox** (seen
+repeatedly on combine/plot/null jobs). Always:
+
+1. Request `required_permissions: ["all"]` (disable sandbox), and
+2. `conda activate iblenv` before `python …`.
+
+Do not retry the same ONE command under the default sandbox hoping it will finish.
 
 ### Phase 4b sanity check
 

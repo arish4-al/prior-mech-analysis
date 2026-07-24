@@ -15,7 +15,13 @@ Read `AGENTS.md` before running or changing analysis experiments.
 - **Truncation:** fill-from-next-ITI in `build_population_b_for_split` — never zero-pad
 - **Null:** contrast-matched label shuffle (default)
 - **Outputs:** `<ONE cache>/manifold_sim` (omit `--output-dir` or use default)
-- **Runs:** `conda activate iblenv`, outside sandbox on macOS
+- **Runs:** `conda activate iblenv`, **outside sandbox** on macOS (`required_permissions: ["all"]`)
+
+### Sandbox warning (ONE)
+
+Do **not** run ONE-cache I/O, large `res/*.npy` combines/plots, or `iblenv` analysis
+scripts inside the Cursor sandbox — they routinely get stuck at 0% CPU. Always
+disable the sandbox and use `conda activate iblenv`.
 
 ## Phase 4b regression check
 

@@ -241,7 +241,8 @@ stratified `elig_idx` without defeating the structured null.
 | label shuffle | `{split}.npy` |
 | option 1 AK stratified pseudo | `{split}_pseudo_strat.npy` |
 | option 2 AK fixed stim×block | `{split}_pseudo_fixed.npy` |
-| option 3 Harris | `{split}_harris.npy` |
+| option 3 Harris (legacy with-replacement) | `{split}_harris.npy` |
+| option 3 Harris **unique-null** (2026-07-24f+) | `{split}_harris_unique.npy` |
 | legacy unconstrained BWM index | `{split}_pseudosession.npy` |
 
 ```bash
@@ -396,6 +397,128 @@ Outputs overwrite `$ONE_CACHE_DIR/manifold/res/{split}_harris*.npy`.
 ### 2026-07-24d — Shared stim×prior stratum helpers
 
 **Harris bug:** null labels used calendar trial indices with no donor stim×prior filter; **fix:** real eligibility, pseudo_strat, and Harris donors now all use the same act/bayes/true stratum definition (pseudo_strat was already act-matched; only Harris was wrong).
+
+### 2026-07-24e — Rerun `_harris` (re-strat) + `_pseudo_strat` (×3): tables @ α=0.01
+
+**Data:** alyx `manifold/res/new/` — all 8 act choice splits overwritten ~11:28–11:31
+(Harris donor re-strat from 2026-07-24c; strat with `pseudo_len_factor=3` from
+2026-07-24b). Baseline = openalyx label-shuffle. Force-recombined 4-split
+tables; BH-FDR on `p_mean` at **α=0.01**. `pseudo_fixed` unchanged (same pool
+as 2026-07-24) re-plotted for side-by-side.
+
+```bash
+conda activate iblenv
+python scripts/plot_choice_null_comparison_table.py \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag harris --force-combine --alpha 0.01
+python scripts/plot_choice_null_comparison_table.py \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag pseudo_strat --force-combine --alpha 0.01
+```
+
+#### FDR sig counts (α=0.01)
+
+| arm | duringstim | duringchoice | median p (stim / choice) |
+|-----|----------:|-------------:|--------------------------|
+| shuffle (openalyx) | 46 | 84 | 0.071 / 0.019 |
+| **harris (re-strat)** | **21** | **57** | **0.283 / 0.118** |
+| **pseudo_strat (×3)** | **74** | **105** | **0.042 / 0.009** |
+| pseudo_fixed | 95 | 124 | 0.017 / 0.004 |
+| harris calendar-index (INVALID, 07-24) | 201 | 202 | ~0.0005 |
+| pseudo_strat thin (pre-×3, 07-24) | 0 | 0 | 0.995 / 0.987 |
+
+Vs shuffle (lost / gained / kept at α=0.01; n=207 regions in both):
+
+| epoch | arm | shuffle | arm n | lost | gained | kept |
+|-------|-----|--------:|------:|-----:|-------:|-----:|
+| duringstim | harris | 46 | **21** | 31 | 6 | 15 |
+| duringchoice | harris | 84 | **57** | 37 | 10 | 47 |
+| duringstim | pseudo_strat | 46 | **74** | 12 | 40 | 34 |
+| duringchoice | pseudo_strat | 84 | **105** | 14 | 35 | 70 |
+| duringstim | pseudo_fixed | 46 | 95 | 8 | 57 | 38 |
+| duringchoice | pseudo_fixed | 84 | 124 | 9 | 49 | 75 |
+
+**Plots / CSV:**
+`meta/table_choice_{harris,pseudo_strat,pseudo_fixed}_vs_shuffle_*_p_mean_c_0.01.png`
+(+ duringchoice companions); summary
+`meta/choice_null_res_new_rerun_harris_strat_a0.01.csv`.
+
+#### Region / cell retention vs shuffle
+
+Congruent / incongruent both restored for strat (×3 fix). All three arms now
+match each other:
+
+| | Congruent | Incongruent |
+|--|-----------|-------------|
+| **strat / harris / fixed** | ~96% regions, **~83% cells** | ~96% regions, ~87% cells |
+
+Congruent example (`choice_duringstim_l_block_l_act`): strat 200 regs / 53.7k
+cells vs shuffle 207 / 62.0k (was 71 / 4.7k pre-×3).
+
+#### Interpretation
+
+- **Harris (re-strat)** is the only valid structured null that is **stricter
+  than label shuffle** (stim 21 vs 46; choice 57 vs 84). Calendar-index dump
+  from 2026-07-24 is superseded — do not cite those 201/202 counts.
+- **pseudo_strat (×3)** restores full-map coverage, but is **more liberal**
+  than shuffle (74/105). The pre-×3 “0 FDR hits” result was an artifact of
+  congruent dropout, not a calibrated null.
+- **pseudo_fixed** remains the most liberal of the three valid arms (95/124).
+- Ordering of liberality at α=0.01:  
+  **harris (conservative) < shuffle < strat ×3 < fixed ≪ invalid calendar /
+  unconstrained**.
+- CP sanity (cong duringstim regde): strat null amp med ≈ 0.11 vs harris ≈ 0.18
+  vs shuffle ≈ 0.33 — strat still under-disperses relative to Harris/shuffle
+  even with length-matched strata; Harris is closer but still below shuffle’s
+  floor (different insertion set + empirical donor diversity).
+
+**Next:** decide which structured null is primary for choice L–R claims
+(Harris = empirical sticky within stratum; strat = BWM-like new world with
+matched bias context). Optionally probe why strat null amps remain lower than
+Harris at matched coverage (label imbalance / temporal structure / AK
+stationarity).
+
+### 2026-07-24f — Harris unique-null sampling (code; re-run needed for tables)
+
+**Issue:** Harris was drawing `nrand=2000` labels **with replacement** from
+≪500 stratum-matched donors (random contiguous windows). Many of the 2000
+were duplicate label patterns → p-value resolution looked like 1/2000 while
+`uperms` was much smaller.
+
+**Code change** (`block_analysis_allsplits.py`) — landed on `develop`, not yet
+re-run on ORCD:
+- Keep only **distinct** label patterns in `_compute_control_D_harris`.
+- Stop at `nrand` uniques, or earlier when the unique pool saturates
+  (`HARRIS_UNIQUE_STALE_LIMIT` consecutive dup/reject draws).
+- Finalize: equal unique counts → index-aligned sum; unequal → product-MC
+  over each insertion’s unique set with ``n_mc = min(U_i)`` (not padded to
+  2000). `_pool_insertion_curve_arrays`.
+- Harris finalize **keeps** `stream_acc` by default (also `KEEP_STREAM_ACC=1`)
+  so unique counts remain inspectable.
+- Smoke: 3 donors → saturated at **5** unique nulls for `nrand=20`.
+- Helper: `scripts/recompute_harris_unique_from_stream.py` (needs stream_acc).
+  Confirmed local alyx has **no** Harris stream_acc (cleaned after 24e
+  finalize) → cannot replot unique-null p from pooled `*_harris_regde.npy`
+  alone.
+
+**Status:** code + smoke done; **tables not yet updated**. 24e Harris FDR
+(21 / 57) remains the with-replacement result on disk as `_harris`.
+
+**Overwrite safety:** unique-null runs write **`_harris_unique`** only.
+`CLEAR_STREAM=1` removes prior `_harris_unique` stream/res; refuses
+`SUFFIX=_harris`. Legacy `_harris` is never deleted by the submitter.
+Donor load prefers the largest of `manifold/choice_donors.npy` vs
+`manifold/res/choice_donors.npy` (local: 457 eids under res/).
+
+```bash
+# on main/ORCD with this unique-null code
+bash scripts/submit_goal2_choice_session_null_sharded.sh
+# (= NULL_SCHEME=harris_unique → {split}_harris_unique*.npy)
+# after sync:
+python scripts/plot_choice_null_comparison_table.py \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag harris_unique --force-combine --alpha 0.01
+```
 
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 

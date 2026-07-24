@@ -42,8 +42,10 @@ def main():
     ba.pth_res = Path(ba.one.cache_dir, 'manifold', 'res')
     ba.pth_res.mkdir(parents=True, exist_ok=True)
 
-    print('Building / rebuilding choice donor bank …', flush=True)
-    bank = ba.build_choice_donor_bank(restart=False)
+    ba.configure_null_file_suffix(session_shuffle_null=True)
+    print(f'Configured RES_FILE_SUFFIX={ba.RES_FILE_SUFFIX!r}', flush=True)
+    print('Loading choice donor bank (prefers largest on-disk copy) …', flush=True)
+    bank = ba.load_choice_donor_bank()
     if not bank:
         raise SystemExit('Empty donor bank — need manifold/insertion_cache')
     rec0 = next(iter(bank.values()))
@@ -51,7 +53,7 @@ def main():
         raise SystemExit('Donor bank missing choice field; rebuild failed')
     if 'stim_is_left' not in rec0 or 'pleft_true' not in rec0:
         raise SystemExit('Donor bank missing stim/pleft; rebuild required')
-    print(f'  {len(bank)} eids -> {ba._choice_donors_path()}', flush=True)
+    print(f'  {len(bank)} eids', flush=True)
 
     caches = sorted(
         Path(ba.one.cache_dir, 'manifold', 'insertion_cache').glob('*.npy'))
@@ -72,17 +74,36 @@ def main():
             except ba.InsufficientTrials as exc:
                 print(f'  skip {fpath.name} {split}: {exc}', flush=True)
                 continue
-            if not isinstance(D, dict) or D.get('null_scheme') != (
-                    'harris_session_permutation'):
+            if not isinstance(D, dict) or D.get('null_scheme') not in (
+                    'harris_session_permutation_unique',
+                    'harris_session_permutation',  # legacy tag
+            ):
                 raise SystemExit(
                     f'Unexpected return for {split}: '
                     f'{D.get("null_scheme") if isinstance(D, dict) else type(D)}')
+            if ba.RES_FILE_SUFFIX != '_harris_unique':
+                raise SystemExit(
+                    f'Expected RES_FILE_SUFFIX=_harris_unique, got '
+                    f'{ba.RES_FILE_SUFFIX!r}')
             n_donors = D.get('harris_n_stratum_donors')
+            n_unique = D.get('harris_n_unique_nulls')
+            # Unique-null mode: stored null curves == unique labels (no dups).
+            n_stored = None
+            if D.get('D'):
+                reg0 = next(iter(D['D']))
+                n_stored = max(len(D['D'][reg0]['d_eucs']) - 1, 0)
             print(f'OK {split} eid={eid}', flush=True)
             print(f'  null_scheme={D["null_scheme"]} '
+                  f'suffix={ba.RES_FILE_SUFFIX} '
                   f'n_regs={len(D.get("D", {}))} uperms={D.get("uperms")}',
                   flush=True)
-            print(f'  stratum-matched donors: {n_donors}', flush=True)
+            print(f'  stratum-matched donors: {n_donors}; '
+                  f'unique_nulls={n_unique} stored_nulls={n_stored}',
+                  flush=True)
+            if n_unique is not None and n_stored is not None and n_unique != n_stored:
+                raise SystemExit(
+                    f'Unique-null mismatch: harris_n_unique_nulls={n_unique} '
+                    f'vs stored={n_stored}')
             print('SMOKE PASSED', flush=True)
             return
     raise SystemExit('SMOKE FAILED: no insertion × split completed')

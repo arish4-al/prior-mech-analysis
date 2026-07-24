@@ -220,10 +220,12 @@ def main():
                    help='Rebuild manifold/choice_donors.npy from insertion_cache '
                         '(full-session choice sequences for Harris nulls)')
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
-                   help='Harris session-permutation nulls for '
+                   help='Harris unique-null session-permutation for '
                         'choice_stim*/choice_duringstim*: recipient stim×prior '
                         'defines elig_idx; donor choices re-filtered to the same '
-                        'stratum (writes {split}_harris*.npy; default: label shuffle)')
+                        'stratum; only distinct label patterns kept '
+                        '(writes {split}_harris_unique*.npy; does not overwrite '
+                        'legacy {split}_harris*.npy)')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,
                    help='Enable ActionKernel synthetic-choice nulls for '
                         'choice_stim*/choice_duringstim* (default mode: strat). '
