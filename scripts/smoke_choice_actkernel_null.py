@@ -9,6 +9,8 @@ choice_stim* / choice_duringstim* split.
   python scripts/smoke_choice_actkernel_null.py
   ACTKERNEL_NULL_MODE=fixedstim SMOKE_NRAND=8 \\
     python scripts/smoke_choice_actkernel_null.py
+  ACTKERNEL_PSEUDO_LEN_FACTOR=3 ACTKERNEL_NULL_MODE=strat \\
+    python scripts/smoke_choice_actkernel_null.py
 """
 from __future__ import annotations
 
@@ -49,6 +51,10 @@ def main():
             f'ACTKERNEL_NULL_MODE must be one of {list(EXPECTED_SCHEME)}, '
             f'got {mode!r}')
 
+    len_factor = None
+    if os.environ.get('ACTKERNEL_PSEUDO_LEN_FACTOR'):
+        len_factor = float(os.environ['ACTKERNEL_PSEUDO_LEN_FACTOR'])
+
     cache = Path(os.environ.get(
         'ONE_CACHE_DIR',
         Path.home() / 'Downloads/ONE/alyx.internationalbrainlab.org',
@@ -64,6 +70,7 @@ def main():
 
     nrand = int(os.environ.get('SMOKE_NRAND', '8'))
     print(f'actkernel smoke: mode={mode} nrand={nrand} '
+          f'pseudo_len_factor={len_factor if len_factor is not None else "default"} '
           f'ACTKERNEL_NB_STEPS={os.environ.get("ACTKERNEL_NB_STEPS")}',
           flush=True)
 
@@ -77,7 +84,8 @@ def main():
                 D = ba.get_d_vars(
                     split, pid, control=True, nrand=nrand, cached=c,
                     actkernel_choice_null=True,
-                    actkernel_null_mode=mode)
+                    actkernel_null_mode=mode,
+                    actkernel_pseudo_len_factor=len_factor)
             except ba.InsufficientTrials as exc:
                 print(f'  skip {fpath.name} {split}: {exc}', flush=True)
                 continue
@@ -96,6 +104,8 @@ def main():
                   f'n_regs={len(D.get("D", {}))} uperms={D.get("uperms")}',
                   flush=True)
             print(f'  actkernel_params={D.get("actkernel_params")}', flush=True)
+            print(f'  pseudo_len_factor={D.get("actkernel_pseudo_len_factor")} '
+                  f'n_pseudo={D.get("actkernel_n_pseudo_trials")}', flush=True)
             print('SMOKE PASSED', flush=True)
             return
     raise SystemExit('SMOKE FAILED: no insertion × split completed')

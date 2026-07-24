@@ -149,10 +149,13 @@ def simulate_choices(stim, side, params, n_sim=1, seed=None, model=None):
     return act_sim
 
 
-def make_synthetic_session(trials_df, params, seed=None):
+def make_synthetic_session(trials_df, params, seed=None, n_trials=None):
     """Reproduce generate_null_distribution_session: a pseudo-session whose choice &
     feedbackType are simulated by the action-kernel model. This is one draw of the
     paper's 'synthetic session' choice/feedback null.
+
+    ``n_trials``: if set, draw a pseudo of that length (contrast set still from
+    ``trials_df``). Default None → same length as ``trials_df`` (BWM default).
 
     Requires brainbox for the pseudo-session generator.
     """
@@ -161,7 +164,17 @@ def make_synthetic_session(trials_df, params, seed=None):
         np.random.seed(seed)
 
     trials_df = _as_trials_df(trials_df)
-    pseudosess = generate_pseudo_session(trials_df, generate_choices=False)
+    if n_trials is None or int(n_trials) == trials_df.shape[0]:
+        pseudosess = generate_pseudo_session(trials_df, generate_choices=False)
+    else:
+        # Longer (or shorter) world: same generative process, independent length.
+        signed, side, pleft = _pseudo_sessions_vectorized(
+            trials_df, n=1, seed=seed, n_trials=int(n_trials))
+        pseudosess = pd.DataFrame({
+            'signed_contrast': signed[0],
+            'stim_side': side[0],
+            'probabilityLeft': pleft[0],
+        })
     choice = simulate_choices(pseudosess.signed_contrast.values,
                               pseudosess.stim_side.values, params, n_sim=1, seed=seed)
     pseudosess["choice"] = choice
@@ -216,18 +229,23 @@ def generate_synthetic_sessions(eid, n=2000, one=None, nb_steps=None, seed=0,
     return out
 
 
-def _pseudo_sessions_vectorized(trials, n, seed=0):
+def _pseudo_sessions_vectorized(trials, n, seed=0, n_trials=None):
     """Vectorized equivalent of n x generate_pseudo_session(..., generate_choices=False).
 
     Returns (signed_contrast, stim_side, probabilityLeft), each shape (n, n_trials), drawn from
     the SAME generative process as the upstream loop (biased blocks + non-uniform contrasts),
     but produced as arrays instead of per-trial DataFrame writes. The exact RNG sequence differs
     from the slow loop (so it is not seed-for-seed identical), but the distribution is the same.
+
+    ``n_trials`` overrides session length (default = ``trials.shape[0]``). Use a larger
+    value for stratified AK nulls when same-length pseudos undersample stim×prior strata.
     """
     from brainbox.task.closed_loop import generate_pseudo_blocks, _get_biased_probs
 
     np.random.seed(seed)
-    n_trials = trials.shape[0]
+    n_trials = int(trials.shape[0] if n_trials is None else n_trials)
+    if n_trials < 1:
+        raise ValueError(f'n_trials must be ≥1, got {n_trials}')
     contrast_set = np.unique(trials["contrastLeft"][~np.isnan(trials["contrastLeft"])])
     idx0 = int(np.where(contrast_set == 0)[0][0])              # zero-contrast index
     p = np.array(_get_biased_probs(len(contrast_set), idx=idx0, prob=0.5))  # zero half as likely
@@ -245,9 +263,10 @@ def _pseudo_sessions_vectorized(trials, n, seed=0):
     return signed_contrast.astype(float), stim_side, pleft
 
 
-def _synthetic_fast(trials, params, n, seed=0):
+def _synthetic_fast(trials, params, n, seed=0, n_trials=None):
     """Fast path: vectorized pseudo-sessions + a single batched simulate_parallel torch call."""
-    signed_contrast, stim_side, pleft = _pseudo_sessions_vectorized(trials, n, seed=seed)
+    signed_contrast, stim_side, pleft = _pseudo_sessions_vectorized(
+        trials, n, seed=seed, n_trials=n_trials)
 
     import torch
     torch.manual_seed(seed)
@@ -264,7 +283,7 @@ def _synthetic_fast(trials, params, n, seed=0):
 def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-000000000000",
                                    subject="synthetic_mouse", nb_steps=None, seed=0,
                                    model_dir=None, return_dataframes=False, params=None,
-                                   fast=True):
+                                   fast=True, n_trials=None):
     """Standalone: from a trials DataFrame, build `n` synthetic sessions (choice/feedback null).
 
     Same as generate_synthetic_sessions but takes the trials object directly (no ONE lookup).
@@ -284,14 +303,13 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
                             simulate_parallel call). ~100x faster and distributionally identical.
                             Set fast=False for the exact upstream per-session loop (slow), e.g.
                             when you need return_dataframes or seed-for-seed parity with the paper.
+    n_trials : int or None  length of each synthetic session. None → ``trials.shape[0]``.
 
     Returns
     -------
     dict of rectangular arrays of shape (n, n_trials) -- choice, feedbackType, signed_contrast,
     stim_side, probabilityLeft -- plus eid, subject, params, n_trials, and (optionally) sessions.
     """
-    from brainbox.task.closed_loop import generate_pseudo_session
-
     trials = _as_trials_df(trials)
 
     # Fit (or load cached) action-kernel for this session, once -- unless params were supplied.
@@ -299,30 +317,28 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
         _, params = fit_action_kernel(trials, eid=eid, subject=subject,
                                       model_dir=model_dir, nb_steps=nb_steps)
 
-    n_trials = trials.shape[0]
+    n_real = trials.shape[0]
+    n_out = int(n_real if n_trials is None else n_trials)
 
     if fast and not return_dataframes:
-        arrs = _synthetic_fast(trials, params, n, seed=seed)
-        return dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_trials, **arrs)
+        arrs = _synthetic_fast(trials, params, n, seed=seed, n_trials=n_out)
+        return dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_out, **arrs)
 
-    # ---- slow, exact upstream loop (per-session DataFrame; needed for return_dataframes) ----
+    # ---- slow loop (per-session DataFrame; needed for return_dataframes) ----
     sim_model = _sim_model()           # build the torch model once, reuse for all n draws
-    arrs = {k: np.empty((n, n_trials), dtype=(np.int64 if k in ("choice", "feedbackType") else float))
+    arrs = {k: np.empty((n, n_out), dtype=(np.int64 if k in ("choice", "feedbackType") else float))
             for k in ("choice", "feedbackType", "signed_contrast", "stim_side", "probabilityLeft")}
     sessions = [] if return_dataframes else None
 
     for i in range(n):
-        np.random.seed(seed + i)       # controls the pseudo-session draw
-        ps = generate_pseudo_session(trials, generate_choices=False)
-        ps["choice"] = simulate_choices(ps.signed_contrast.values, ps.stim_side.values,
-                                        params, n_sim=1, seed=seed + i, model=sim_model)
-        ps["feedbackType"] = np.where(ps["choice"] == ps["stim_side"], 1, -1)
+        ps = make_synthetic_session(
+            trials, params, seed=seed + i, n_trials=n_out)
         for k in arrs:
             arrs[k][i] = ps[k].values
         if return_dataframes:
             sessions.append(ps)
 
-    out = dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_trials, **arrs)
+    out = dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_out, **arrs)
     if return_dataframes:
         out["sessions"] = sessions
     return out

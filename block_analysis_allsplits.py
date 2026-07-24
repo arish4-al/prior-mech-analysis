@@ -490,19 +490,52 @@ _ACTKERNEL_MODE_SUFFIX = {
     'fixedstim': '_pseudo_fixed',
     'unconstrained': '_pseudosession',  # legacy calendar-index into full pseudo
 }
+# Strat-only: multiply BWM pseudo length vs real session.
+# Default 3; on low accept rate the control loop doubles up to MAX.
+# Outputs always use ``_pseudo_strat`` (overwrites prior strat runs).
+ACTKERNEL_PSEUDO_LEN_FACTOR_DEFAULT = 3.0
+ACTKERNEL_PSEUDO_LEN_FACTOR_MAX = 16.0
+
+
+def _actkernel_pseudo_len_factor(factor=None):
+    '''Resolve strat pseudo length multiplier (env ``ACTKERNEL_PSEUDO_LEN_FACTOR``).'''
+    import os
+    if factor is None:
+        env = os.environ.get('ACTKERNEL_PSEUDO_LEN_FACTOR')
+        factor = (float(env) if env not in (None, '')
+                  else ACTKERNEL_PSEUDO_LEN_FACTOR_DEFAULT)
+    factor = float(factor)
+    if factor < 1.0:
+        raise ValueError(f'actkernel_pseudo_len_factor must be ≥1, got {factor}')
+    return factor
+
+
+def _strat_file_suffix(pseudo_len_factor=None):
+    '''On-disk suffix for strat nulls — always ``_pseudo_strat`` (length is metadata).'''
+    del pseudo_len_factor  # length does not change basename
+    return '_pseudo_strat'
+
+
+def _strat_pseudo_n_trials(trials, pseudo_len_factor=None):
+    n = int(len(trials))
+    f = _actkernel_pseudo_len_factor(pseudo_len_factor)
+    if f <= 1.0 + 1e-12:
+        return n
+    return int(np.ceil(n * f))
 
 
 def configure_null_file_suffix(
         actkernel_choice_null=False, session_shuffle_null=False,
-        actkernel_null_mode=None):
+        actkernel_null_mode=None, actkernel_pseudo_len_factor=None):
     '''Tag pooled / stream_acc filenames by null scheme; shuffle keeps plain names.
 
-    - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (opt 1)
-    - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy`` (opt 2)
+    - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (any len_factor)
+    - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy``
     - AK ``unconstrained`` → ``{split}_pseudosession*.npy`` (legacy)
-    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy`` (opt 3)
+    - ``--session-shuffle-null`` (Harris) → ``{split}_harris*.npy``
     - default label shuffle → ``{split}*.npy``
     '''
+    del actkernel_pseudo_len_factor  # unused for naming; kept for call-site compat
     global RES_FILE_SUFFIX
     mode = _resolve_actkernel_null_mode(
         actkernel_choice_null, actkernel_null_mode)
@@ -668,7 +701,8 @@ def _ys_from_stratum_choices(choice, stratum_mask, n_elig, rng):
 
 def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
                                 max_tries=HARRIS_MAX_TRIES,
-                                mode='unconstrained', split=None):
+                                mode='unconstrained', split=None,
+                                actkernel_pseudo_len_factor=None):
     '''
     Draw one ActionKernel null label vector on eligible trials.
 
@@ -689,6 +723,8 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
     sim_model = fit.get('sim_model') if isinstance(fit, dict) else None
     if rng is None:
         rng = np.random.default_rng()
+    n_pseudo = (_strat_pseudo_n_trials(trials, actkernel_pseudo_len_factor)
+                if mode == 'strat' else None)
 
     last_ys = None
     for _ in range(max_tries):
@@ -699,7 +735,8 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
             ch = np.asarray(out['choice'], dtype=float).reshape(-1)
             ys = ch[elig_idx] == 1
         elif mode == 'strat':
-            ps = syn.make_synthetic_session(trials, theta, seed=seed)
+            ps = syn.make_synthetic_session(
+                trials, theta, seed=seed, n_trials=n_pseudo)
             ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
             side = np.asarray(ps['stim_side'], dtype=float).reshape(-1)
             if 'act' in (split or ''):
@@ -1226,7 +1263,7 @@ def _compute_control_D_harris(
 def _compute_control_D_actkernel_choice(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
-        actkernel_null_mode='strat'):
+        actkernel_null_mode='strat', actkernel_pseudo_len_factor=None):
     '''
     ActionKernel synthetic-choice nulls (journal options 1–2 + legacy).
 
@@ -1234,11 +1271,14 @@ def _compute_control_D_actkernel_choice(
 
     - ``strat``: new pseudo stim/blocks + AK choices; take choices from the
       pseudo's stim×prior stratum (length-matched to ``elig_idx``).
+      ``actkernel_pseudo_len_factor`` > 1 draws longer BWM pseudos so strata
+      are large enough (congruent act splits).
     - ``fixedstim``: AK choices on the real stim/side stream; labels at
       ``elig_idx``.
     - ``unconstrained``: legacy — pseudo choices at calendar ``elig_idx``.
     '''
     mode = _resolve_actkernel_null_mode(True, actkernel_null_mode)
+    len_factor = _actkernel_pseudo_len_factor(actkernel_pseudo_len_factor)
     choices_true = np.asarray(choices_true, dtype=float)
     ys_true = choices_true == 1
     m0_true = b[ys_true].mean(axis=0)
@@ -1272,7 +1312,11 @@ def _compute_control_D_actkernel_choice(
     fit = get_actkernel_choice_fit(eid, trials)
     elig_idx = np.asarray(elig_idx, dtype=int)
     n_elig = len(elig_idx)
+    n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
+                if mode == 'strat' else len(trials))
     print(f'actkernel-choice [{split}]: mode={mode}; '
+          f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
+          f'(real={len(trials)}, n_elig={n_elig}); '
           f'fit mode={fit.get("mode")} '
           f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
 
@@ -1286,8 +1330,10 @@ def _compute_control_D_actkernel_choice(
     seed_base = int(rng.integers(0, 2**31 - 1))
     n_done = 0
     gen_offset = 0
+    gen_at_factor = 0
     sim_model = fit.get('sim_model')
     theta = fit['params']
+    max_factor = ACTKERNEL_PSEUDO_LEN_FACTOR_MAX
 
     while n_done < nrand:
         need = nrand - n_done
@@ -1303,11 +1349,13 @@ def _compute_control_D_actkernel_choice(
         else:
             out = syn.synthetic_sessions_from_trials(
                 trials, n=n_gen, eid=str(eid), subject='bwm',
-                params=theta, seed=seed_base + gen_offset, fast=True)
+                params=theta, seed=seed_base + gen_offset, fast=True,
+                n_trials=(n_pseudo if mode == 'strat' else None))
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
         gen_offset += n_gen
+        gen_at_factor += n_gen
 
         for i in range(ch_mat.shape[0]):
             if mode == 'strat':
@@ -1334,9 +1382,26 @@ def _compute_control_D_actkernel_choice(
             n_done += 1
             if n_done >= nrand:
                 break
-        # No sampler / unconstrained fallback: skip insertion if acceptance
-        # rate is too low to fill nrand (logged as split skip upstream).
-        if n_done < nrand and gen_offset > nrand * 20:
+
+        # Strat: if accept rate too low, double pseudo length and keep going.
+        if (mode == 'strat' and n_done < nrand
+                and gen_at_factor > nrand * 20):
+            new_factor = min(len_factor * 2.0, max_factor)
+            if new_factor > len_factor + 1e-12:
+                print(f'WARNING: actkernel strat [{split}]: only {n_done}/{nrand} '
+                      f'after {gen_at_factor} draws at factor={len_factor:g}; '
+                      f'raising pseudo_len_factor → {new_factor:g}')
+                len_factor = new_factor
+                n_pseudo = _strat_pseudo_n_trials(trials, len_factor)
+                gen_at_factor = 0
+                continue
+            raise InsufficientTrials(
+                f'actkernel strat null [{split}]: only {n_done}/{nrand} '
+                f'balanced draws after {gen_offset} synthetic sessions '
+                f'(pseudo_len_factor up to {len_factor:g}, n_pseudo={n_pseudo}); '
+                f'skipping insertion')
+
+        if mode != 'strat' and n_done < nrand and gen_offset > nrand * 20:
             raise InsufficientTrials(
                 f'actkernel {mode} null [{split}]: only {n_done}/{nrand} '
                 f'balanced draws after {gen_offset} synthetic sessions; '
@@ -1361,6 +1426,8 @@ def _compute_control_D_actkernel_choice(
         'actkernel_null_mode': mode,
         'actkernel_fit_mode': fit.get('mode'),
         'actkernel_params': np.asarray(fit['params'], dtype=float),
+        'actkernel_pseudo_len_factor': len_factor,
+        'actkernel_n_pseudo_trials': n_pseudo,
     }
 
 
@@ -1387,7 +1454,7 @@ def _bin_spike_events(spikes, clusters, events, split):
 def _get_d_vars_session_shuffle(
         split, trials, spikes, clusters, mapping, control, nrand,
         null_batch_size, donor_bank, eid, actkernel_choice_null=False,
-        actkernel_null_mode=None):
+        actkernel_null_mode=None, actkernel_pseudo_len_factor=None):
     '''
     Choice L vs R under fixed stim (± prior/block), with structured nulls.
 
@@ -1471,6 +1538,7 @@ def _get_d_vars_session_shuffle(
                 trials=trials, elig_idx=elig_idx, eid=eid,
                 null_batch_size=null_batch_size,
                 actkernel_null_mode=ak_mode,
+                actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
             )
         if not donor_bank:
             raise InsufficientTrials(
@@ -1781,6 +1849,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                session_shuffle_null=False,
                actkernel_choice_null=False,
                actkernel_null_mode=None,
+               actkernel_pseudo_len_factor=None,
                exclude_sticky_trials=False,
                sticky_late_frac=STICKY_LATE_FRAC,
                sticky_min_run=STICKY_MIN_RUN):
@@ -1798,6 +1867,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     ``actkernel_null_mode`` (default ``strat``: new pseudo + stim×prior
     stratum labels; also ``fixedstim``, ``unconstrained``). Takes precedence
     over session_shuffle_null.
+
+    ``actkernel_pseudo_len_factor``: strat only — multiply BWM pseudo length
+    vs the real session (default 3; env ``ACTKERNEL_PSEUDO_LEN_FACTOR``).
+    On low accept rate the control loop doubles up to
+    ``ACTKERNEL_PSEUDO_LEN_FACTOR_MAX``. Outputs always ``_pseudo_strat``.
 
     ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
     use literal Harris session-permutation nulls: stratify stim×prior only on
@@ -1879,7 +1953,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid,
             actkernel_choice_null=bool(actkernel_choice_null),
-            actkernel_null_mode=actkernel_null_mode)
+            actkernel_null_mode=actkernel_null_mode,
+            actkernel_pseudo_len_factor=actkernel_pseudo_len_factor)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
@@ -2805,6 +2880,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              session_shuffle_null=False,
                              actkernel_choice_null=False,
                              actkernel_null_mode=None,
+                             actkernel_pseudo_len_factor=None,
                              exclude_sticky_trials=False,
                              sticky_late_frac=STICKY_LATE_FRAC,
                              sticky_min_run=STICKY_MIN_RUN):
@@ -2848,6 +2924,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
         actkernel_choice_null=actkernel_choice_null,
         session_shuffle_null=session_shuffle_null and ak_mode is None,
         actkernel_null_mode=actkernel_null_mode,
+        actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
     )
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
@@ -2872,6 +2949,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
           'session_shuffle_null', session_shuffle_null,
           'actkernel_choice_null', actkernel_choice_null,
           'actkernel_null_mode', actkernel_null_mode,
+          'actkernel_pseudo_len_factor', actkernel_pseudo_len_factor,
           'exclude_sticky_trials', exclude_sticky_trials)
 
     donor_bank = None
@@ -2886,7 +2964,9 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
               'choice_duringstim* splits in list')
     elif ak_mode is not None and any(
             is_choice_lr_split(sp) for sp in splits_list):
-        print(f'actkernel null mode={ak_mode} enabled for choice L–R splits')
+        print(f'actkernel null mode={ak_mode} enabled for choice L–R splits'
+              f' (pseudo_len_factor='
+              f'{_actkernel_pseudo_len_factor(actkernel_pseudo_len_factor):g})')
     elif ak_mode is not None:
         print('WARNING: actkernel null set but no choice_stim*/'
               'choice_duringstim* splits in list')
@@ -2949,6 +3029,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                                 session_shuffle_null=session_shuffle_null,
                                 actkernel_choice_null=actkernel_choice_null,
                                 actkernel_null_mode=actkernel_null_mode,
+                                actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
                                 exclude_sticky_trials=exclude_sticky_trials,
                                 sticky_late_frac=sticky_late_frac,
                                 sticky_min_run=sticky_min_run)

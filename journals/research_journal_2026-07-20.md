@@ -262,6 +262,108 @@ Needs `sobol_seq` + `torch` for AK schemes; Harris needs donor bank job
 `SESSION_SHUFFLE_NULL` as shards. Do **not** interpret legacy unconstrained
 `_pseudosession` sig tables.
 
+### 2026-07-24 — res/new: all three nulls analyzed (α=0.01)
+
+**Data:** alyx `manifold/res/new/` — full 8 act splits ×
+`_pseudo_strat` / `_pseudo_fixed` / `_harris` / legacy `_pseudosession`
+(nrand=2000). Baseline = openalyx label-shuffle. Combined 4-split tables;
+BH-FDR on `p_mean` at **α=0.01**.
+
+**Policy note:** failed null draws (cannot fill `nrand` balanced labels; no
+long-enough Harris donors) **skip the insertion** (logged `split skip`); no
+circular-shift / unconstrained / observed-label fallbacks.
+
+#### FDR sig counts (α=0.01)
+
+| arm | duringstim | duringchoice | median p (stim / choice) |
+|-----|----------:|-------------:|--------------------------|
+| shuffle (openalyx) | 46 | 84 | 0.071 / 0.019 |
+| **pseudo_strat** | **0** | **0** | **0.995 / 0.987** |
+| pseudo_fixed | 95 | 124 | 0.009 / 0.002 |
+| harris | 201 | 202 | ~0.0005 |
+| pseudosession (legacy) | 201 | 201 | ~0.0005 |
+
+Vs shuffle (lost / gained / kept at α=0.01):
+
+| epoch | arm | shuffle | arm n | lost | gained | kept |
+|-------|-----|--------:|------:|-----:|-------:|-----:|
+| duringstim | pseudo_strat | 46 | **0** | 46 | 0 | 0 |
+| duringchoice | pseudo_strat | 84 | **0** | 84 | 0 | 0 |
+| duringstim | pseudo_fixed | 46 | 95 | 8 | 57 | 38 |
+| duringchoice | pseudo_fixed | 84 | 124 | 9 | 49 | 75 |
+| duringstim | harris | 46 | 200 | 1 | 155 | 45 |
+| duringchoice | harris | 84 | 202 | 1 | 119 | 83 |
+| duringstim | pseudosession | 46 | 200 | 1 | 155 | 45 |
+| duringchoice | pseudosession | 84 | 201 | 1 | 118 | 83 |
+
+**Plots / CSV:**
+`meta/table_choice_{pseudo_strat,pseudo_fixed,harris,pseudosession}_vs_shuffle_*_p_mean_c_0.01.png`
+(+ duringchoice companions); `meta/choice_null_res_new_summary_a0.01.csv`.
+
+#### Region / cell retention vs shuffle
+
+Congruent = stim side matches act-prior side (`*_stim_l_block_l_*`,
+`*_stim_r_block_r_*`); incongruent = crossed.
+
+| | Congruent | Incongruent |
+|--|-----------|-------------|
+| **strat** | ~37% regions, **~10% cells** | ~96% regions, ~87% cells |
+| **fixed / harris** | ~96% regions, ~83% cells | ~96% regions, ~87% cells |
+
+Strat’s missing mass is almost entirely **congruent** splits (e.g.
+`choice_stim_l_block_l_act`: 71 regs / 4.7k cells vs fixed 199 / 54k).
+
+#### Why strat skips congruent insertions
+
+Strat length-matches labels from the **pseudo’s own** stim×act-prior stratum
+to real `n_elig`. Reject if stratum too short or &lt;5 trials/side; after
+`nrand×20` synthetic sessions without `nrand` accepts → skip insertion.
+
+Probe (local eid, short MCMC): congruent `stim_l×block_l_act` had
+`n_elig=61` but pseudo stratum size med **36** (always &lt;61) → **100% short**
+rejects (0/100 accept). Same elig under **fixedstim**: 97% accept. Incongruent
+on the same eid: ~48% accept (mix of short + imbal). So congruent loss is
+driven by **short act-prior strata on new pseudos** (real sticky act-priors
+align with stim → large congruent pools; remade pseudo+AK history does not),
+not primarily by the ≥5/side gate.
+
+#### Interpretation
+
+- **Opt 1 (strat):** only arm that looks **calibrated** at α=0.01 (0 FDR hits),
+  but congruent coverage is too thin to trust as a full-map null — treat as
+  provisional / incongruent-dominated.
+- **Opt 2 (fixed):** still **more liberal than shuffle** (95/124 vs 46/84).
+- **Opt 3 (harris) + legacy unconstrained:** still **broken** (almost all
+  regions FDR-sig) — same under-dispersed / mismatch pathology as 2026-07-23b.
+
+**Next:** fix strat length-match (e.g. allow shorter windows + pad? subsample
+real `n_elig` down to available stratum size? or reject only on imbalance) so
+congruent insertions are retained without reintroducing unconstrained indexing;
+re-plot α=0.01 after coverage is restored.
+
+### 2026-07-24b — Strat longer pseudos (`pseudo_len_factor=3`)
+
+**Fix:** BWM same-length pseudos undersize congruent act strata (probe: need 61,
+med stratum 36 → 0–1% accept). Draw longer worlds:
+`n_pseudo = ceil(n_real × factor)` via `generate_pseudo_blocks(n_pseudo)` + AK
+simulate (fit still on real session).
+
+**Code:** `--actkernel-pseudo-len-factor` / env `ACTKERNEL_PSEUDO_LEN_FACTOR`
+(default **3**); on low accept rate the control loop **doubles up to 16**.
+Always writes **`_pseudo_strat`** (submit `CLEAR_STREAM=1` clears prior
+stream_acc + pooled res). Probe: factor 1 → ~1% accept; **factor 3 → 100%**
+(med stratum 97).
+
+**ORCD rerun (strat only):**
+```bash
+# on main with updated code + submodule
+bash scripts/submit_goal2_choice_strat_x3_sharded.sh
+# or: NULL_SCHEME=pseudo_strat bash scripts/submit_goal2_choice_null_sharded.sh
+# optional: SMOKE_FIRST=1 …
+```
+Outputs: `$ONE_CACHE_DIR/manifold/res/{split}_pseudo_strat*.npy`.
+Plot with `--arm-split-suffix _pseudo_strat --arm-tag strat --alpha 0.01`.
+
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 
 **Region list source:** openalyx `get_sc_table` → alyx CSV (does not overwrite openalyx
