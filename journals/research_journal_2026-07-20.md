@@ -198,7 +198,7 @@ stratified `elig_idx` without defeating the structured null.
 |---|------|------------|----------------|-------------------------|---------------|
 | **1** | Pseudosession + **stim×block stratification** | New pseudo schedule, but stratified / constrained so eligible slots match real stim×block (bias context) | AK simulate under fitted θ | **No** explicit late stickiness (stationary `α` only; blocky runs via stim+history) | **Yes** — unlimited synthetic draws |
 | **2** | Pseudosession on **exact real stim×block sequence** | Pin recorded `(stim_side, pLeft)` (fixed-stim); only choices are synthetic | AK simulate under fitted θ | **No** (same as 1 — AK has no time-varying perseveration) | **Yes** — resample choices on the fixed stream |
-| **3** | **Harris / session transplant** (original): other sessions’ choice sequences at recipient `elig_idx`, conditioned on stim×block stratification | Real recipient stim×block defines eligibility; donor choices indexed in | Empirical choices from other eids | **Yes** — real mice carry late-session / sticky structure | **No** — donor pool ≪ 2000 unique usable sequences |
+| **3** | **Harris / session transplant**: other sessions’ choices from the **same** stim×prior stratum (donor re-filtered), length-matched to recipient `n_elig` | Recipient stim×block defines neural `elig_idx`; **donor** also restricted to that stratum | Empirical choices from other eids (stratum-matched) | **Yes** — real mice carry late-session / sticky structure within stratum | **No** — donor pool ≪ 2000 unique usable sequences |
 
 **Notes:**
 - Unconstrained full BWM pseudo (calendar-index into mismatched stim×block;
@@ -225,8 +225,11 @@ stratified `elig_idx` without defeating the structured null.
     BWM “behavior under an independent generative world”; use **2** if the
     priority is a fair stratified null that matches imbalance/temporal bias
     with minimal reject rate and maximum schedule fidelity.
-- **3** (`--session-shuffle-null` / `_harris`): empirical sticky structure;
-  donor pool ≪ 2000 unique sequences without replacement / circular shifts.
+- **3** (`--session-shuffle-null` / `_harris`): empirical sticky structure
+  **within the matched stim×prior stratum** on the donor (same length-match as
+  opt 1). **Bug (fixed 2026-07-24c/d):** earlier runs calendar-indexed donors
+  with no stratum re-filter; now aligned with real/pseudo act strata. Donor
+  pool still ≪ 2000 unique sequences.
 - **Cluster:** `NULL_SCHEME=pseudo_strat|pseudo_fixed|harris` via
   `scripts/submit_goal2_choice_null_sharded.sh`, or all three with
   `scripts/submit_goal2_choice_null_all_schemes_sharded.sh`.
@@ -280,7 +283,7 @@ circular-shift / unconstrained / observed-label fallbacks.
 | shuffle (openalyx) | 46 | 84 | 0.071 / 0.019 |
 | **pseudo_strat** | **0** | **0** | **0.995 / 0.987** |
 | pseudo_fixed | 95 | 124 | 0.009 / 0.002 |
-| harris | 201 | 202 | ~0.0005 |
+| harris (**INVALID** — calendar-index; see 2026-07-24c) | 201 | 202 | ~0.0005 |
 | pseudosession (legacy) | 201 | 201 | ~0.0005 |
 
 Vs shuffle (lost / gained / kept at α=0.01):
@@ -333,8 +336,10 @@ not primarily by the ≥5/side gate.
   but congruent coverage is too thin to trust as a full-map null — treat as
   provisional / incongruent-dominated.
 - **Opt 2 (fixed):** still **more liberal than shuffle** (95/124 vs 46/84).
-- **Opt 3 (harris) + legacy unconstrained:** still **broken** (almost all
-  regions FDR-sig) — same under-dispersed / mismatch pathology as 2026-07-23b.
+- **Opt 3 (harris, calendar-index bug) + legacy unconstrained:** still
+  **broken** in the 2026-07-24 `res/new` dump (almost all regions FDR-sig) —
+  same under-dispersed pathology. Harris **fixed** in 2026-07-24c (donor
+  re-strat); rerun required before interpreting `_harris`.
 
 **Next:** fix strat length-match (e.g. allow shorter windows + pad? subsample
 real `n_elig` down to available stratum size? or reject only on imbalance) so
@@ -363,6 +368,34 @@ bash scripts/submit_goal2_choice_strat_x3_sharded.sh
 ```
 Outputs: `$ONE_CACHE_DIR/manifold/res/{split}_pseudo_strat*.npy`.
 Plot with `--arm-split-suffix _pseudo_strat --arm-tag strat --alpha 0.01`.
+
+### 2026-07-24c — Harris donor re-stratification (overwrite `_harris`)
+
+**Bug in prior `_harris` run:** recipient stim×prior defined `elig_idx` / neural
+`b`, but null labels were `donor_choice[elig_idx]` (**calendar index**, no
+donor-side stratum match). Same pathology as unconstrained / legacy
+`_pseudosession` → near-balanced labels on imbalanced strata → under-dispersed
+null → almost every region FDR-sig (2026-07-24 table). **Those `_harris`
+results are invalid.**
+
+**Fix:** for each null draw, restrict the donor to the **same** stim×prior
+stratum as the split (true-block `pleft`, act-binary priors, or bayes), then
+length-match choices to `n_elig` via `_ys_from_stratum_choices` (contiguous
+window if longer). Skip insertion if no donor has ≥ `n_elig` stratum trials or
+`nrand` balanced draws cannot be filled (no calendar / circular-shift fallback).
+
+**ORCD rerun (harris only; clears prior stream_acc + pooled `_harris`):**
+```bash
+# on main with updated block_analysis_allsplits.py + submit scripts
+NULL_SCHEME=harris bash scripts/submit_goal2_choice_null_sharded.sh
+# or: bash scripts/submit_goal2_choice_session_null_sharded.sh
+# optional: SMOKE_FIRST=1 …
+```
+Outputs overwrite `$ONE_CACHE_DIR/manifold/res/{split}_harris*.npy`.
+
+### 2026-07-24d — Shared stim×prior stratum helpers
+
+**Harris bug:** null labels used calendar trial indices with no donor stim×prior filter; **fix:** real eligibility, pseudo_strat, and Harris donors now all use the same act/bayes/true stratum definition (pseudo_strat was already act-matched; only Harris was wrong).
 
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 
