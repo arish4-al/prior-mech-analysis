@@ -234,6 +234,11 @@ def main():
                         '(opt 1); fixedstim=real stim×block sequence (opt 2); '
                         'unconstrained=legacy calendar-index pseudo. '
                         'Implies AK null even without --actkernel-choice-null')
+    p.add_argument('--actkernel-pseudo-len-factor', type=float, default=None,
+                   help='Strat only: BWM pseudo length = factor × real n_trials '
+                        '(default 3, or env ACTKERNEL_PSEUDO_LEN_FACTOR). '
+                        'On low accept rate doubles up to 16; always '
+                        'writes _pseudo_strat outputs')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -311,6 +316,7 @@ def main():
                 and ba._resolve_actkernel_null_mode(
                     args.actkernel_choice_null, ak_mode) is None),
             actkernel_null_mode=ak_mode,
+            actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
         )
         print('ONE cache:', ba.one.cache_dir)
         print('Finalize splits:', splits, 'res=', ba.pth_res,
@@ -341,6 +347,7 @@ def main():
           'session_shuffle_null:', args.session_shuffle_null,
           'actkernel_choice_null:', args.actkernel_choice_null,
           'actkernel_null_mode:', args.actkernel_null_mode,
+          'actkernel_pseudo_len_factor:', args.actkernel_pseudo_len_factor,
           'exclude_sticky_trials:', args.exclude_sticky_trials)
 
     if args.exclude_sticky_trials:
@@ -353,6 +360,7 @@ def main():
             and ba._resolve_actkernel_null_mode(
                 args.actkernel_choice_null, args.actkernel_null_mode) is None),
         actkernel_null_mode=args.actkernel_null_mode,
+        actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
     )
 
     # bycontrast=False: contrast is read from the split name (..._0.125).
@@ -372,6 +380,7 @@ def main():
         session_shuffle_null=args.session_shuffle_null,
         actkernel_choice_null=args.actkernel_choice_null,
         actkernel_null_mode=args.actkernel_null_mode,
+        actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
         exclude_sticky_trials=args.exclude_sticky_trials,
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,

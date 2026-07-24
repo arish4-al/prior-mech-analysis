@@ -4,16 +4,19 @@
 #   NULL_SCHEME=pseudo_strat|pseudo_fixed|harris \
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
-# Schemes (journal 2026-07-23b):
-#   pseudo_strat  — opt 1: AK + stim×block–stratified pseudo (default)
+# Schemes (journal 2026-07-23b / 2026-07-24):
+#   pseudo_strat  — opt 1: AK + stim×block–stratified pseudo
+#                   default PSEUDO_LEN_FACTOR=3; adaptive bump to 16 if needed
+#                   always writes {split}_pseudo_strat*.npy (overwrites prior strat)
 #   pseudo_fixed  — opt 2: AK on exact real stim×block sequence
 #   harris        — opt 3: session-transplant choice sequences
 #
-# Default preset: choice_lr_session_null_all (8 act splits).
-# AK schemes need torch + sobol_seq + submodule third_party/behavior_models.
+# Strat rerun (recommended):
+#   bash scripts/submit_goal2_choice_strat_x3_sharded.sh
+#   # or:
+#   NULL_SCHEME=pseudo_strat bash scripts/submit_goal2_choice_null_sharded.sh
 #
-#   NULL_SCHEME=pseudo_fixed N_SHARDS=4 \
-#     bash scripts/submit_goal2_choice_null_sharded.sh
+#   CLEAR_STREAM=0  — keep existing stream_acc / res (default clears for strat)
 #   SMOKE_FIRST=1 NULL_SCHEME=pseudo_strat \
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
@@ -30,6 +33,8 @@ N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 SMOKE_FIRST="${SMOKE_FIRST:-0}"
+PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
+CLEAR_STREAM="${CLEAR_STREAM:-}"
 MEM_SHARD="${MEM_SHARD:-12G}"
 MEM_FIN="${MEM_FIN:-10G}"
 MEM_SMOKE="${MEM_SMOKE:-16G}"
@@ -50,14 +55,17 @@ CASE_TAG=""
 SUFFIX=""
 JOB_PREFIX=""
 
-case "$NULL_SCHEME" in
-  pseudo_strat|strat)
+_ORIG_SCHEME="$NULL_SCHEME"
+case "$_ORIG_SCHEME" in
+  pseudo_strat_x3|strat_x3|pseudo_strat|strat)
     NULL_SCHEME=pseudo_strat
     ACTKERNEL_CHOICE_NULL=1
     ACTKERNEL_NULL_MODE=strat
+    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-3}"
     CASE_TAG=strat
     SUFFIX=_pseudo_strat
     JOB_PREFIX=g2ps
+    CLEAR_STREAM="${CLEAR_STREAM:-1}"
     ;;
   pseudo_fixed|fixedstim|fixed)
     NULL_SCHEME=pseudo_fixed
@@ -66,6 +74,8 @@ case "$NULL_SCHEME" in
     CASE_TAG=fixed
     SUFFIX=_pseudo_fixed
     JOB_PREFIX=g2pf
+    PSEUDO_LEN_FACTOR=""
+    CLEAR_STREAM="${CLEAR_STREAM:-0}"
     ;;
   harris|session)
     NULL_SCHEME=harris
@@ -73,18 +83,21 @@ case "$NULL_SCHEME" in
     CASE_TAG=harris
     SUFFIX=_harris
     JOB_PREFIX=g2h
-    # Harris is lighter than AK MCMC
+    PSEUDO_LEN_FACTOR=""
+    CLEAR_STREAM="${CLEAR_STREAM:-0}"
     if [[ "${MEM_SHARD}" == "12G" ]]; then
       MEM_SHARD=6G
     fi
     ;;
   *)
-    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|harris (got $NULL_SCHEME)" >&2
+    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|harris (got $_ORIG_SCHEME)" >&2
     exit 1
     ;;
 esac
 
 export SESSION_SHUFFLE_NULL ACTKERNEL_CHOICE_NULL ACTKERNEL_NULL_MODE NULL_SCHEME
+export ACTKERNEL_PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
+export PSEUDO_LEN_FACTOR
 
 module load miniforge 2>/dev/null || true
 if [[ -f "$HOME/conda_envs/ibl/bin/activate" ]]; then
@@ -112,8 +125,24 @@ if [[ ${#SPLITS[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# Overwrite prior strat (or CLEAR_STREAM=1): drop stream_acc + pooled res for SUFFIX.
+# Exact basename match so _pseudo_strat_x3 leftovers are left alone.
+if [[ "$CLEAR_STREAM" == "1" && -n "$SUFFIX" ]]; then
+  RES_ROOT="$ONE_CACHE_DIR/manifold/res"
+  ACC="$RES_ROOT/_stream_acc"
+  echo "CLEAR_STREAM=1: removing prior ${SUFFIX} stream_acc + res under $RES_ROOT"
+  for sp in "${SPLITS[@]}"; do
+    base="${sp}${SUFFIX}"
+    rm -f "$ACC/${base}.npy" "$ACC/${base}.shard"*.npy 2>/dev/null || true
+    rm -f "$RES_ROOT/${base}.npy" "$RES_ROOT/${base}_regde.npy" "$RES_ROOT/${base}_all.npy" \
+      2>/dev/null || true
+  done
+fi
+
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=$NULL_SCHEME  mode=$ACTKERNEL_NULL_MODE  harris=$SESSION_SHUFFLE_NULL"
+echo "PSEUDO_LEN_FACTOR=${PSEUDO_LEN_FACTOR:-1}  ACTKERNEL_PSEUDO_LEN_FACTOR=${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
+echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
 echo "Suffix: {split}${SUFFIX}.npy"
@@ -138,9 +167,9 @@ elif [[ "$SMOKE_FIRST" == "1" && "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
   SMOKE_JID=$(sbatch --parsable \
     --mem="$MEM_SMOKE" --cpus-per-task="$CPUS_SMOKE" --time="$TIME_SMOKE" \
     --job-name="g2_ak_smoke_${CASE_TAG}" \
-    --export=ALL,ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE" \
+    --export=ALL,ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}" \
     scripts/run_goal2_actkernel_smoke_slurm.sh)
-  echo "actkernel smoke ($ACTKERNEL_NULL_MODE) -> $SMOKE_JID"
+  echo "actkernel smoke ($ACTKERNEL_NULL_MODE factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}) -> $SMOKE_JID"
   DEP_AFTER="--dependency=afterok:${SMOKE_JID}"
 fi
 
@@ -153,7 +182,7 @@ for sp in "${SPLITS[@]}"; do
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
       $DEP_AFTER \
-      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
+      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
       scripts/run_goal2_shard_slurm.sh)
     SHARD_JOBS+=("$JID")
     echo "  $sp shard $k/$N_SHARDS -> $JID"
@@ -163,10 +192,10 @@ for sp in "${SPLITS[@]}"; do
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \
-    --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
+    --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
     scripts/run_goal2_finalize_slurm.sh)
   echo "  $sp finalize -> $FID"
 done
 
-echo "Done ($NULL_SCHEME). Monitor: squeue -u \$USER"
+echo "Done ($NULL_SCHEME suffix=$SUFFIX). Monitor: squeue -u \$USER"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}${SUFFIX}.npy"

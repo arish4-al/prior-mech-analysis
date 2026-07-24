@@ -35,6 +35,7 @@ STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
 STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
 ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
 ACTKERNEL_NULL_MODE="${ACTKERNEL_NULL_MODE:-}"
+ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -51,7 +52,7 @@ fi
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
 echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
-echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default}"
+echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default} pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
@@ -61,6 +62,7 @@ ARGS+=(--stream-pool)
 [[ "$SESSION_SHUFFLE_NULL" == "1" ]] && ARGS+=(--session-shuffle-null)
 [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
 [[ -n "$ACTKERNEL_NULL_MODE" ]] && ARGS+=(--actkernel-null-mode "$ACTKERNEL_NULL_MODE")
+[[ -n "$ACTKERNEL_PSEUDO_LEN_FACTOR" ]] && ARGS+=(--actkernel-pseudo-len-factor "$ACTKERNEL_PSEUDO_LEN_FACTOR")
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(
   --exclude-sticky-trials
   --sticky-late-frac "$STICKY_LATE_FRAC"
