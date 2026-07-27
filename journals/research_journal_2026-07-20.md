@@ -221,10 +221,6 @@ stratified `elig_idx` without defeating the structured null.
     session’s bias timeline and usually closest n_L/n_R to observed; weaker as
     a confound break because neurons and the null policy share the same stim
     stream (choices remain stochastic under θ, not a copy of real choices).
-  - **When to prefer which:** use **1** if the scientific goal is closest to
-    BWM “behavior under an independent generative world”; use **2** if the
-    priority is a fair stratified null that matches imbalance/temporal bias
-    with minimal reject rate and maximum schedule fidelity.
 - **3** (`--session-shuffle-null` / `_harris`): empirical sticky structure
   **within the matched stim×prior stratum** on the donor (same length-match as
   opt 1). **Bug (fixed 2026-07-24c/d):** earlier runs calendar-indexed donors
@@ -416,37 +412,11 @@ python scripts/plot_choice_null_comparison_table.py \
   --arm-tag pseudo_strat --force-combine --alpha 0.01
 ```
 
-#### FDR sig counts (α=0.01)
-
-| arm | duringstim | duringchoice | median p (stim / choice) |
-|-----|----------:|-------------:|--------------------------|
-| shuffle (openalyx) | 46 | 84 | 0.071 / 0.019 |
-| **harris (re-strat)** | **21** | **57** | **0.283 / 0.118** |
-| **pseudo_strat (×3)** | **74** | **105** | **0.042 / 0.009** |
-| pseudo_fixed | 95 | 124 | 0.017 / 0.004 |
-| harris calendar-index (INVALID, 07-24) | 201 | 202 | ~0.0005 |
-| pseudo_strat thin (pre-×3, 07-24) | 0 | 0 | 0.995 / 0.987 |
-
-Vs shuffle (lost / gained / kept at α=0.01; n=207 regions in both):
-
-| epoch | arm | shuffle | arm n | lost | gained | kept |
-|-------|-----|--------:|------:|-----:|-------:|-----:|
-| duringstim | harris | 46 | **21** | 31 | 6 | 15 |
-| duringchoice | harris | 84 | **57** | 37 | 10 | 47 |
-| duringstim | pseudo_strat | 46 | **74** | 12 | 40 | 34 |
-| duringchoice | pseudo_strat | 84 | **105** | 14 | 35 | 70 |
-| duringstim | pseudo_fixed | 46 | 95 | 8 | 57 | 38 |
-| duringchoice | pseudo_fixed | 84 | 124 | 9 | 49 | 75 |
-
-**Plots / CSV:**
-`meta/table_choice_{harris,pseudo_strat,pseudo_fixed}_vs_shuffle_*_p_mean_c_0.01.png`
-(+ duringchoice companions); summary
+**Plots / CSV (this dump):**
+`meta/table_choice_{harris,pseudo_strat,pseudo_fixed}_vs_shuffle_*_p_mean_c_0.01.png`;
 `meta/choice_null_res_new_rerun_harris_strat_a0.01.csv`.
 
-#### Region / cell retention vs shuffle
-
-Congruent / incongruent both restored for strat (×3 fix). All three arms now
-match each other:
+**Retention vs shuffle** (cong / incong both restored for strat ×3):
 
 | | Congruent | Incongruent |
 |--|-----------|-------------|
@@ -455,28 +425,10 @@ match each other:
 Congruent example (`choice_duringstim_l_block_l_act`): strat 200 regs / 53.7k
 cells vs shuffle 207 / 62.0k (was 71 / 4.7k pre-×3).
 
-#### Interpretation
-
-- **Harris (re-strat)** is the only valid structured null that is **stricter
-  than label shuffle** (stim 21 vs 46; choice 57 vs 84). Calendar-index dump
-  from 2026-07-24 is superseded — do not cite those 201/202 counts.
-- **pseudo_strat (×3)** restores full-map coverage, but is **more liberal**
-  than shuffle (74/105). The pre-×3 “0 FDR hits” result was an artifact of
-  congruent dropout, not a calibrated null.
-- **pseudo_fixed** remains the most liberal of the three valid arms (95/124).
-- Ordering of liberality at α=0.01:  
-  **harris (conservative) < shuffle < strat ×3 < fixed ≪ invalid calendar /
-  unconstrained**.
-- CP sanity (cong duringstim regde): strat null amp med ≈ 0.11 vs harris ≈ 0.18
-  vs shuffle ≈ 0.33 — strat still under-disperses relative to Harris/shuffle
-  even with length-matched strata; Harris is closer but still below shuffle’s
-  floor (different insertion set + empirical donor diversity).
-
-**Next:** decide which structured null is primary for choice L–R claims
-(Harris = empirical sticky within stratum; strat = BWM-like new world with
-matched bias context). Optionally probe why strat null amps remain lower than
-Harris at matched coverage (label imbalance / temporal structure / AK
-stationarity).
+**FDR / liberality comparison** across all valid arms (including later
+`_harris_unique`): see **2026-07-27** combined table below. Snapshot from this
+dump only: harris re-strat 21/57, strat×3 74/105, fixed 95/124 (vs shuffle
+46/84).
 
 ### 2026-07-24f — Harris unique-null sampling (code; re-run needed for tables)
 
@@ -501,8 +453,8 @@ re-run on ORCD:
   finalize) → cannot replot unique-null p from pooled `*_harris_regde.npy`
   alone.
 
-**Status:** code + smoke done; **tables not yet updated**. 24e Harris FDR
-(21 / 57) remains the with-replacement result on disk as `_harris`.
+**Status:** code landed; ORCD unique-null re-run analyzed 2026-07-27
+(see below). Legacy `_harris` (21 / 57) kept on disk for comparison.
 
 **Overwrite safety:** unique-null runs write **`_harris_unique`** only.
 `CLEAR_STREAM=1` removes prior `_harris_unique` stream/res; refuses
@@ -519,6 +471,130 @@ python scripts/plot_choice_null_comparison_table.py \
   --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
   --arm-tag harris_unique --force-combine --alpha 0.01
 ```
+
+### 2026-07-27 — Cross-arm choice L–R nulls @ α=0.01 (incl. `_harris_unique`)
+
+**New data:** alyx `manifold/res/new/` — all 8 act splits `*_harris_unique*.npy`
+(mtimes ~16:01–16:10). Legacy `_harris` untouched. Coverage same ballpark as
+24e (~96% regs / ~83–87% cells).
+
+**Per-split unique null counts** (pooled regde `n_null`): highly variable
+across regions (e.g. duringstim_l_block_l: min 99, med ~1520, max 2000).
+
+**Combine fix:** ragged `U` across splits broke aligned sum; then
+`n_mc = min(U)` capped min p ≈ 0.04 → artifactual 0 FDR hits. Updated
+`plot_choice_null_comparison_table._combine_split_curve_stacks` to
+product-MC from each split’s unique set with `n_mc = max(min(U), 2000)`.
+
+```bash
+python scripts/plot_choice_null_comparison_table.py \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag harris_unique --force-combine --alpha 0.01
+```
+
+#### FDR sig counts (α=0.01) — all arms
+
+BH-FDR on combined 4-split `p_mean`; baseline = openalyx label-shuffle.
+Harris unique from this dump; strat×3 / fixed / harris with-replacement from
+2026-07-24e (same alyx `res/new`).
+
+| arm | duringstim | duringchoice | median p (stim / choice) |
+|-----|----------:|-------------:|--------------------------|
+| shuffle (openalyx) | 46 | 84 | — |
+| **harris unique** (`_harris_unique`) | **21** | **58** | **0.263 / 0.092** |
+| harris with-replacement (`_harris`) | 21 | 57 | 0.283 / 0.118 |
+| pseudo_strat (×3) | 74 | 105 | 0.042 / 0.009 |
+| pseudo_fixed | 95 | 124 | 0.017 / 0.004 |
+| ~~harris calendar-index~~ (INVALID) | 201 | 202 | ~0.0005 |
+| ~~pseudo_strat thin~~ (pre-×3; coverage artifact) | 0 | 0 | 0.995 / 0.987 |
+
+Vs shuffle (lost / gained / kept; n=207 regions in both):
+
+| epoch | arm | shuffle | arm n | lost | gained | kept |
+|-------|-----|--------:|------:|-----:|-------:|-----:|
+| duringstim | **harris_unique** | 46 | **21** | 31 | 6 | 15 |
+| duringchoice | **harris_unique** | 84 | **58** | 37 | 11 | 47 |
+| duringstim | harris (`_harris`) | 46 | 21 | 31 | 6 | 15 |
+| duringchoice | harris (`_harris`) | 84 | 57 | 37 | 10 | 47 |
+| duringstim | pseudo_strat | 46 | 74 | 12 | 40 | 34 |
+| duringchoice | pseudo_strat | 84 | 105 | 14 | 35 | 70 |
+| duringstim | pseudo_fixed | 46 | 95 | 8 | 57 | 38 |
+| duringchoice | pseudo_fixed | 84 | 124 | 9 | 49 | 75 |
+
+**Plots / CSV:**
+`meta/table_choice_{harris_unique,harris,pseudo_strat,pseudo_fixed}_vs_shuffle_*_p_mean_c_0.01.png`;
+`meta/choice_null_harris_unique_summary_a0.01.csv`;
+`meta/choice_null_res_new_rerun_harris_strat_a0.01.csv`.
+
+#### Interpretation
+
+- Liberality order at α=0.01:  
+  **harris unique ≈ harris with-replacement < shuffle < strat ×3 < fixed**  
+  ≪ invalid calendar / unconstrained.
+- **Harris** (either file) is the only valid structured null **stricter than
+  shuffle** (stim 21 vs 46; choice ~58 vs 84). Prefer **`_harris_unique`** going
+  forward; archive `_harris` as with-replacement.
+- Unique vs with-replacement Harris are nearly identical (21/57 → 21/58) once
+  combined distances use adequate MC from the unique sets — deduping per
+  insertion does not change the supersession FDR map here.
+- **pseudo_strat (×3):** full-map coverage restored, but still more liberal than
+  shuffle (74/105). Pre-×3 “0 FDR” was congruent dropout, not calibration.
+- **pseudo_fixed:** most liberal of the valid arms (95/124).
+- CP sanity (cong duringstim, 24e): strat null amp med ≈ 0.11 vs harris ≈ 0.18
+  vs shuffle ≈ 0.33 — strat still under-disperses relative to Harris/shuffle.
+- Caveat: per-region unique pools still vary widely at the per-split level.
+
+**Next:** pick primary structured null for choice L–R claims (Harris =
+empirical sticky within stratum; strat = BWM-like new world with matched bias
+context). Optionally probe why strat null amps remain lower than Harris at
+matched coverage.
+
+### 2026-07-27b — Openalyx vs alyx obs: `min_trials_per_side=5` gap
+
+**Note:** Raw obs curves match across alyx null schemes (harris / strat / fixed)
+when the same insertions are kept. Openalyx label-shuffle obs can differ
+slightly from those alyx runs because openalyx was finalized **before**
+`min_trials_per_side = 5` (2026-07-12c in [07-06 journal](research_journal_2026-07-06.md)):
+insertions with &lt;5 trials on either split side were still included. All other
+analysis aspects (windows, fill-from-next-ITI, etc.) are intended to be the same;
+the residual `nclus` / amp diffs vs alyx are largely that gate (plus null RNG).
+
+**Audit (local `~/Downloads/ONE`, 2026-07-27):** every openalyx `manifold/res/*.npy`
+is still pre-2026-07-12. Criterion for “has rerun” = same split basename exists
+under alyx `manifold/res{,/new,/neww}` with mtime ≥ 2026-07-12 (plain **or**
+tagged `_harris*` / `_pseudo_*` / `_pseudosession` — those also apply min5).
+
+**Openalyx splits that already have an alyx post-min5 rerun (12):**
+- plain: `act_block_duringstim_{l,r}_choice_{l_f1,r_f2}` (4; ~2026-07-14)
+- tagged only (Goal 2/3 structured nulls; no plain shuffle on alyx):
+  `choice_duringstim_{l,r}_block_{l,r}_act`,
+  `choice_stim_{l,r}_block_{l,r}_act` (8)
+
+**Caveat (superseded by 2026-07-27c):** those 8 choice L–R act splits still used
+**pre-min5 openalyx** as the label-shuffle baseline; alyx had only structured-null
+reruns until the plain shuffle submit below.
+
+**Openalyx analytic splits with no alyx post-min5 counterpart (145;** exclude
+legacy/`combined_*`/`d_with_controls_*`/`_old`/junk):
+
+- `act_block_only`; `act_block_stim_{l,r}_duringchoice_{l_f1,r_f2}` (4)
+- `block_choice_{l,r}` (+ `_intertrial`); `block_{concordant,discordant}` (+
+  `_duringchoice`)
+- `block_duringstim_{l,r}_choice_{l_f1,r_f2}` (+ contrasts
+  0/0.0625/0.125/0.25/1.0); `block_stim_{l,r}_{all,choice_*,duringchoice_*}`
+  (+ contrasts)
+- `choice_block_{l,r}`; `choice_duringfback`; `choice_duringstim` (+ `_l`/`_r`);
+  `choice_duringstim_{l,r}_block_{l,r}` (**no `_act`** — those 8 are covered);
+  `choice_intertrial`; `choice_stim_{l,r}` (+ `_block_{l,r}`, **no `_act`**)
+- `concordant_duringchoice`
+- `stim_{0,0.0625,0.125,0.25,1.0}`; `stim_block_{l,r}` (+ `_act`);
+  `stim_choice_{l,r}` (+ `_block_{l,r}` / `_act` / `_short` / `_short_act`);
+  `stim_duringchoice` (+ `_l`/`_r` / `_block_{l,r}` / `_act`);
+  `stim_duringfback`; `stim_intertrial`
+
+Alyx also has post-min5 files **not** on openalyx (e.g. `act_block_duringstim_{l,r}`,
+contrast `act_block_*_0.*`, bayes variants, `block_duringstim_choice_*_0.0`) —
+those are new/alyx-only, not openalyx gaps.
 
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 

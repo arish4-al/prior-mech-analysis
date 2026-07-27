@@ -70,6 +70,43 @@ def _default_meta() -> Path:
     return Path.home() / 'Downloads/ONE/alyx.internationalbrainlab.org/meta'
 
 
+def _combine_split_curve_stacks(
+    stacks: list[np.ndarray],
+    rng_seed: int = 0,
+    n_mc_null: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sum obs across splits; combine nulls (aligned or product-MC if ragged).
+
+    ``stacks``: list of (1+U_s, T) arrays. Returns ``(obs_sum, nulls)`` with
+    ``nulls`` shape (n_null, T).
+
+    When unique-null counts differ across splits, each pooled null is one draw
+    from the product of per-split unique sets (uniform over each split's
+    unique curves). ``n_mc_null`` defaults to ``max(min(U_s), 2000)`` so
+    p-value resolution is not capped by the scarcest split's unique count.
+    """
+    stacks = [np.asarray(s, dtype=float) for s in stacks]
+    obs = np.sum([s[0] for s in stacks], axis=0)
+    null_counts = [max(s.shape[0] - 1, 0) for s in stacks]
+    if any(c < 1 for c in null_counts):
+        raise ValueError('each split needs ≥1 null curve to combine')
+    lengths = [s.shape[0] for s in stacks]
+    if len(set(lengths)) == 1:
+        nulls = np.sum([s[1:] for s in stacks], axis=0)
+        return obs, nulls
+    n_mc = int(n_mc_null) if n_mc_null is not None else max(min(null_counts), 2000)
+    n_mc = max(n_mc, 1)
+    T = obs.shape[0]
+    rng = np.random.default_rng(rng_seed)
+    nulls = np.zeros((n_mc, T), dtype=float)
+    for k in range(n_mc):
+        acc = np.zeros(T, dtype=float)
+        for s, n_u in zip(stacks, null_counts):
+            acc += s[1 + int(rng.integers(0, n_u))]
+        nulls[k] = acc
+    return obs, nulls
+
+
 def combine_four_splits(
     pth_res: Path,
     splits: list[str],
@@ -82,6 +119,9 @@ def combine_four_splits(
     (e.g. ``_pseudosession`` → ``choice_stim_l_block_l_act_pseudosession_regde.npy``).
     Combined output names also include the suffix so they do not overwrite
     label-shuffle combines.
+
+    Handles ragged unique-null counts across splits (Harris unique): product-MC
+    over each split's null set with ``n_mc = min(U)``.
     """
     disk_splits = [f'{s}{split_suffix}' for s in splits]
     combined_name = _combined_name(disk_splits)
@@ -92,25 +132,25 @@ def combine_four_splits(
         d = np.load(out_npy, allow_pickle=True).item()
         return combined_name, d
 
-    combined_regde: dict = {}
+    # reg -> list of per-split (1+U, T) stacks
+    per_reg_stacks: dict[str, list[np.ndarray]] = {}
     for split in disk_splits:
         path = pth_res / f'{split}_regde.npy'
         if not path.exists():
             raise FileNotFoundError(path)
         split_regde = np.load(path, allow_pickle=True).item()
         for reg, curves in split_regde.items():
-            curves = np.asarray(curves)
-            if reg not in combined_regde:
-                combined_regde[reg] = [curves[0].copy(), np.array(curves[1:])]
-            else:
-                combined_regde[reg][0] += curves[0]
-                combined_regde[reg][1] += np.array(curves[1:])
+            per_reg_stacks.setdefault(reg, []).append(np.asarray(curves))
 
+    combined_regde: dict = {}
     r = {}
-    for reg, (sum_real, controls) in combined_regde.items():
-        controls = np.asarray(controls)
-        # Drop exact-duplicate null curves (Harris unique-null / accidental
-        # repeats). Observed row is never deduped.
+    for reg, stacks in per_reg_stacks.items():
+        import hashlib
+        seed = int(hashlib.md5(
+            f'{reg}|{split_suffix}|{"|".join(disk_splits)}'.encode()
+        ).hexdigest()[:8], 16)
+        sum_real, controls = _combine_split_curve_stacks(stacks, rng_seed=seed)
+        # Drop exact-duplicate null curves after combine
         if controls.size and controls.ndim == 2 and len(controls) > 1:
             uniq_rows = []
             seen = set()
@@ -121,7 +161,7 @@ def combine_four_splits(
                 seen.add(key)
                 uniq_rows.append(row)
             controls = np.asarray(uniq_rows)
-            combined_regde[reg] = [sum_real, controls]
+        combined_regde[reg] = [sum_real, controls]
         amp_real = float(np.max(sum_real) - np.min(sum_real))
         amp_controls = [float(np.max(c) - np.min(c)) for c in controls]
         p_euc = float(np.mean(np.asarray(amp_controls) >= amp_real))
