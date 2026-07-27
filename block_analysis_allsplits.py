@@ -306,9 +306,19 @@ def is_choice_lr_split(split):
     return split.startswith(('choice_stim', 'choice_duringstim'))
 
 
+def is_act_block_prior_split(split):
+    '''Prior L vs R under action-kernel prior: ``act_block_*`` (any window/contrast).'''
+    return (split or '').startswith('act_block')
+
+
+def is_harris_eligible_split(split):
+    '''Splits that support ``--session-shuffle-null`` (Harris unique-null).'''
+    return is_choice_lr_split(split) or is_act_block_prior_split(split)
+
+
 # Back-compat alias (eligibility only; session-shuffle is opt-in via flag).
 def uses_session_shuffle_null(split):
-    return is_choice_lr_split(split)
+    return is_harris_eligible_split(split)
 
 
 for _s, _ev in CHOICESTIM_ALIGN.items():
@@ -668,9 +678,12 @@ def _choice_lr_stratum_targets(split):
 
 
 def _split_uses_act_prior(split):
-    '''True for ``*_act`` / ``*_act_*`` choice splits (not substring of duringstim).'''
-    s = split or ''
-    return s.endswith('_act') or '_act_' in s
+    '''True when analysis prior is action-kernel binary (0.8/0.2).
+
+    Matches historical ``'act' in split`` (covers ``act_block_*`` and ``*_act``).
+    Does **not** match bare ``duringstim`` / ``block_*`` / ``bayes_*``.
+    '''
+    return 'act' in (split or '')
 
 
 def _split_uses_bayes_prior(split):
@@ -744,6 +757,173 @@ def _ys_from_stratum_choices(choice, stratum_mask, n_elig, rng):
         start = int(rng.integers(0, len(idx) - n_elig + 1))
         idx = idx[start:start + n_elig]
     return choice[idx] == 1
+
+
+def _ys_from_stratum_labels(label_bool, stratum_mask, n_elig, rng):
+    '''Length-``n_elig`` boolean labels from a stratum (contiguous window).'''
+    if rng is None:
+        rng = np.random.default_rng()
+    labels = np.asarray(label_bool, dtype=bool).reshape(-1)
+    idx = np.flatnonzero(np.asarray(stratum_mask, dtype=bool))
+    if len(idx) < n_elig:
+        return None
+    if len(idx) > n_elig:
+        start = int(rng.integers(0, len(idx) - n_elig + 1))
+        idx = idx[start:start + n_elig]
+    return labels[idx]
+
+
+def _feedback_from_choice_stim(choice, stim_is_left):
+    '''Derive feedbackType (±1) from choice and stim side (correct=1).'''
+    choice = np.asarray(choice, dtype=float).reshape(-1)
+    stim_is_left = np.asarray(stim_is_left, dtype=bool).reshape(-1)
+    correct = ((choice == 1) & stim_is_left) | ((choice == -1) & ~stim_is_left)
+    return np.where(correct, 1.0, -1.0)
+
+
+def _act_block_conditioning_spec(split):
+    '''Conditioning for act_block prior L–R (labels = prior; not in mask).
+
+    Stratum is **stim × choice** (± contrast). Feedback is **not** a separate
+    factor: for these splits, stim×choice already selects f1 vs f2
+    (e.g. stim_l + choice_l ⇒ correct; stim_l + choice_r ⇒ incorrect).
+
+    Returns dict: stim_is_left (bool|None), choice (±1|None), contrast (float|None).
+    '''
+    contrast = contrast_from_split(split)
+    name = split
+    if contrast is not None:
+        name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', split)
+    if name == 'act_block_only':
+        return {
+            'stim_is_left': None, 'choice': None, 'contrast': contrast,
+        }
+
+    stim_is_left = None
+    if 'duringstim_l' in name or re.search(r'(?:^|_)stim_l(?:_|$)', name):
+        stim_is_left = True
+    elif 'duringstim_r' in name or re.search(r'(?:^|_)stim_r(?:_|$)', name):
+        stim_is_left = False
+
+    choice = None
+    if 'choice_l' in name:
+        choice = 1.0
+    elif 'choice_r' in name:
+        choice = -1.0
+
+    return {
+        'stim_is_left': stim_is_left,
+        'choice': choice,
+        'contrast': contrast,
+    }
+
+
+def _block_conditioning_mask(
+        spec, stim_is_left, choice, contrast_left=None, contrast_right=None,
+        feedback=None):
+    '''Boolean mask for act_block conditioning (stim × choice ± contrast).
+
+    ``feedback`` is ignored (kept for call-site compat); stim×choice implies
+    the f1/f2 category used in split names.
+    '''
+    del feedback  # redundant with stim × choice for these splits
+    choice = np.asarray(choice, dtype=float).reshape(-1)
+    stim_is_left = np.asarray(stim_is_left, dtype=bool).reshape(-1)
+    n = len(choice)
+    if len(stim_is_left) != n:
+        return None
+    mask = np.ones(n, dtype=bool)
+    if spec.get('stim_is_left') is True:
+        mask &= stim_is_left
+    elif spec.get('stim_is_left') is False:
+        mask &= ~stim_is_left
+    if spec.get('choice') is not None:
+        mask &= np.isclose(choice, float(spec['choice']))
+    cval = spec.get('contrast')
+    if cval is not None:
+        if contrast_left is None or contrast_right is None:
+            return None
+        cl = np.asarray(contrast_left, dtype=float).reshape(-1)
+        cr = np.asarray(contrast_right, dtype=float).reshape(-1)
+        if not (len(cl) == len(cr) == n):
+            return None
+        if spec.get('stim_is_left') is True:
+            mask &= np.isclose(cl, float(cval))
+        elif spec.get('stim_is_left') is False:
+            mask &= np.isclose(cr, float(cval))
+        else:
+            cmag = np.nanmax(np.c_[cl, cr], axis=1)
+            mask &= np.isclose(cmag, float(cval))
+    elif spec.get('stim_is_left') is True and contrast_left is not None:
+        cl = np.asarray(contrast_left, dtype=float).reshape(-1)
+        if len(cl) == n:
+            mask &= ~np.isnan(cl)
+    elif spec.get('stim_is_left') is False and contrast_right is not None:
+        cr = np.asarray(contrast_right, dtype=float).reshape(-1)
+        if len(cr) == n:
+            mask &= ~np.isnan(cr)
+    return mask
+
+
+def _donor_block_prior_labels(rec, split):
+    '''Session-length boolean prior-L labels for an act_block Harris donor.
+
+    Matches recipient ``get_d_vars``: drop true 0.5 blocks, then compute
+    act / bayes / true prior on the remaining trial sequence.
+    Returns ``(labels_bool, keep_mask)`` on the **full** donor length, or
+    ``(None, None)`` if unusable. ``keep_mask`` is True on non-0.5 trials.
+    '''
+    rec = _normalize_donor_rec(rec)
+    if rec.get('_legacy'):
+        return None, None
+    ch = np.asarray(rec['choice'], dtype=float).reshape(-1)
+    pleft = np.asarray(rec['pleft_true'], dtype=float).reshape(-1)
+    stim = np.asarray(rec['stim_is_left'], dtype=bool).reshape(-1)
+    if not (len(ch) == len(pleft) == len(stim)):
+        return None, None
+    keep = ~np.isclose(pleft, 0.5)
+    if int(keep.sum()) < 2 * min_trials_per_side:
+        return None, None
+    ch_k = ch[keep]
+    stim_k = stim[keep]
+    if _split_uses_act_prior(split):
+        _, pbin = action_kernel_priors(alpha, list(ch_k))
+        lab_k = np.asarray(pbin, dtype=float) == 0.8
+    elif _split_uses_bayes_prior(split):
+        _, pbin = bayesian_priors(stim_k)
+        lab_k = np.asarray(pbin, dtype=float) == 0.8
+    else:
+        lab_k = np.isclose(pleft[keep], 0.8)
+    labels = np.zeros(len(ch), dtype=bool)
+    labels[keep] = lab_k
+    return labels, keep
+
+
+def _donor_block_conditioning_mask(rec, split, keep=None):
+    '''Conditioning mask on a donor for act_block Harris (None if unusable).
+
+    Always restricted to non-0.5 true-block trials (same as recipient). For
+    ``act_block_only`` that is the full biased-block session (no stim/choice
+    stratum). For choice×stim splits, further intersect stim × choice (±c).
+    '''
+    rec = _normalize_donor_rec(rec)
+    if rec.get('_legacy'):
+        return None
+    if keep is None:
+        _labels, keep = _donor_block_prior_labels(rec, split)
+        if keep is None:
+            return None
+    spec = _act_block_conditioning_spec(split)
+    cond = _block_conditioning_mask(
+        spec,
+        stim_is_left=rec['stim_is_left'],
+        choice=rec['choice'],
+        contrast_left=rec.get('contrast_left'),
+        contrast_right=rec.get('contrast_right'),
+    )
+    if cond is None:
+        return None
+    return np.asarray(cond, dtype=bool) & np.asarray(keep, dtype=bool)
 
 
 def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
@@ -1072,7 +1252,8 @@ def _choice_donors_path():
 
 def _normalize_donor_rec(rec):
     '''
-    Donor bank entry → dict with choice, stim_is_left, pleft_true.
+    Donor bank entry → dict with choice, stim_is_left, pleft_true
+    (+ optional contrast_left / contrast_right for contrast-conditioned Harris).
 
     Backward compatible with legacy ``{eid: choice_array}`` and incomplete
     dicts (missing stim/pleft → marked ``_legacy``, unusable for re-strat).
@@ -1095,11 +1276,18 @@ def _normalize_donor_rec(rec):
                 'pleft_true': np.full(len(ch), np.nan),
                 '_legacy': True,
             }
-        return {
+        out = {
             'choice': ch,
             'stim_is_left': stim,
             'pleft_true': pleft,
         }
+        if 'contrast_left' in rec and 'contrast_right' in rec:
+            cl = np.asarray(rec['contrast_left'], dtype=float)
+            cr = np.asarray(rec['contrast_right'], dtype=float)
+            if len(cl) == len(ch) and len(cr) == len(ch):
+                out['contrast_left'] = cl
+                out['contrast_right'] = cr
+        return out
     ch = np.asarray(rec, dtype=float)
     return {
         'choice': ch,
@@ -1114,9 +1302,9 @@ def build_choice_donor_bank(restart=True):
     Scan manifold/insertion_cache for unique-eid trial metadata.
 
     Saved to manifold/choice_donors.npy as
-    ``{eid: {choice, stim_is_left, pleft_true}}``. Harris nulls re-filter each
-    donor to the same stim×prior stratum as the recipient split, then
-    length-match choices to ``n_elig`` (same as ``pseudo_strat``).
+    ``{eid: {choice, stim_is_left, pleft_true, contrast_left, contrast_right}}``.
+    Choice Harris re-filters to stim×prior; act_block Harris re-filters to
+    stim×choice×feedback (±contrast) and transplants prior labels.
     '''
     path = _choice_donors_path()
     if restart and path.exists():
@@ -1158,13 +1346,20 @@ def build_choice_donor_bank(restart=True):
         pleft = np.asarray(
             pleft.to_numpy() if hasattr(pleft, 'to_numpy') else pleft,
             dtype=float)
-        if not (len(choice) == len(stim_is_left) == len(pleft)):
+        cl = tdf['contrastLeft']
+        cl = np.asarray(
+            cl.to_numpy() if hasattr(cl, 'to_numpy') else cl, dtype=float)
+        cr = np.asarray(cr, dtype=float)
+        if not (len(choice) == len(stim_is_left) == len(pleft)
+                == len(cl) == len(cr)):
             print(f'WARNING: skip {eid}: length mismatch in donor fields')
             continue
         bank[eid] = {
             'choice': choice,
             'stim_is_left': stim_is_left,
             'pleft_true': pleft,
+            'contrast_left': cl,
+            'contrast_right': cr,
         }
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1411,6 +1606,273 @@ def _compute_control_D_harris(
         'harris_n_stratum_donors': len(candidates),
         'harris_n_unique_nulls': int(n_done),
     }
+
+
+def _harris_block_donor_candidates(n_elig, donor_bank, eid, split):
+    '''Donors with ≥ ``n_elig`` trials in the act_block conditioning stratum.'''
+    eid = str(eid)
+    n_elig = int(n_elig)
+    candidates = []
+    n_legacy = 0
+    n_short = 0
+    n_no_labels = 0
+    for e, rec in (donor_bank or {}).items():
+        if str(e) == eid:
+            continue
+        labels, keep = _donor_block_prior_labels(rec, split)
+        if labels is None or keep is None:
+            n_legacy += 1
+            continue
+        mask = _donor_block_conditioning_mask(rec, split, keep=keep)
+        if mask is None:
+            n_legacy += 1
+            continue
+        if len(labels) != len(mask):
+            n_no_labels += 1
+            continue
+        if int(np.asarray(mask).sum()) < n_elig:
+            n_short += 1
+            continue
+        candidates.append((np.asarray(labels, dtype=bool), np.asarray(mask, dtype=bool)))
+    return candidates, {
+        'n_legacy': n_legacy, 'n_short': n_short, 'n_no_labels': n_no_labels,
+    }
+
+
+def _sample_harris_block_ys(n_elig, donor_bank, eid, split, max_tries=HARRIS_MAX_TRIES,
+                            rng=None, candidates=None):
+    '''Harris null for act_block: donor prior labels in conditioning stratum.'''
+    if rng is None:
+        rng = np.random.default_rng()
+    elif isinstance(rng, np.random.RandomState):
+        rng = np.random.default_rng(rng.randint(0, 2**31 - 1))
+    n_elig = int(n_elig)
+    if candidates is None:
+        candidates, _stats = _harris_block_donor_candidates(
+            n_elig, donor_bank, eid, split)
+    if not candidates:
+        return None
+
+    def _ok(ys):
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    for _ in range(max_tries):
+        labels, mask = candidates[int(rng.integers(0, len(candidates)))]
+        ys = _ys_from_stratum_labels(labels, mask, n_elig, rng)
+        if _ok(ys):
+            return ys
+    return None
+
+
+def _compute_control_D_harris_block(
+        b, acs, acs1, labels_true, half1, half2, ntr, nrand, split,
+        donor_bank, eid, elig_idx, null_batch_size=NULL_BATCH_SIZE):
+    '''
+    Harris unique-null for act_block prior L vs R.
+
+    Recipient conditioning (stim × choice ± contrast) defines ``elig_idx`` /
+    neural ``b`` (f1/f2 in the split name is implied by stim×choice). Observed
+    labels = prior-L on those trials (act / bayes / true per split name).
+    Each null transplants another eid's **prior** labels from the same
+    conditioning stratum.
+    '''
+    del null_batch_size
+    labels_true = np.asarray(labels_true, dtype=bool)
+    ys_true = labels_true
+    m0_true = b[ys_true].mean(axis=0)
+    m1_true = b[~ys_true].mean(axis=0)
+    v0_true = b[ys_true].var(axis=0)
+    v1_true = b[~ys_true].var(axis=0)
+
+    regs = list(Counter(acs).keys())
+    reg_masks = {reg: (acs == reg) for reg in regs}
+    D = {
+        reg: {
+            'nclus': int(np.sum(acs1 == reg)),
+            'd_vars': [],
+            'd_eucs': [],
+            'd_xnobis': [],
+        }
+        for reg in regs
+    }
+    label_perms = [ys_true]
+    seen = {_harris_label_key(ys_true)}
+
+    def _append_perm(m0, m1, v0, v1, ys):
+        for reg in regs:
+            dv, de, dxn = _region_perm_metrics(
+                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
+            D[reg]['d_vars'].append(dv)
+            D[reg]['d_eucs'].append(de)
+            D[reg]['d_xnobis'].append(dxn)
+
+    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
+
+    eid = str(eid)
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    n_elig = len(elig_idx)
+    candidates, stats = _harris_block_donor_candidates(
+        n_elig, donor_bank, eid, split)
+    print(f'harris-block-null [{split}]: {len(candidates)} donors with '
+          f'cond≥{n_elig} (elig={n_elig}; short={stats["n_short"]}, '
+          f'legacy={stats["n_legacy"]}, no_labels={stats["n_no_labels"]})')
+    if not candidates:
+        raise InsufficientTrials(
+            f'harris-block-null [{split}]: no donor with ≥{n_elig} '
+            f'conditioning trials; skipping insertion')
+
+    def _ok(ys):
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    rng = np.random.default_rng()
+    n_done = 0
+    n_tries = 0
+    n_stale = 0
+    max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
+    stale_limit = max(HARRIS_UNIQUE_STALE_LIMIT, nrand)
+    while n_done < nrand and n_stale < stale_limit:
+        ys = _sample_harris_block_ys(
+            n_elig, donor_bank, eid, split, rng=rng, candidates=candidates,
+            max_tries=1)
+        n_tries += 1
+        if not _ok(ys):
+            n_stale += 1
+            if n_done == 0 and n_tries >= max_tries_total:
+                raise InsufficientTrials(
+                    f'harris-block-null [{split}]: 0 balanced unique donor '
+                    f'draws after {n_tries} tries '
+                    f'({len(candidates)} cond-matched donors); '
+                    f'skipping insertion')
+            continue
+        key = _harris_label_key(ys)
+        if key in seen:
+            n_stale += 1
+            continue
+        seen.add(key)
+        n_stale = 0
+        label_perms.append(ys)
+        _append_perm(
+            b[ys].mean(axis=0), b[~ys].mean(axis=0),
+            b[ys].var(axis=0), b[~ys].var(axis=0),
+            ys,
+        )
+        n_done += 1
+
+    if n_done == 0:
+        raise InsufficientTrials(
+            f'harris-block-null [{split}]: no balanced unique donor draws '
+            f'({len(candidates)} cond-matched donors); skipping insertion')
+    if n_done < nrand:
+        print(f'harris-block-null [{split}]: unique pool saturated at '
+              f'{n_done}/{nrand} (stale={n_stale}, tries={n_tries}, '
+              f'donors={len(candidates)}); using unique null set only')
+
+    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
+    d_euc = (m0_true - m1_true) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': np.array([m0_true, m1_true])[:ntravis],
+        'uperms': len(label_perms),
+        'D': D,
+        'null_scheme': 'harris_session_permutation_unique',
+        'harris_n_stratum_donors': len(candidates),
+        'harris_n_unique_nulls': int(n_done),
+    }
+
+
+def _get_d_vars_block_harris(
+        split, trials, spikes, clusters, mapping, control, nrand,
+        null_batch_size, donor_bank, eid):
+    '''Prior L vs R (act_block_*) with Harris unique-null on conditioning stratum.'''
+    alignment = align[split]
+    spec = _act_block_conditioning_spec(split)
+
+    # Drop true 0.5 already done in get_d_vars for block splits.
+    choice = trials['choice'].to_numpy() if hasattr(trials['choice'], 'to_numpy') \
+        else np.asarray(trials['choice'], dtype=float)
+    cr = trials['contrastRight']
+    cr = cr.to_numpy() if hasattr(cr, 'to_numpy') else np.asarray(cr)
+    cl = trials['contrastLeft']
+    cl = cl.to_numpy() if hasattr(cl, 'to_numpy') else np.asarray(cl)
+    stim_is_left = np.isnan(cr.astype(float))
+
+    mask = _block_conditioning_mask(
+        spec, stim_is_left=stim_is_left, choice=choice,
+        contrast_left=cl.astype(float), contrast_right=cr.astype(float),
+    )
+    if mask is None or not np.any(mask):
+        raise InsufficientTrials(
+            f'no eligible trials for harris-block null [{split}]')
+
+    elig_idx = np.flatnonzero(mask)
+    pleft = trials['probabilityLeft']
+    pleft = (pleft.to_numpy() if hasattr(pleft, 'to_numpy')
+             else np.asarray(pleft, dtype=float))
+    # probabilityLeft already act/bayes/true from get_d_vars overwrite
+    labels_true = np.isclose(pleft[elig_idx], 0.8)
+    n_left = int(labels_true.sum())
+    n_right = int((~labels_true).sum())
+    print('#trials per condition: ', n_left, n_right,
+          f'(eligible={len(elig_idx)}, harris-block conditioning null)')
+    if n_left < min_trials_per_side or n_right < min_trials_per_side:
+        raise InsufficientTrials(
+            f'need ≥{min_trials_per_side} trials/side, got {n_left}, {n_right}')
+
+    events_all = trials[alignment].to_numpy()[elig_idx]
+    assert len(spikes['times']) == len(spikes['clusters']), 'spikes != clusters'
+    b = _bin_spike_events(spikes, clusters, events_all, split)
+    half1 = (np.arange(b.shape[0]) % 2 == 0)
+    half2 = ~half1
+    ntr, nclus, nbins = b.shape
+
+    acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
+    wsc = np.concatenate(b, axis=1)
+    goodcells_count = [
+        k for k in range(wsc.shape[0])
+        if (not np.isnan(wsc[k]).any() and wsc[k].any())
+    ]
+    acs1 = acs[goodcells_count]
+    goodcells = ~np.bitwise_or.reduce([acs == reg for reg in ['void', 'root']])
+    goodcells1 = ~np.bitwise_or.reduce([acs1 == reg for reg in ['void', 'root']])
+    acs = acs[goodcells]
+    acs1 = acs1[goodcells1]
+    b = b[:, goodcells, :]
+
+    if control:
+        if not donor_bank:
+            raise InsufficientTrials(
+                f'harris-block-null [{split}]: empty donor_bank; '
+                f'skipping insertion')
+        return _compute_control_D_harris_block(
+            b, acs, acs1, labels_true, half1, half2, ntr, nrand, split,
+            donor_bank=donor_bank, eid=eid, elig_idx=elig_idx,
+            null_batch_size=null_batch_size,
+        )
+
+    print('all trials')
+    ys = labels_true
+    bins = [b[ys], b[~ys]]
+    w0 = [bi.mean(axis=0) for bi in bins]
+    s0 = [bi.var(axis=0) for bi in bins]
+    ws = np.array(w0)
+    ss = np.array(s0)
+    d_var = (((ws[0] - ws[1]) / ((ss[0] + ss[1]) ** 0.5)) ** 2)
+    d_euc = (ws[0] - ws[1]) ** 2
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': ws[:ntravis],
+    }
+
 
 def _compute_control_D_actkernel_choice(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
@@ -2013,10 +2475,14 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     On low accept rate the control loop doubles up to
     ``ACTKERNEL_PSEUDO_LEN_FACTOR_MAX``. Outputs always ``_pseudo_strat``.
 
-    ``session_shuffle_null``: if True and split is choice_stim* / choice_duringstim*,
-    use Harris session-permutation nulls: recipient stim×prior defines
-    ``elig_idx`` / neural ``b``; null labels are another eid's choices from the
-    **same** stim×prior stratum (donor re-filtered; requires ``donor_bank``).
+    ``session_shuffle_null``: if True and split is choice_stim* /
+    choice_duringstim* **or** ``act_block_*``, use Harris unique-null session
+    permutation (requires ``donor_bank``):
+      - choice L–R: recipient stim×prior defines ``elig_idx``; null labels are
+        another eid's choices from the same stim×prior stratum
+      - act_block prior L–R: recipient stim×choice×feedback (±contrast)
+        defines ``elig_idx``; null labels are another eid's **prior** labels
+        from the same conditioning stratum
     Default False → label shuffle.
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
@@ -2084,7 +2550,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         if len(trials) == 0:
             raise InsufficientTrials('no trials left after sticky exclusion')
 
-    # Structured nulls for choice L–R: actkernel / Harris session-permutation.
+    # Structured nulls: choice L–R (Harris / AK) or act_block prior L–R (Harris).
     ak_on = _resolve_actkernel_null_mode(
         actkernel_choice_null, actkernel_null_mode) is not None
     if ((ak_on or session_shuffle_null)
@@ -2095,6 +2561,17 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             actkernel_choice_null=bool(actkernel_choice_null),
             actkernel_null_mode=actkernel_null_mode,
             actkernel_pseudo_len_factor=actkernel_pseudo_len_factor)
+        if excl_info is not None and isinstance(D, dict):
+            D = dict(D)
+            D['trial_exclusion'] = excl_info
+        return D
+    if session_shuffle_null and is_act_block_prior_split(split):
+        if ak_on:
+            print(f'WARNING: actkernel null ignored for act_block split {split}; '
+                  f'using Harris unique-null')
+        D = _get_d_vars_block_harris(
+            split, trials, spikes, clusters, mapping, control, nrand,
+            null_batch_size, donor_bank, eid)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
@@ -3122,9 +3599,10 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     (``scripts/simulate_synthetic_choices.synthetic_sessions_from_trials``).
     Takes precedence over session_shuffle_null.
 
-    ``session_shuffle_null``: if True, choice_stim* / choice_duringstim* use
-    Harris session-permutation nulls (loads donor bank; donor choices
-    re-filtered to the same stim×prior stratum as the recipient split).
+    ``session_shuffle_null``: if True, choice_stim* / choice_duringstim* **or**
+    ``act_block_*`` use Harris unique-null session-permutation (loads donor
+    bank). Choice: donor choices in stim×prior stratum. Act_block: donor
+    **prior** labels in stim×choice×feedback (±contrast) stratum.
     Default False.
 
     ``exclude_sticky_trials``: drop late-session + perseveration trials before
@@ -3170,13 +3648,13 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     donor_bank = None
     use_donor = (session_shuffle_null
                  and ak_mode is None
-                 and any(is_choice_lr_split(sp) for sp in splits_list))
+                 and any(is_harris_eligible_split(sp) for sp in splits_list))
     if use_donor:
         donor_bank = load_choice_donor_bank()
         print(f'harris donor bank: {len(donor_bank)} eids')
     elif session_shuffle_null and ak_mode is None:
         print('WARNING: --session-shuffle-null set but no choice_stim*/'
-              'choice_duringstim* splits in list')
+              'choice_duringstim*/act_block* splits in list')
     elif ak_mode is not None and any(
             is_choice_lr_split(sp) for sp in splits_list):
         print(f'actkernel null mode={ak_mode} enabled for choice L–R splits'

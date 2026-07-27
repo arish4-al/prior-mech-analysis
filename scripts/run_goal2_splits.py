@@ -158,6 +158,16 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    # Act_block prior L–R (Harris unique-null via --session-shuffle-null)
+    # Default set: 4 duringstim choice×f + 4 duringchoice + act_block_only
+    # (no unconditioned duringstim_l/r; those stay in stimOn_times_act only).
+    'act_block_duringstim': list(RUN_ALIGN['stimOn_times']),
+    'act_block_duringchoice': list(RUN_ALIGN['firstMovement_times']),
+    'act_block_harris_all': (
+        list(RUN_ALIGN['stimOn_times'])
+        + list(RUN_ALIGN['firstMovement_times'])
+        + ['act_block_only']
+    ),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)
     'choice_lr_excl_sticky_act': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
@@ -221,11 +231,11 @@ def main():
                         '(full-session choice sequences for Harris nulls)')
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
                    help='Harris unique-null session-permutation for '
-                        'choice_stim*/choice_duringstim*: recipient stim×prior '
-                        'defines elig_idx; donor choices re-filtered to the same '
-                        'stratum; only distinct label patterns kept '
-                        '(writes {split}_harris_unique*.npy; does not overwrite '
-                        'legacy {split}_harris*.npy)')
+                        'choice_stim*/choice_duringstim* (choice labels in '
+                        'stim×prior stratum) or act_block_* (prior labels in '
+                        'stim×choice×feedback stratum). Writes '
+                        '{split}_harris_unique*.npy; does not overwrite '
+                        'legacy {split}_harris*.npy')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,
                    help='Enable ActionKernel synthetic-choice nulls for '
                         'choice_stim*/choice_duringstim* (default mode: strat). '
