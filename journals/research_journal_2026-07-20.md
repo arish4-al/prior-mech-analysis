@@ -129,13 +129,8 @@ ORCD port. Submitter: `scripts/submit_goal2_choice_actkernel_null_sharded.sh`
 **Next:** compare null width / p-values vs `--session-shuffle-null` (Harris) and
 label shuffle; first eid MCMC is slow (later probes reuse the pickle).
 
-**To be resolved:** currently act-prior labels for analysis use a **fixed**
-`α=0.2` via `action_kernel_priors` on each session’s choice sequence (same α
-everywhere), then results are pooled into the supersession. Should we instead run
-`fit_action_kernel` **per session** (MCMC → session-specific `α`, and optionally
-the full `[α, ζ, lapse±]`), recompute that session’s continuous/binary act priors
-from the fitted kernel, and **only then** pool into the supersession for all
-act-conditioned analyses?
+**To be resolved:** fixed `α=0.2` vs per-session `fit_action_kernel` for act
+labels — moved to **Questions to be resolved** at end of this journal.
 
 ### 2026-07-23 — Choice L–R actkernel ORCD run: **invalid** (missing `sobol_seq`)
 
@@ -596,6 +591,96 @@ Alyx also has post-min5 files **not** on openalyx (e.g. `act_block_duringstim_{l
 contrast `act_block_*_0.*`, bayes variants, `block_duringstim_choice_*_0.0`) —
 those are new/alyx-only, not openalyx gaps.
 
+### 2026-07-27c — Rerun plain label-shuffle for 8 choice L–R act splits
+
+**Submit (ORCD):** `bash scripts/submit_goal2_choice_shuffle_sharded.sh`  
+→ `$ONE_CACHE_DIR/manifold/res/{split}.npy` (plain names; min5). See script header.
+
+### 2026-07-27d — SC regtype table with Harris unique choice
+
+Same path as [07-12 / 07-21b](research_journal_2026-07-12.md)
+(`plot_stimchoice_regtype_excl_sticky.py`): stim from openalyx; choice L–R from
+alyx `res/new` `*_harris_unique` combined fours.
+
+```bash
+python scripts/plot_stimchoice_regtype_excl_sticky.py --alpha 0.01 \
+  --choice-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --choice-suffix _harris_unique --tag harris_unique
+```
+
+Output: `alyx.../meta/table_stimchoice_act_regtype_harris_unique_p_mean_c_0.01.png`
+(+ `.csv`). Counts @α=0.01: duringchoice — integrator 42, move 16;
+duringstim — stim 7, early 25, integrator 14, move 14.
+
+### 2026-07-27e — Harris unique-null for act_block prior L–R
+
+**Scheme:** same `--session-shuffle-null` / `{split}_harris_unique` as choice L–R,
+but for ``act_block_*`` the transplanted labels are **priors**, not choices.
+Recipient conditioning = **stim × choice** (± contrast); f1/f2 in the name is
+implied by that pair (no separate feedback filter). Donor re-filtered to the
+same stratum; unique-null sampling.
+
+| | choice L–R Harris | act_block Harris |
+|--|--|--|
+| Distance | choice L vs R | prior L vs R |
+| Conditioning / `elig_idx` | stim × prior | stim × choice (±c) |
+| Null labels | donor choices | donor priors (act/bayes/true) |
+
+**Prior type (2026-07-27e audit / fix):** `_split_uses_act_prior` had been
+narrowed to `*_act` / `_act_` and **missed** `act_block_*`, so both recipient
+obs and donor nulls fell back to **true block**. Restored historical
+``'act' in split`` so `act_block_*` uses action-kernel binary on recipient and
+donors (same helper as choice `*_act` / AK strat). Bayes / true still via
+`bayes` in name / else.
+
+**Choice null schemes (Harris / AK strat / fixed):** for `*_act` splits, donor
+or pseudo stratum priors are recomputed via `_stratum_prior_for_stream` →
+`action_kernel_priors` on that stream’s choices — **correct**. Non-`act`
+choice splits use true `pleft`; `*bayes*` use Bayes.
+
+**Donor bank:** rebuild includes `contrast_left` / `contrast_right` (needed for
+Goal-3 contrast splits). Old banks still work for non-contrast act_block.
+
+**Presets** (`run_goal2_splits.py`):
+- `act_block_harris_all` — **9** splits: 4 duringstim choice×f + 4 duringchoice
+  + `act_block_only` (no stim/choice stratum). **Not** unconditioned
+  `act_block_duringstim_{l,r}`.
+- `act_block_duringstim` / `act_block_duringchoice`
+- also `goal3_duringstim_act` / `goal3_duringchoice_act` with `--session-shuffle-null`
+
+Disk names: `{split}_harris_unique.npy` — plain shuffle `{split}.npy` untouched.
+
+**ORCD submit:**
+
+```bash
+bash scripts/submit_goal2_act_block_harris_sharded.sh
+# PRESET=act_block_duringstim …   # subset
+# PRESET=goal3_duringstim_act …   # contrast-expanded
+```
+
+**Smoke:** `python scripts/smoke_act_block_harris_null.py`
+
+**Donor / recipient 0.5 parity (act_block Harris):** donors now drop true
+`probabilityLeft==0.5` **before** `action_kernel_priors` (same order as
+recipient `get_d_vars`), then intersect conditioning with that keep mask.
+`act_block_only` smoke: ITI `[0.4,−0.1]`, act prior, no stim/choice stratum,
+parity OK.
+
+**Note — drop-0.5 vs keep-0.5 for act labels (2026-07-27):** prior-distance
+`*block*` splits (incl. all `act_block_*`) drop true 0.5 **then** run act;
+choice L–R (`choice_*`, choicestim) **keep** 0.5 and run act on the full
+sequence. Same biased trials can therefore get different binary act sides
+across families. Quick check on 2 alyx sessions (biased trials only):
+
+| eid (short) | n_0.5 / biased | binary flips | cont. MAE |
+|-------------|----------------|-------------:|----------:|
+| `4364a246…` | 37 / 124 | 1/124 (0.8%) | 0.006 |
+| `56956777…` | 45 / 200 | 2/200 (1.0%) | 0.006 |
+
+Flips are early in the biased sequence (leftover influence of the initial
+unbiased block). Small effect — whether to unify (and rerun) is open; see
+**Questions to be resolved** below.
+
 ### 2026-07-20c — Goal 1: single-neuron variance partition (implemented)
 
 **Region list source:** openalyx `get_sc_table` → alyx CSV (does not overwrite openalyx
@@ -761,3 +846,27 @@ negligible leftover. stim×prior > unique stim in **8/19**; > unique choice in
 6. Caveats: means are descriptive (no neuron-level null yet); FN/LING/VeCB/VCO are thin on insertions; regtype 1.0 vs 0.5 does not cleanly separate modulation strength.
 
 **Next (optional):** insertion- or neuron-level null on `R²_stim×prior`; compare `--prior-type block`; plot region means ± SEM from stacked npy.
+
+---
+
+## Questions to be resolved
+
+1. **Fixed α vs per-session action-kernel fit for act labels.**  
+   Analysis currently uses a **fixed** `α=0.2` via `action_kernel_priors` on
+   each session’s choice sequence (same α everywhere), then pools into the
+   supersession. Should we instead run `fit_action_kernel` **per session**
+   (MCMC → session-specific `α`, and optionally the full `[α, ζ, lapse±]`),
+   recompute that session’s continuous/binary act priors from the fitted
+   kernel, and **only then** pool into the supersession for all
+   act-conditioned analyses?  
+   *(Raised 2026-07-23; choice actkernel null / AK path.)*
+
+2. **Unify drop-0.5 timing for act prior across split families?**  
+   Prior-distance `*block*` / `act_block_*` drop true `probabilityLeft==0.5`
+   before `action_kernel_priors`; choice L–R (`choice_*_act`) keep 0.5 and
+   compute act on the full sequence. On 2 sessions this flipped only ~1% of
+   biased trials’ binary act side (early sequence; cont. MAE ≈ 0.006) — small,
+   but a real definition mismatch for the “same” trials. Decide whether to
+   standardize one convention, and if so whether existing act-conditioned
+   results need a rerun.  
+   *(Raised 2026-07-27; see note under 2026-07-27e.)*

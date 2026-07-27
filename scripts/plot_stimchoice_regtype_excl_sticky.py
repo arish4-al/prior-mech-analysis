@@ -1,15 +1,26 @@
 #!/usr/bin/env python
 """
-Rebuild ``table_stimchoice_act_regtype_*`` using excl-sticky choice L–R
+Rebuild ``table_stimchoice_act_regtype_*`` with an alternate choice L–R arm
 (combined four-split) while keeping stim / short-stim from openalyx.
 
-Writes a **new** PNG (does not overwrite the openalyx/alyx originals):
+Does **not** overwrite the openalyx baseline PNG. Writes:
 
-  meta/table_stimchoice_act_regtype_excl_sticky_{ptype}_{alpha}.png
+  meta/table_stimchoice_act_regtype_{tag}_{ptype}_{alpha}.png
+
+Journal 2026-07-12 / 2026-07-21b (excl-sticky):
+
+  python scripts/plot_stimchoice_regtype_excl_sticky.py --alpha 0.01
+
+Harris unique-null (alyx res/new):
+
+  python scripts/plot_stimchoice_regtype_excl_sticky.py --alpha 0.01 \\
+    --choice-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \\
+    --choice-suffix _harris_unique --tag harris_unique
 
 Staging res mixes:
   openalyx manifold/res  — stim*, short, stim1, act_block_only.csv
-  alyx res_excl_sticky   — choice_duringstim_act + choice_duringchoice_act
+  --choice-res           — choice_duringstim_act + choice_duringchoice_act
+                           (combined_* names; optional --choice-suffix)
 """
 from __future__ import annotations
 
@@ -58,12 +69,27 @@ def _patch_one_local(openalyx_cache: Path):
     one_api.ONE = _local_one
 
 
-def _combined_stems(af, timeframe: str) -> list[str]:
-    splits = af.run_align[timeframe]
+def _disk_splits(af, timeframe: str, split_suffix: str = '') -> list[str]:
+    splits = list(af.run_align[timeframe])
+    if not split_suffix:
+        return splits
+    out = []
+    for s in splits:
+        out.append(s if str(s).endswith(split_suffix) else f'{s}{split_suffix}')
+    return out
+
+
+def _combined_stems(af, timeframe: str, split_suffix: str = '') -> list[str]:
+    splits = _disk_splits(af, timeframe, split_suffix)
     if len(splits) == 1:
         return [splits[0], f'{splits[0]}_regde']
     joined = '_'.join(splits)
     return [f'combined_{joined}', f'combined_regde_{joined}']
+
+
+def _plain_combined_stems(af, timeframe: str) -> list[str]:
+    """Staging / get_sc_table always use unsuffixed combined names."""
+    return _combined_stems(af, timeframe, split_suffix='')
 
 
 def _link_or_copy(src: Path, dst: Path, copy: bool = False):
@@ -78,9 +104,10 @@ def _link_or_copy(src: Path, dst: Path, copy: bool = False):
 
 def build_staging(
     openalyx_res: Path,
-    excl_res: Path,
+    choice_res: Path,
     staging: Path,
     af,
+    choice_suffix: str = '',
 ) -> None:
     if staging.exists():
         shutil.rmtree(staging)
@@ -101,15 +128,19 @@ def build_staging(
                 raise FileNotFoundError(f'missing openalyx {src}')
             _link_or_copy(src, staging / f'{stem}.npy')
 
-    # Choice from excl-sticky (copy so amp_slope writes stay local to staging)
+    # Choice from alternate arm → plain combined names in staging
     for tf in CHOICE_TIMES:
-        for stem in _combined_stems(af, tf):
-            src = excl_res / f'{stem}.npy'
+        src_stems = _combined_stems(af, tf, choice_suffix)
+        dst_stems = _plain_combined_stems(af, tf)
+        for src_stem, dst_stem in zip(src_stems, dst_stems):
+            src = choice_res / f'{src_stem}.npy'
             if not src.exists():
                 raise FileNotFoundError(
-                    f'missing excl {src} — run plot_choice_excl_sticky_comparison_table.py first'
+                    f'missing choice {src} — combine with '
+                    f'plot_choice_null_comparison_table.py '
+                    f'(suffix={choice_suffix!r}) first'
                 )
-            _link_or_copy(src, staging / f'{stem}.npy', copy=True)
+            _link_or_copy(src, staging / f'{dst_stem}.npy', copy=True)
 
 
 def main():
@@ -117,7 +148,16 @@ def main():
     ap.add_argument('--openalyx-cache-dir', type=Path, default=DEFAULT_OPENALYX)
     ap.add_argument('--alyx-cache-dir', type=Path, default=DEFAULT_ALYX)
     ap.add_argument('--excl-res', type=Path, default=None,
-                    help='Default: <alyx>/manifold/res_excl_sticky')
+                    help='Deprecated alias for --choice-res '
+                         '(default: <alyx>/manifold/res_excl_sticky)')
+    ap.add_argument('--choice-res', type=Path, default=None,
+                    help='Folder with combined choice_*_act*.npy '
+                         '(default: excl-sticky or --excl-res)')
+    ap.add_argument('--choice-suffix', default='',
+                    help='Disk suffix on choice splits, e.g. _harris_unique')
+    ap.add_argument('--tag', default=None,
+                    help='Output filename tag (default: excl_sticky, or '
+                         'suffix without leading _)')
     ap.add_argument('--ptype', default='p_mean_c')
     ap.add_argument('--alpha', type=float, default=0.01)
     ap.add_argument('--sc-threshold', type=float, default=0.0)
@@ -130,20 +170,25 @@ def main():
 
     openalyx = args.openalyx_cache_dir.expanduser().resolve()
     alyx = args.alyx_cache_dir.expanduser().resolve()
-    excl_res = (
-        args.excl_res.expanduser().resolve()
-        if args.excl_res
+    choice_res = args.choice_res or args.excl_res
+    choice_res = (
+        choice_res.expanduser().resolve()
+        if choice_res
         else alyx / 'manifold' / 'res_excl_sticky'
     )
+    choice_suffix = args.choice_suffix or ''
+    tag = args.tag
+    if tag is None:
+        tag = choice_suffix.lstrip('_') if choice_suffix else 'excl_sticky'
     openalyx_res = openalyx / 'manifold' / 'res'
-    staging = alyx / 'manifold' / 'res_sc_choice_excl_sticky'
+    staging = alyx / 'manifold' / f'res_sc_choice_{tag}'
     meta_out = alyx / 'meta'
     meta_out.mkdir(parents=True, exist_ok=True)
 
     _patch_one_local(openalyx)
     import analysis_functions as af  # noqa: E402
 
-    build_staging(openalyx_res, excl_res, staging, af)
+    build_staging(openalyx_res, choice_res, staging, af, choice_suffix)
 
     # Point AF at staging for loads; write PNG to alyx meta
     af.pth_res = staging
@@ -154,7 +199,7 @@ def main():
 
     p_base = args.ptype[:-2] if args.ptype.endswith('_c') else args.ptype
 
-    # Shape metrics for excl choice (needed for integrator / move_init)
+    # Shape metrics for choice arm (needed for integrator / move_init)
     for tf in CHOICE_TIMES:
         print(f'compute_amp_slope({tf}) …')
         af.compute_amp_slope(tf, n=args.n)
@@ -220,7 +265,7 @@ def main():
     df_to_plot = df_to_plot[cols]
     colormap_lookup = {col: af.get_cmap_(col) for col in df_to_plot.columns if col != 'region'}
 
-    out_name = f'table_stimchoice_act_regtype_excl_sticky_{args.ptype}_{args.alpha}.png'
+    out_name = f'table_stimchoice_act_regtype_{tag}_{args.ptype}_{args.alpha}.png'
     out_path = meta_out / out_name
     af.plot_table_with_styles(
         df=df_to_plot,
@@ -240,7 +285,8 @@ def main():
     print(f'Wrote {csv_path}')
     print('Columns L→R: region | sc_duringchoice_regtype | sc_duringstim_regtype'
           + (' | sc_stim_regtype' if not args.stim_restr else ''))
-    print('  (choice amps from excl-sticky; stim amps from openalyx)')
+    print(f'  (choice amps from {choice_res.name} suffix={choice_suffix!r}; '
+          f'stim amps from openalyx)')
 
 
 def np_load_combined(af, timeframe: str) -> dict:
