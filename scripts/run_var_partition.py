@@ -12,6 +12,10 @@ Remote / local fit (uses default ONE cache; override with ``--one-cache-dir``
 or ``$ONE_CACHE_DIR`` only if needed)::
 
   python scripts/run_var_partition.py --target mixed
+
+Neuron-level prior-shuffle null (ΔR²_stim×prior + unique prior)::
+
+  python scripts/run_var_partition.py --target mixed --nrand 200 --no-restart
 """
 from __future__ import annotations
 
@@ -148,6 +152,24 @@ def main():
     p.add_argument('--prior-type', choices=['act', 'block'], default='act',
                    help="Encoding prior: 'act' = action-kernel EMA (default); "
                         "'block' = true probabilityLeft")
+    p.add_argument(
+        '--nrand', type=int, default=0,
+        help='Neuron-level prior-shuffle nulls for ΔR²_stim×prior / unique '
+             'prior (0 = off, recommended ≥200 for production)',
+    )
+    p.add_argument(
+        '--null-mode', choices=['contrast', 'global'], default='contrast',
+        help="Prior shuffle: 'contrast' = within |stim| bins (default); "
+             "'global' = unrestricted within insertion",
+    )
+    p.add_argument(
+        '--null-seed', type=int, default=None,
+        help='RNG seed for prior shuffles (default: stable hash of pid)',
+    )
+    p.add_argument(
+        '--alpha-sig', type=float, default=0.05,
+        help='α for frac_sig_* in stacked summary (default: 0.05)',
+    )
     p.add_argument('--min-trials', type=int, default=30)
     p.add_argument('--min-neurons', type=int, default=5,
                    help='Min neurons per region for stacked summary')
@@ -206,7 +228,8 @@ def main():
             'Pull repo data/ or pass --regtype-csv.'
         )
     print(f'Regtype CSV: {regtype_csv}')
-    print(f'prior_type={args.prior_type}  window={args.window}')
+    print(f'prior_type={args.prior_type}  window={args.window}  '
+          f'nrand={args.nrand}  null_mode={args.null_mode}')
     regtypes = [float(x) for x in args.regtypes.split(',') if x.strip() != '']
 
     if args.stack_only:
@@ -214,6 +237,7 @@ def main():
             regtype_csv=regtype_csv if regtype_csv.exists() else None,
             regtypes=None if args.target == 'mixed' else regtypes,
             min_neurons=args.min_neurons,
+            alpha_sig=args.alpha_sig,
             mixed_only=(args.target == 'mixed'),
         )
         return
@@ -270,6 +294,9 @@ def main():
         use_cache=args.use_cache,
         min_trials=args.min_trials,
         prior_type=args.prior_type,
+        nrand=args.nrand,
+        null_mode=args.null_mode,
+        null_seed=args.null_seed,
     )
     if args.no_stack or (args.shard_idx is not None and n_shards > 1):
         print('Skipping stack (shard or --no-stack); run --stack-only to finalize')
@@ -278,6 +305,7 @@ def main():
         regtype_csv=regtype_csv if regtype_csv.exists() else None,
         regtypes=None if args.all_regions or args.target == 'mixed' else regtypes,
         min_neurons=args.min_neurons,
+        alpha_sig=args.alpha_sig,
         mixed_only=(args.target == 'mixed' and not args.all_regions),
     )
 
