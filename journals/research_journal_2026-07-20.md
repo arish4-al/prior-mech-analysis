@@ -843,9 +843,143 @@ negligible leftover. stim×prior > unique stim in **8/19**; > unique choice in
 3. **Midbrain motor (MRN, SCm)** and **PRNc**: clearer additive stim with mid-strength interaction (s×p/stim ~0.6–0.7).
 4. **PF** is the clear **stim-additive** exception (interaction tiny vs stim).
 5. **CP / VPL / CUL4 5**: balanced mixed without extreme gating.
-6. Caveats: means are descriptive (no neuron-level null yet); FN/LING/VeCB/VCO are thin on insertions; regtype 1.0 vs 0.5 does not cleanly separate modulation strength.
+6. Caveats: FN/LING/VeCB/VCO are thin on insertions; regtype 1.0 vs 0.5 does not cleanly separate modulation strength. Neuron-level null for `R²_stim×prior` landed 2026-07-28 (see below).
 
-**Next (optional):** insertion- or neuron-level null on `R²_stim×prior`; compare `--prior-type block`; plot region means ± SEM from stacked npy.
+**Next:** ORCD `NRAND=2000` prior-shuffle null — **done** (2026-07-28b). Optional: `--prior-type block`; insertion-level aggregation of p / frac_sig.
+
+---
+
+### 2026-07-28 — Goal 1: Swanson tables + neuron-level prior-shuffle null
+
+**Meta tables** (`scripts/plot_var_partition_table.py` → alyx `meta/`):
+
+| PNG | Columns (L→R) |
+|-----|----------------|
+| `table_var_partition_sxp_regtype.png` | region · `sxp_stim` (green) · regtype |
+| `table_var_partition_mixed.png` | region · regtype · unique prior (purple) · stim (blue) · choice (orange) · `sxp_stim` (green) |
+
+Only the 19 mixed regions colored; others gray. `sxp_stim` = \(R^2_{s\times\pi}/R^2_\mathrm{stim}\) clipped at `--sxp-vmax 2`; unique R² share `--r2-vmax 0.02`.
+
+**Neuron-level null** (primary readout `R²_stim×prior`, also unique prior):
+
+- Keep \(y\), stim, choice fixed; shuffle **prior** within insertion.
+- Default `--null-mode contrast`: shuffle within \(|\mathrm{stim}|\) bins.
+- Refit full vs additive each draw;  
+  \(p = (1 + \#\{\mathrm{null}\ge\mathrm{obs}\})/(1+n_{\mathrm{rand}})\).
+- Wired in `get_var_partition` / `get_all_var_partition` / `var_partition_stacked`
+  (`block_analysis_allsplits.py`); CLI `--nrand` / `--null-mode` /
+  `--alpha-sig` on `scripts/run_var_partition.py`.
+- Stacked CSV gains `p_*_mean`, `frac_sig_*` when nulls present.
+- `RESTART=1` now **re-runs** caches whose `nrand` / null mode is below the
+  request (no longer silently skips old `nrand=0` files).
+
+**Smoke:** one BMA insertion, `nrand=50`, 46 neurons → ~0.2 s; p in \([1/51,1]\).
+
+**Timing (`nrand=2000`, mixed 19 regions, cache present):**
+
+| | Estimate |
+|--|----------|
+| Local null compute | ~1.4 ms/null @ 46 neu → ~3 s/hit insertion |
+| BWM null lstsq | ~15–30 min total |
+| + ORCD I/O | dominates (~2–10 s × ~700 probes) |
+| 4 shards | ~20–45 min/shard typical; submitter uses `--time=3:00:00` when `NRAND≥1000` |
+
+```bash
+NRAND=2000 bash scripts/submit_var_partition_sharded.sh
+```
+
+**Port to `main`:**
+
+```
+block_analysis_allsplits.py
+scripts/run_var_partition.py
+scripts/run_var_partition_slurm.sh
+scripts/submit_var_partition_sharded.sh
+```
+
+### 2026-07-28b — Full BWM null stack (`res/new`)
+
+**Output:** `alyx.../manifold/res/new/var_partition_stacked.npy`  
+(same 19 mixed regions / 13 394 neurons; R² means **identical** to the
+descriptive 2026-07-20i stack). Null: contrast-stratified prior shuffle,
+`nrand=2000`, α=0.05 for `frac_sig_*`.
+
+**Global (neuron-weighted):**
+
+| | mean \(R^2\) | mean \(p\) | frac \(p<0.05\) |
+|--|-------------:|-----------:|----------------:|
+| stim×prior | 0.0035 | **0.45** | **0.114** |
+| unique prior | 0.0083 | 0.35 | **0.239** |
+
+So region-mean \(R^2_{s\times\pi}\) was real but small; under this null only
+~**11%** of mixed neurons individually clear α=0.05 for the interaction
+(~2× the 5% false-positive floor). Unique prior is clearer (~**24%** sig).
+Mean \(p\) near 0.45 for stim×prior ⇒ most cells are null-consistent.
+
+| region | n | frac_sig s×p | frac_sig prior | mean \(p\) s×p | s×p/stim |
+|--------|--:|-------------:|---------------:|---------------:|---------:|
+| SNr | 149 | **0.148** | 0.349 | 0.467 | 0.72 |
+| VeCB | 70 | 0.143 | 0.243 | 0.436 | 1.65 |
+| GRN | 560 | 0.143 | 0.279 | 0.430 | 1.02 |
+| SIM | 893 | 0.140 | 0.256 | 0.445 | 1.43 |
+| PGRN | 120 | 0.133 | **0.392** | 0.468 | 1.33 |
+| IRN | 735 | 0.128 | 0.331 | 0.440 | 0.90 |
+| VCO | 141 | 0.128 | 0.355 | 0.443 | 1.17 |
+| IP | 604 | 0.123 | 0.298 | 0.432 | 1.11 |
+| PRNc | 280 | 0.118 | 0.300 | 0.436 | 0.59 |
+| CP | 2892 | 0.113 | 0.171 | 0.455 | 0.83 |
+| CENT2 | 613 | 0.113 | 0.294 | 0.419 | 1.23 |
+| MRN | 2678 | 0.111 | 0.245 | 0.451 | 0.67 |
+| CUL4 5 | 1183 | 0.110 | 0.197 | 0.441 | 0.87 |
+| FN | 46 | 0.109 | 0.217 | 0.423 | 0.96 |
+| SCm | 1666 | 0.103 | 0.247 | 0.451 | 0.68 |
+| BMA | 175 | 0.086 | 0.103 | 0.491 | 1.08 |
+| PF | 108 | 0.083 | 0.213 | 0.494 | **0.16** |
+| VPL | 436 | 0.073 | 0.222 | 0.466 | 0.86 |
+| LING | 45 | 0.067 | 0.333 | 0.495 | 0.84 |
+
+**Takeaways**
+
+1. Descriptive region means still stand; null does **not** invent a large
+   neuron-level stim×prior population — enrichment is modest (~11% vs 5%).
+2. **Unique prior** is the stronger single-neuron signal in this window
+   (higher \(R^2\) and ~2× the sig fraction of stim×prior).
+3. Regions with high s×p/stim ratios (SIM, VeCB, PGRN, GRN, …) also tend to
+   sit at the top of `frac_sig_stim_x_prior`, but absolute rates stay <15%.
+4. **PF** remains the stim-additive outlier (lowest s×p/stim and low frac_sig).
+5. Caveat: these are **uncorrected** per-neuron α=0.05 rates (no FDR across
+   cells); insertion-nested tests still open.
+
+**Next:** region-level \(p\) on mean \(R^2\) vs null mean-\(R^2\) distribution
+(requires saving per-draw null arrays — code 2026-07-28c; re-run ORCD);
+optional BH-FDR across neurons; `--prior-type block`.
+
+### 2026-07-28c — Region-level mean-R² null p (code)
+
+Per-neuron p’s do **not** yield a region p for \(\overline{R^2}\). Need the
+null distribution of the **region mean**:
+
+\[
+p_{\mathrm{region}} = \frac{1 + \#\{\overline{R^2}_{\mathrm{null},k} \ge \overline{R^2}_{\mathrm{obs}}\}}{1+n_{\mathrm{rand}}}
+\]
+
+with \(\overline{R^2}_{\mathrm{null},k} = \mathrm{mean}_i R^2_{i,k}\) over neurons
+in the region (product of within-insertion prior shuffles).
+
+**Code:** `get_var_partition` now stores `r2_stim_x_prior_null` /
+`r2_unique_prior_null` as `(nrand, n_neurons)` float32; `var_partition_stacked`
+writes `p_region_stim_x_prior`, `p_region_unique_prior`, and
+`r2_*_null_mean` (mean of the null mean-R² draws). Restart skips only if
+those draw arrays are present.
+
+**Current `res/new` stack lacks draw arrays** → re-run on ORCD (auto re-fit
+because arrays missing):
+
+```bash
+NRAND=2000 bash scripts/submit_var_partition_sharded.sh
+```
+
+Then copy updated `var_partition_stacked.npy` → `res/new/`.
 
 ---
 

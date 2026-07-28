@@ -60,8 +60,8 @@ echo "N_SHARDS=$N_SHARDS  TARGET=$TARGET  WINDOW=$WINDOW  PRIOR_TYPE=$PRIOR_TYPE
 echo "NRAND=$NRAND  NULL_MODE=$NULL_MODE  RESTART=$RESTART"
 echo "TIME_SHARD=$TIME_SHARD  TIME_FIN=$TIME_FIN"
 echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  REGTYPE_CSV=$REGTYPE_CSV"
-echo "NOTE: RESTART=1 skips files that already have nrand≥NRAND + p-values;"
-echo "      older nrand=0 caches are auto re-run. Use RESTART=0 to force all."
+echo "NOTE: RESTART=1 skips files that already have nrand≥NRAND + draw arrays;"
+echo "      older nrand=0 or p-only caches are auto re-run. RESTART=0 forces all."
 
 SHARD_JOBS=()
 for ((k=0; k<N_SHARDS; k++)); do
