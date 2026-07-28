@@ -4049,6 +4049,33 @@ def _perm_pvalue(obs, nulls):
     return (1.0 + ge) / (1.0 + n_null)
 
 
+def _region_mean_null_p(obs_mean, null_parts):
+    '''Region p for observed mean R² vs null means over neurons.
+
+    ``null_parts``: list of (nrand_i, n_local) arrays. Truncates to the
+    common ``min(nrand_i)`` so mixed-length caches do not crash finalize.
+    Returns dict with p, null mean-of-means, n_draws, n_neurons_null — or
+    None if unusable.
+    '''
+    if not null_parts:
+        return None
+    n_draws = min(int(a.shape[0]) for a in null_parts)
+    if n_draws < 1:
+        return None
+    cols = [np.asarray(a[:n_draws], dtype=float) for a in null_parts]
+    if any(c.ndim != 2 or c.shape[1] < 1 for c in cols):
+        return None
+    stacked = np.concatenate(cols, axis=1)
+    null_means = np.nanmean(stacked, axis=1)
+    obs = float(obs_mean)
+    return {
+        'p': float((1.0 + np.sum(null_means >= obs)) / (1.0 + n_draws)),
+        'null_mean': float(np.nanmean(null_means)),
+        'n_draws': int(n_draws),
+        'n_neurons_null': int(stacked.shape[1]),
+    }
+
+
 def get_var_partition(pid, cached=None, mapping='Beryl',
                       window=(0.0, SHORT_DURINGSTIM_WINDOW_S),
                       regions=None, min_trials=30, prior_type='act',
@@ -4231,6 +4258,9 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
         neurons['p_unique_prior'] = _perm_pvalue(r2_unique_prior, null_prior)
         neurons['r2_stim_x_prior_null_mean'] = np.nanmean(null_sxp, axis=0)
         neurons['r2_unique_prior_null_mean'] = np.nanmean(null_prior, axis=0)
+        # Full null draws (float32): needed to build region-level mean-R² nulls.
+        neurons['r2_stim_x_prior_null'] = null_sxp.astype(np.float32, copy=False)
+        neurons['r2_unique_prior_null'] = null_prior.astype(np.float32, copy=False)
 
     return {
         'pid': pid,
@@ -4276,10 +4306,24 @@ def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
                 prev_nrand = int(prev.get('nrand') or 0)
                 prev_mode = prev.get('null_mode')
                 need_null = nrand > 0
+                neu_prev = prev.get('neurons') or {}
+                null_arr = neu_prev.get('r2_stim_x_prior_null')
+                null_ok = False
+                if need_null and null_arr is not None:
+                    try:
+                        a = np.asarray(null_arr)
+                        null_ok = (
+                            a.ndim == 2
+                            and a.shape[0] >= nrand
+                            and a.shape[1] == len(neu_prev.get('region', []))
+                        )
+                    except Exception:
+                        null_ok = False
                 have_null = (
                     prev_nrand >= nrand
                     and (prev_mode == null_mode if need_null else True)
-                    and (not need_null or 'p_stim_x_prior' in (prev.get('neurons') or {}))
+                    and (not need_null or (
+                        'p_stim_x_prior' in neu_prev and null_ok))
                 )
                 if have_null or (nrand == 0 and prev_nrand == 0):
                     continue
@@ -4348,21 +4392,55 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
     When per-neuron ``p_stim_x_prior`` / ``p_unique_prior`` are present,
     also report mean p and fraction significant at ``alpha_sig``.
 
+    When per-draw null arrays ``r2_*_null`` are present, also report
+    **region-level** p-values: observed mean R² vs the null distribution of
+    mean R² (average over neurons in the region on each prior-shuffle draw;
+    draws aligned across insertions as an independent product null).
+
     Writes manifold/res/var_partition_stacked.npy and meta CSV under cache.
     '''
+    from collections import defaultdict
+
     pth = Path(one.cache_dir, 'manifold', 'var_partition')
     if not pth.exists():
         raise FileNotFoundError(pth)
     files = [f for f in os.listdir(pth) if f.endswith('.npy')]
     rows = []
+    # reg -> list of (nrand, n_local) null arrays (product null across insertions)
+    null_sxp_parts = defaultdict(list)
+    null_prior_parts = defaultdict(list)
+    n_files_with_draws = 0
     for f in files:
         D_ = np.load(Path(pth, f), allow_pickle=True).item()
         neu = D_.get('neurons') or {}
         if not neu or 'region' not in neu:
             continue
-        regs = neu['region']
+        regs = np.asarray(neu['region'])
         has_p_sxp = 'p_stim_x_prior' in neu
         has_p_prior = 'p_unique_prior' in neu
+        has_draws_sxp = 'r2_stim_x_prior_null' in neu
+        has_draws_prior = 'r2_unique_prior_null' in neu
+        if has_draws_sxp:
+            n_files_with_draws += 1
+            null_sxp = np.asarray(neu['r2_stim_x_prior_null'], dtype=float)
+            if null_sxp.ndim != 2 or null_sxp.shape[1] != len(regs):
+                print(f'var_partition_stacked: bad sxp null shape in {f}: '
+                      f'{getattr(null_sxp, "shape", None)} vs n={len(regs)}')
+            else:
+                for reg in np.unique(regs):
+                    m = regs == reg
+                    if np.any(m):
+                        null_sxp_parts[str(reg)].append(null_sxp[:, m])
+        if has_draws_prior:
+            null_pr = np.asarray(neu['r2_unique_prior_null'], dtype=float)
+            if null_pr.ndim != 2 or null_pr.shape[1] != len(regs):
+                print(f'var_partition_stacked: bad prior null shape in {f}: '
+                      f'{getattr(null_pr, "shape", None)} vs n={len(regs)}')
+            else:
+                for reg in np.unique(regs):
+                    m = regs == reg
+                    if np.any(m):
+                        null_prior_parts[str(reg)].append(null_pr[:, m])
         for i in range(len(regs)):
             row = {
                 'eid': D_.get('eid'),
@@ -4418,6 +4496,13 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
             df = df[df[regtype_col].isin(allowed)]
 
     alpha_sig = 0.05 if alpha_sig is None else float(alpha_sig)
+    if n_files_with_draws:
+        print(f'var_partition_stacked: region mean-null draws from '
+              f'{n_files_with_draws}/{len(files)} insertion files')
+    else:
+        print('var_partition_stacked: no per-draw null arrays — '
+              'region-level p not computed (re-run with nrand>0 on updated code)')
+
     agg = {}
     for reg, g in df.groupby('region'):
         if len(g) < min_neurons:
@@ -4443,6 +4528,27 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
             p = g['p_unique_prior'].astype(float)
             entry['p_unique_prior_mean'] = float(np.nanmean(p))
             entry['frac_sig_unique_prior'] = float(np.nanmean(p < alpha_sig))
+
+        reg_key = str(reg)
+        if reg_key in null_sxp_parts:
+            rp = _region_mean_null_p(
+                np.nanmean(g['r2_stim_x_prior']), null_sxp_parts[reg_key])
+            if rp is not None:
+                entry['p_region_stim_x_prior'] = rp['p']
+                entry['r2_stim_x_prior_null_mean'] = rp['null_mean']
+                entry['n_null_draws'] = rp['n_draws']
+                entry['n_neurons_null'] = rp['n_neurons_null']
+                if rp['n_neurons_null'] != entry['n_neurons']:
+                    print(f'var_partition_stacked: {reg} sxp null neurons '
+                          f'{rp["n_neurons_null"]} != obs {entry["n_neurons"]} '
+                          f'(partial draw coverage)')
+        if reg_key in null_prior_parts:
+            rp = _region_mean_null_p(
+                np.nanmean(g['r2_unique_prior']), null_prior_parts[reg_key])
+            if rp is not None:
+                entry['p_region_unique_prior'] = rp['p']
+                entry['r2_unique_prior_null_mean'] = rp['null_mean']
+
         if regtype_col and regtype_col in g.columns:
             entry['sc_duringstim_regtype'] = float(g[regtype_col].iloc[0])
             if 'sc_duringchoice_regtype' in g.columns:
