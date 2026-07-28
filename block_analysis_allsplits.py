@@ -4007,10 +4007,53 @@ def _signed_contrast(trials):
     return np.nan_to_num(cl, nan=0.0) - np.nan_to_num(cr, nan=0.0)
 
 
+def _prior_shuffle_perms(stim, nrand, rng, mode='contrast'):
+    '''Permutation indices that reassign ``prior`` across trials.
+
+    ``mode='contrast'`` (default): shuffle within |stim| bins so the prior
+    marginal at each contrast level is preserved (manifold-style stratification).
+    ``mode='global'``: unrestricted within-insertion shuffle.
+    '''
+    n_trials = int(len(stim))
+    idx = np.arange(n_trials)
+    perms = np.empty((int(nrand), n_trials), dtype=np.int64)
+    mode = str(mode).lower()
+    if mode == 'global':
+        for i in range(int(nrand)):
+            perms[i] = rng.permutation(idx)
+        return perms
+    if mode not in ('contrast', 'contrast_matched', 'stratified'):
+        raise ValueError(
+            f"null mode must be 'contrast' or 'global', got {mode!r}")
+    abs_c = np.round(np.abs(np.asarray(stim, dtype=float)), decimals=5)
+    groups = [np.flatnonzero(abs_c == c) for c in np.unique(abs_c)]
+    for i in range(int(nrand)):
+        perm = idx.copy()
+        for g in groups:
+            if g.size > 1:
+                perm[g] = rng.permutation(g)
+        perms[i] = perm
+    return perms
+
+
+def _perm_pvalue(obs, nulls):
+    '''Exact-style one-sided p: (1 + #null ≥ obs) / (1 + n_null).'''
+    obs = np.asarray(obs, dtype=float)
+    nulls = np.asarray(nulls, dtype=float)
+    if nulls.ndim != 2:
+        raise ValueError('nulls must be (nrand, n_neurons)')
+    n_null = nulls.shape[0]
+    if n_null == 0:
+        return np.full(obs.shape, np.nan)
+    ge = np.sum(nulls >= obs[np.newaxis, :], axis=0)
+    return (1.0 + ge) / (1.0 + n_null)
+
+
 def get_var_partition(pid, cached=None, mapping='Beryl',
                       window=(0.0, SHORT_DURINGSTIM_WINDOW_S),
                       regions=None, min_trials=30, prior_type='act',
-                      act_alpha=None):
+                      act_alpha=None, nrand=0, null_mode='contrast',
+                      null_seed=None):
     '''
     Per-neuron OLS variance partition in the early duringstim window
     (default 0–80 ms post-stimOn, ``SHORT_DURINGSTIM_WINDOW_S``).
@@ -4023,6 +4066,12 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
 
     Unique main-effect R² are Type-II relative to the additive model
     (stim+choice+prior); interaction ΔR² = R²(full) − R²(additive).
+
+    Neuron-level null (``nrand`` > 0): keep y, stim, choice fixed; shuffle
+    ``prior`` across trials within the insertion (default contrast-stratified
+    by |stim|). Refit full vs additive under each draw. Per-neuron p-values:
+      p = (1 + #{null ≥ obs}) / (1 + nrand)
+    for ``R²_stim×prior`` and unique prior.
 
     ``regions``: optional set/list of Beryl acronyms to keep; if None, all
     non-void/root regions with ≥1 neuron are fit.
@@ -4105,6 +4154,8 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
             'n_trials': int(len(trials)), 'neurons': {},
             'skipped': 'no_target_regions',
             'prior_type': prior_type,
+            'nrand': int(nrand),
+            'null_mode': str(null_mode),
         }
 
     acs_fit = acs[keep_reg]
@@ -4151,6 +4202,36 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
         'beta_prior': beta_full[3],
         'beta_stim_x_prior': beta_full[4],
     }
+
+    nrand = int(nrand)
+    null_mode = str(null_mode).lower()
+    if nrand > 0:
+        if null_seed is None:
+            # Stable per-insertion seed (reproducible across reruns).
+            import hashlib
+            seed_key = f'{pid}|{eid}|{probe}|{null_mode}|{nrand}'
+            null_seed = int(
+                hashlib.md5(seed_key.encode()).hexdigest()[:8], 16)
+        rng = np.random.default_rng(int(null_seed))
+        perms = _prior_shuffle_perms(stim, nrand, rng, mode=null_mode)
+        null_sxp = np.empty((nrand, R.shape[1]), dtype=float)
+        null_prior = np.empty((nrand, R.shape[1]), dtype=float)
+        for i in range(nrand):
+            prior_n = prior[perms[i]]
+            inter_n = stim * prior_n
+            X_full_n = np.column_stack(
+                [ones, stim, choice, prior_n, inter_n])
+            X_add_n = np.column_stack([ones, stim, choice, prior_n])
+            r2_full_n = _ols_r2_multi(X_full_n, R)
+            r2_add_n = _ols_r2_multi(X_add_n, R)
+            null_sxp[i] = r2_full_n - r2_add_n
+            # X_no_prior is invariant under prior shuffle.
+            null_prior[i] = r2_add_n - r2_no_prior
+        neurons['p_stim_x_prior'] = _perm_pvalue(r2_stim_x_prior, null_sxp)
+        neurons['p_unique_prior'] = _perm_pvalue(r2_unique_prior, null_prior)
+        neurons['r2_stim_x_prior_null_mean'] = np.nanmean(null_sxp, axis=0)
+        neurons['r2_unique_prior_null_mean'] = np.nanmean(null_prior, axis=0)
+
     return {
         'pid': pid,
         'eid': eid,
@@ -4159,6 +4240,9 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
         'window': list(window),
         'n_neurons': int(R.shape[1]),
         'prior_type': prior_type,
+        'nrand': nrand,
+        'null_mode': null_mode if nrand > 0 else None,
+        'null_seed': int(null_seed) if nrand > 0 else None,
         'neurons': neurons,
     }
 
@@ -4166,20 +4250,45 @@ def get_var_partition(pid, cached=None, mapping='Beryl',
 def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
                           window=(0.0, SHORT_DURINGSTIM_WINDOW_S),
                           restart=True, use_cache=True,
-                          min_trials=30, prior_type='act'):
+                          min_trials=30, prior_type='act',
+                          nrand=0, null_mode='contrast', null_seed=None):
     '''Driver: per-insertion variance partition (default early 0–80 ms,
-    action-kernel prior); save under manifold/var_partition.'''
+    action-kernel prior); save under manifold/var_partition.
+
+    ``nrand`` > 0 enables neuron-level prior-shuffle nulls (see
+    ``get_var_partition``).
+    '''
     if eids_plus is None:
         df = bwm_query(one)
         eids_plus = df[['eid', 'probe_name', 'pid']].values
     pth = Path(one.cache_dir, 'manifold', 'var_partition')
     pth.mkdir(parents=True, exist_ok=True)
     Fs = []
+    nrand = int(nrand)
+    null_mode = str(null_mode).lower()
     for k, (eid, probe, pid) in enumerate(eids_plus, 1):
         eid_probe = f'{eid}_{probe}'
         outp = Path(pth, f'{eid_probe}.npy')
         if restart and outp.exists():
-            continue
+            # Re-run if cached file lacks the requested null settings.
+            try:
+                prev = np.load(outp, allow_pickle=True).item()
+                prev_nrand = int(prev.get('nrand') or 0)
+                prev_mode = prev.get('null_mode')
+                need_null = nrand > 0
+                have_null = (
+                    prev_nrand >= nrand
+                    and (prev_mode == null_mode if need_null else True)
+                    and (not need_null or 'p_stim_x_prior' in (prev.get('neurons') or {}))
+                )
+                if have_null or (nrand == 0 and prev_nrand == 0):
+                    continue
+                print(k, 'of', len(eids_plus), 're-run (null mismatch)',
+                      eid_probe, f'have nrand={prev_nrand}/{prev_mode}',
+                      f'want {nrand}/{null_mode}')
+            except Exception as exc:
+                print(k, 'of', len(eids_plus), 're-run (bad cache)',
+                      eid_probe, exc)
         t0 = time.perf_counter()
         try:
             cache = None
@@ -4201,7 +4310,8 @@ def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
                     continue
             D_ = get_var_partition(
                 pid, cached=cache, mapping=mapping, window=window,
-                regions=regions, min_trials=min_trials, prior_type=prior_type)
+                regions=regions, min_trials=min_trials, prior_type=prior_type,
+                nrand=nrand, null_mode=null_mode, null_seed=null_seed)
             if D_.get('skipped') or not D_.get('neurons'):
                 print(k, 'of', len(eids_plus), 'skip (empty)',
                       eid_probe, D_.get('skipped', ''))
@@ -4213,6 +4323,7 @@ def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
             gc.collect()
             print(k, 'of', len(eids_plus), 'ok',
                   D_.get('n_neurons', 0), 'neu',
+                  f"nrand={D_.get('nrand', 0)}",
                   round(time.perf_counter() - t0, 1), 'sec')
         except InsufficientTrials as exc:
             Fs.append(pid)
@@ -4227,12 +4338,15 @@ def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
 
 
 def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
-                          min_neurons=5, alpha_sig=None, mixed_only=False):
+                          min_neurons=5, alpha_sig=0.05, mixed_only=False):
     '''
     Pool per-neuron variance-partition stats across insertions by region.
 
     If ``regtype_csv`` is given (from export_stimchoice_regtypes), join
     ``sc_duringstim_regtype`` / ``mixed_stim_choice`` and optionally restrict.
+
+    When per-neuron ``p_stim_x_prior`` / ``p_unique_prior`` are present,
+    also report mean p and fraction significant at ``alpha_sig``.
 
     Writes manifold/res/var_partition_stacked.npy and meta CSV under cache.
     '''
@@ -4247,8 +4361,10 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
         if not neu or 'region' not in neu:
             continue
         regs = neu['region']
+        has_p_sxp = 'p_stim_x_prior' in neu
+        has_p_prior = 'p_unique_prior' in neu
         for i in range(len(regs)):
-            rows.append({
+            row = {
                 'eid': D_.get('eid'),
                 'probe': D_.get('probe'),
                 'pid': D_.get('pid'),
@@ -4265,7 +4381,14 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
                 'beta_prior': float(neu['beta_prior'][i]),
                 'beta_stim_x_prior': float(neu['beta_stim_x_prior'][i]),
                 'n_trials': D_.get('n_trials'),
-            })
+                'nrand': D_.get('nrand'),
+                'null_mode': D_.get('null_mode'),
+            }
+            if has_p_sxp:
+                row['p_stim_x_prior'] = float(neu['p_stim_x_prior'][i])
+            if has_p_prior:
+                row['p_unique_prior'] = float(neu['p_unique_prior'][i])
+            rows.append(row)
     if not rows:
         print('var_partition_stacked: no neurons found')
         return {}
@@ -4294,6 +4417,7 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
             allowed = set(float(x) for x in regtypes)
             df = df[df[regtype_col].isin(allowed)]
 
+    alpha_sig = 0.05 if alpha_sig is None else float(alpha_sig)
     agg = {}
     for reg, g in df.groupby('region'):
         if len(g) < min_neurons:
@@ -4310,6 +4434,15 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
             'r2_unique_choice_median': float(np.nanmedian(g['r2_unique_choice'])),
             'r2_stim_x_prior_median': float(np.nanmedian(g['r2_stim_x_prior'])),
         }
+        if 'p_stim_x_prior' in g.columns and g['p_stim_x_prior'].notna().any():
+            p = g['p_stim_x_prior'].astype(float)
+            entry['p_stim_x_prior_mean'] = float(np.nanmean(p))
+            entry['frac_sig_stim_x_prior'] = float(np.nanmean(p < alpha_sig))
+            entry['alpha_sig'] = alpha_sig
+        if 'p_unique_prior' in g.columns and g['p_unique_prior'].notna().any():
+            p = g['p_unique_prior'].astype(float)
+            entry['p_unique_prior_mean'] = float(np.nanmean(p))
+            entry['frac_sig_unique_prior'] = float(np.nanmean(p < alpha_sig))
         if regtype_col and regtype_col in g.columns:
             entry['sc_duringstim_regtype'] = float(g[regtype_col].iloc[0])
             if 'sc_duringchoice_regtype' in g.columns:

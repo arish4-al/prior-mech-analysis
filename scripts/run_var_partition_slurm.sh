@@ -30,6 +30,8 @@ N_SHARDS="${N_SHARDS:-4}"
 TARGET="${TARGET:-mixed}"
 WINDOW="${WINDOW:-0.08}"
 PRIOR_TYPE="${PRIOR_TYPE:-act}"
+NRAND="${NRAND:-0}"
+NULL_MODE="${NULL_MODE:-contrast}"
 RESTART="${RESTART:-1}"
 REGTYPE_CSV="${REGTYPE_CSV:-data/stimchoice_act_regtype_regions_p_mean_c_0.01.csv}"
 
@@ -40,10 +42,12 @@ cd "$REPO_DIR"
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
 echo "var_partition shard=$SHARD_IDX/$N_SHARDS target=$TARGET window=$WINDOW prior=$PRIOR_TYPE"
+echo "nrand=$NRAND null_mode=$NULL_MODE"
 echo "ONE_CACHE_DIR=$ONE_CACHE_DIR"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--target "$TARGET" --window "$WINDOW" --prior-type "$PRIOR_TYPE"
+      --nrand "$NRAND" --null-mode "$NULL_MODE"
       --regtype-csv "$REGTYPE_CSV"
       --one-cache-dir "$ONE_CACHE_DIR"
       --shard-idx "$SHARD_IDX" --n-shards "$N_SHARDS" --no-stack)
