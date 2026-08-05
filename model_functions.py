@@ -141,9 +141,9 @@ if _one_bypass_requested() and _ONE_CACHE_ENV:
     _one_cache_dir = Path(_ONE_CACHE_ENV)
     print(f"[model_functions] ONE bypassed (PRIOR_MECH_NO_ONE=1); cache_dir={_one_cache_dir}")
 else:
-    one = ONE(base_url='https://openalyx.internationalbrainlab.org',
-              password='international', silent=True)  # (mode='local')
-    # one = ONE(base_url='https://alyx.internationalbrainlab.org')
+    # one = ONE(base_url='https://openalyx.internationalbrainlab.org',
+    #           password='international', silent=True)  # (mode='local')
+    one = ONE(base_url='https://alyx.internationalbrainlab.org')
     _one_cache_dir = Path(one.cache_dir)
 
 ba = AllenAtlas()
