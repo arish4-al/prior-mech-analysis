@@ -41,7 +41,9 @@ export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbra
 export PRIOR_MECH_NO_ONE="${PRIOR_MECH_NO_ONE:-1}"
 
 MTYPE="${MTYPE:-none}"
+# Accept '|' as index separator too — commas break `sbatch --export=ALL,FREEZE=7,9,...`
 FREEZE="${FREEZE:-}"
+FREEZE="${FREEZE//|/,}"
 SEED="${SEED:-0}"
 PIPELINE="${PIPELINE:-de_cma_local}"
 OUT_TAG="${OUT_TAG:-}"

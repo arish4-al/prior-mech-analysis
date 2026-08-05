@@ -788,6 +788,51 @@ def _safe_loss_weights_v2(theta_log, *args, **kwargs):
     return float(v)
 
 
+def _init_loss_active_de_context(ctx):
+    """Pool initializer: install Stage-1 DE context in each worker process."""
+    global _LOSS_ACTIVE_DE_CONTEXT
+    _LOSS_ACTIVE_DE_CONTEXT = ctx
+
+
+def _make_de_workers(n_jobs, ctx):
+    """Build a scipy-DE ``workers`` argument that actually sees the DE context.
+
+    ``differential_evolution(..., workers=N)`` uses ``multiprocessing.Pool`` with
+    the *default* start method. On Python ≥3.8 macOS and often 3.13/ORCD that is
+    ``spawn``, which re-imports the module and leaves ``_LOSS_ACTIVE_DE_CONTEXT``
+    as None → ``RuntimeError: Stage 1 DE context not initialized`` (seen in ORCD
+    smoke 2026-08-05). Fix: explicit ``fork`` Pool + initializer (Linux/ORCD).
+    Returns ``(workers, cleanup_fn)``; always call ``cleanup_fn()`` when done.
+    """
+    if n_jobs is None or int(n_jobs) == 1:
+        return 1, (lambda: None)
+    import multiprocessing as mp
+    try:
+        fork_ctx = mp.get_context("fork")
+    except ValueError:
+        print("[Stage1 DE] fork start method unavailable; falling back to workers=1")
+        return 1, (lambda: None)
+    n = max(1, int(n_jobs))
+    pool = fork_ctx.Pool(
+        processes=n,
+        initializer=_init_loss_active_de_context,
+        initargs=(ctx,),
+    )
+    print(f"[Stage1 DE] parallel via fork Pool (n_jobs={n})")
+
+    def _cleanup():
+        try:
+            pool.close()
+            pool.join()
+        except Exception:
+            try:
+                pool.terminate()
+            except Exception:
+                pass
+
+    return pool.map, _cleanup
+
+
 # Quiet DE worker for Stage 1 (CPU-parallel, no print/logging)
 def _loss_active_de_worker(x_act):
     """
@@ -1976,12 +2021,16 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 except Exception:
                     pass
                 return False
-            de1 = differential_evolution(
-                func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
-                maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
-                polish=False, updating='deferred', workers=n_jobs, seed=random_state,
-                callback=_de_callback
-            )
+            de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
+            try:
+                de1 = differential_evolution(
+                    func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
+                    maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
+                    polish=False, updating='deferred', workers=de_workers,
+                    seed=random_state, callback=_de_callback,
+                )
+            finally:
+                de_cleanup()
         else:
             lam = _effective_cma_popsize(bnds_act, cma_opts_stage1)
             print(f"[Stage1 CMA-ES] (active dims={len(idx)}) lambda={lam}, iters={de1_maxiter}, n_jobs={n_jobs}")
@@ -2136,11 +2185,16 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "blocks_per_session_override": None,
             }
             init_pop_ext = _make_init_population(bnds_act, de_popsize, rng, de1_x, jitter_scale)
-            de1_ext = differential_evolution(
-                func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
-                maxiter=extra_iters, popsize=de_popsize, init=init_pop_ext,
-                polish=False, updating='deferred', workers=n_jobs, seed=int(random_state) + 17,
-            )
+            de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
+            try:
+                de1_ext = differential_evolution(
+                    func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
+                    maxiter=extra_iters, popsize=de_popsize, init=init_pop_ext,
+                    polish=False, updating='deferred', workers=de_workers,
+                    seed=int(random_state) + 17,
+                )
+            finally:
+                de_cleanup()
             stage1_loss_ext = float(de1_ext.fun)
             print(f"[Stage1 DE] extended run loss={stage1_loss_ext:.6f} (prev={stage1_loss:.6f})")
             _log_info("[Stage1] extended DE result", {
