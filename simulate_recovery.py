@@ -155,8 +155,13 @@ def _one_cache_dir_candidates():
     bases = []
     if "ONE_CACHE_DIR" in os.environ:
         bases.append(Path(os.environ["ONE_CACHE_DIR"]))
-    cache = Path(mf.one.cache_dir)
-    bases.extend([cache, cache / "alyx"])
+    # ONE may be bypassed in the fit path (mf.one is None); fall back to env cache dir.
+    if getattr(mf, "one", None) is not None:
+        cache = Path(mf.one.cache_dir)
+        bases.extend([cache, cache / "alyx"])
+    elif getattr(mf, "_one_cache_dir", None):
+        cache = Path(mf._one_cache_dir)
+        bases.extend([cache, cache / "alyx"])
     seen = set()
     for base in bases:
         base = base.resolve()
@@ -482,7 +487,7 @@ BWM_DECORR_PANELS = [
     ("stim_duringstim1_act", r"$d^{stim,se'}$"),
 ]
 
-# Canonical analysis defaults (2026-06-19 retest; see journals/research_journal_2026-06-18.md).
+# Canonical analysis defaults (2026-06-19 retest; see journals/canonical_analysis_conventions.md).
 CANONICAL_PRIOR_DISTANCE_ANALYSIS = {
     "s_window_s": S_DURINGSTIM_WINDOW_S,
     "im_window_s": IM_DURINGSTIM_WINDOW_S,

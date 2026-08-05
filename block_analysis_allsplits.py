@@ -4396,6 +4396,8 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
     **region-level** p-values: observed mean R² vs the null distribution of
     mean R² (average over neurons in the region on each prior-shuffle draw;
     draws aligned across insertions as an independent product null).
+    BH-FDR across regions is applied to those region p-values
+    (``p_region_*_c``, same convention as trajectory ``p_mean_c``).
 
     Writes manifold/res/var_partition_stacked.npy and meta CSV under cache.
     '''
@@ -4555,6 +4557,22 @@ def var_partition_stacked(regtype_csv=None, regtypes=(0.0, 0.5, 1.0),
                 entry['sc_duringchoice_regtype'] = float(
                     g['sc_duringchoice_regtype'].iloc[0])
         agg[reg] = entry
+
+    # BH-FDR across regions (same as trajectory p_mean → p_mean_c).
+    from statsmodels.stats.multitest import multipletests
+    for pkey in ('p_region_stim_x_prior', 'p_region_unique_prior'):
+        regs = [r for r in agg if pkey in agg[r]
+                and np.isfinite(agg[r][pkey])]
+        if len(regs) < 2:
+            continue
+        pvals = [float(agg[r][pkey]) for r in regs]
+        _, p_c, _, _ = multipletests(pvals, alpha=alpha_sig, method='fdr_bh')
+        for r, pc in zip(regs, p_c):
+            agg[r][f'{pkey}_c'] = float(pc)
+            agg[r][f'sig_{pkey}_c'] = bool(pc < alpha_sig)
+        n_sig = int(np.sum(p_c < alpha_sig))
+        print(f'var_partition_stacked: BH-FDR {pkey} '
+              f'{n_sig}/{len(regs)} sig at α={alpha_sig}')
 
     outp = Path(one.cache_dir, 'manifold', 'res', 'var_partition_stacked.npy')
     outp.parent.mkdir(parents=True, exist_ok=True)

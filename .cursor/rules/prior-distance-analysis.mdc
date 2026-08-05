@@ -41,4 +41,6 @@ If S is significant with large curve_mean, the analysis path is wrong (likely ze
 
 ## Research journals — develop only
 
-Journals live in **`journals/research_journal_*.md`**, **only on `develop`**. Never create/edit/commit journals on `main`. Work on `develop` for journaling; use `main` for runnable code/scripts only.
+Journals live in **`journals/`**, organized **by topic, not by date** (one file per line of investigation; `journals/README.md` is the index). Append dated entries to the matching topic file instead of creating `research_journal_YYYY-MM-DD.md` files.
+
+Journals exist **only on `develop`**. Never create/edit/commit journals on `main`. Work on `develop` for journaling; use `main` for runnable code/scripts only.

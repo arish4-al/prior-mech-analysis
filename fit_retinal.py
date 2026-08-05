@@ -250,7 +250,7 @@ def loss_retinal_weight(theta_vec, avg_data_R, model_type='data', baseline=0, fi
             results = run_model(
                 model_type, stimuli, trial_strengths, trial_sides, block_sides, blocks_per_session,
                 steps_before_obs=steps_before_obs, only_initial=False,
-                verbose=verbose, backend='auto', **model_params
+                verbose=verbose, backend='numba', **model_params  # hard-require; no silent numpy fallback
             )
             diag['t_sim'] += time.perf_counter() - t_sim0
         except Exception:

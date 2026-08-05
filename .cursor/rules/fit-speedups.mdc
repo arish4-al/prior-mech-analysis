@@ -1,0 +1,37 @@
+---
+description: Constraints for speeding up fit_retinal / fit_weights / run_model fit path
+globs: fit_retinal.py,fit_weights.py,model_functions.py,scripts/bench_fit*.py,_validate_numba_backend.py
+alwaysApply: false
+---
+
+# Fit speedups — hard constraints
+
+Read `journals/simulation_fit_speedups.md` before changing `fit_retinal.py`,
+`fit_weights.py`, or the fit path through `model_functions.run_model`.
+
+## Do not cheapen search by shrinking the task
+
+When speeding up fitting / per-eval simulation:
+
+- **Do not** shorten trials (`max_obs_per_trial` / trial duration) for search.
+- **Do not** reduce `blocks_per_session` below the production Stage-1 / Stage-2
+  settings used for the quality baseline just to make evals faster.
+- **Do not** reuse one deterministic stimulus batch across a whole optimizer
+  generation as a speedup (changes the MC loss the optimizer sees).
+
+Allowed directions: faster `run_model` (numba / kernel), skip **unused outputs**
+in the fit path if numerically inert for the loss, optimizer schedule / early
+stop / parallel efficiency, guard unguarded script bottoms.
+
+## Numba parity
+
+`backend='numba'` must match `backend='numpy'` on identical stimuli (bit-exact
+or ~1e-16). Validate with `_validate_numba_backend.py` and, for the fit path,
+fitted weights from `resolve_weights_json` / `WEIGHTS_REL`.
+
+## Environment
+
+Fit benches and `run_model` timing: `conda activate iblenv`, outside sandbox
+(`required_permissions: ["all"]`). `fit_weights.py` bottom is guarded;
+`fit_retinal.py` is still unguarded — do not import it as a module (use
+`scripts/bench_fit_*_baseline.py` helpers instead).

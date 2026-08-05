@@ -36,7 +36,7 @@ python simulate_recovery.py --phase4-no-prior-mod \
 
 **Expected (seed 123):** S curve_mean ≈ **0.012**, p_mean ≈ **0.78** (not significant). I/M also null.
 
-Source: [research_journal_2026-06-18.md](journals/research_journal_2026-06-18.md) (2026-06-19b retest).
+Source: [canonical_analysis_conventions.md](journals/canonical_analysis_conventions.md) (2026-06-19b retest).
 
 ### Common pitfalls
 
@@ -49,15 +49,23 @@ Source: [research_journal_2026-06-18.md](journals/research_journal_2026-06-18.md
 
 - **Code (source of truth):** `simulate_recovery.py` — module docstring, `CANONICAL_PRIOR_DISTANCE_ANALYSIS`, `build_population_b_for_split`
 - **Cursor rule:** `.cursor/rules/prior-distance-analysis.mdc` (auto-loaded for agents)
-- **Experiment history:** `journals/research_journal_*.md` — dated results, not agent defaults
+- **Experiment history:** `journals/*.md` — topic notes with dated results inside, not agent defaults
 
 ### Research journals (`journals/`) — develop only
 
-- All research journals live under **`journals/research_journal_YYYY-MM-DD.md`**.
+- Journals are organized **by topic, not by date**: one file per line of investigation (e.g. `journals/s_prior_artifacts_truncation.md`), each holding the goal, the implementation, all dated updates, results, and open questions. `journals/README.md` is the index.
+- When journaling: append a dated entry to the matching topic file, or create a new topic file and add it to the index. Do **not** start `research_journal_YYYY-MM-DD.md` files.
 - Journals live **only on the `develop` branch**. Do **not** create, edit, or commit them on `main`.
 - When journaling: check out / work on `develop`; put new files in `journals/`.
 - `main` is for code/scripts needed to run analyses (e.g. ORCD); keep journals off it.
 - If asked to start a journal while on `main`, switch to `develop` first (or warn the user).
+
+### Fit speedups (`fit_retinal.py` / `fit_weights.py`)
+
+- Topic journal: [journals/simulation_fit_speedups.md](journals/simulation_fit_speedups.md).
+- Cursor rule: `.cursor/rules/fit-speedups.mdc` — **do not** shorten trials, cut
+  `blocks_per_session`, or reuse stim batches across optimizer generations for speed.
+  Numba must stay parity-checked vs numpy.
 
 ### Git — no commits/pushes without approval
 

@@ -125,18 +125,36 @@ def set_default_plot_style(nbins_x=4, nbins_y=4, labelsize=12):
 set_default_plot_style()
 
 
-one = ONE(base_url='https://openalyx.internationalbrainlab.org',
-          password='international', silent=True)  # (mode='local')
-# one = ONE(base_url='https://alyx.internationalbrainlab.org')
+# ONE is used here ONLY to resolve the local cache_dir for the paths below; the
+# model-fitting path (fit_weights.py) never calls ONE at runtime. Constructing ONE
+# in every parallel worker re-reads/rewrites ~/.one params and can race under loky
+# (BrokenProcessPool / JSONDecodeError on ~/.one/.<url>). So allow a bypass: when
+# PRIOR_MECH_NO_ONE is truthy and ONE_CACHE_DIR is set, skip ONE entirely and take
+# the cache dir straight from the env. Data-loading code paths (goal2 / analysis)
+# don't set the flag, so they still get a real ONE object as before.
+def _one_bypass_requested():
+    return os.environ.get('PRIOR_MECH_NO_ONE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+_ONE_CACHE_ENV = os.environ.get('ONE_CACHE_DIR')
+if _one_bypass_requested() and _ONE_CACHE_ENV:
+    one = None
+    _one_cache_dir = Path(_ONE_CACHE_ENV)
+    print(f"[model_functions] ONE bypassed (PRIOR_MECH_NO_ONE=1); cache_dir={_one_cache_dir}")
+else:
+    one = ONE(base_url='https://openalyx.internationalbrainlab.org',
+              password='international', silent=True)  # (mode='local')
+    # one = ONE(base_url='https://alyx.internationalbrainlab.org')
+    _one_cache_dir = Path(one.cache_dir)
+
 ba = AllenAtlas()
 br = BrainRegions()
 
-pth_res = Path(one.cache_dir, 'manifold', 'res') 
+pth_res = Path(_one_cache_dir, 'manifold', 'res')
 pth_res.mkdir(parents=True, exist_ok=True)
-pth_dmn = Path(one.cache_dir, 'dmn', 'res')
+pth_dmn = Path(_one_cache_dir, 'dmn', 'res')
 pth_dmn.mkdir(parents=True, exist_ok=True)
 
-save_dir = Path(one.cache_dir, 'models')
+save_dir = Path(_one_cache_dir, 'models')
 save_dir.mkdir(parents=True, exist_ok=True)
 
 meta_splits={
