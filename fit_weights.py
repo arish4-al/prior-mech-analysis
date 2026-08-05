@@ -2,6 +2,8 @@
 This script is used to fit the weights of the model, 2nd stage of the fitting process.
 '''
 
+import os
+import time
 import types
 import cma
 from model_functions import *
@@ -160,6 +162,7 @@ def _save_params_v2(theta_log, loss, tag="v2", random_state=None, train_mask=Non
         "train_mask": train_mask_list,
         "frozen_idx": frozen_idx,
         "gradient": grad_list,
+        "theta_log": theta_log_arr.tolist(),
         "W": {"W_ii": float(W_ii), "W_pp": float(W_pp), "W_mm": float(W_mm),
               "W_is": float(W_is), "W_pi": float(W_pi), "W_mi": float(W_mi)},
         "g": {"g_i": float(g_i), "g_m": float(g_m)},
@@ -172,6 +175,54 @@ def _save_params_v2(theta_log, loss, tag="v2", random_state=None, train_mask=Non
 
     np.save(base.with_suffix(".npy"), theta_log_arr)
     print(f"[save] base={base}")
+
+
+def _save_rolling_checkpoint(theta_log_full, loss, stage="stage2", gen=None,
+                             train_mask=None, random_state=None,
+                             val_loss=None, selection=None):
+    """Overwrite a *stable* full-vector checkpoint (no timestamp) for restartability.
+
+    Writes `weights_{stage}_last.{npy,json}` in the current run dir. Unlike
+    `_save_params_v2` (timestamped, gated on small loss), this always overwrites so
+    `run_fit_weights.py --resume auto` can pick up the most recent best after a crash
+    or SLURM timeout mid-Stage-2.
+
+    When held-out selection is active, callers should pass the held-out incumbent
+    (selection='held_out', val_loss=...) so restart continues from the generalizing
+    point rather than a train-only overfit.
+    """
+    if _RUN_DIR is None:
+        _ensure_run_dirs()
+    theta_log_arr = np.asarray(theta_log_full, float)
+    (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
+     g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_log_arr)
+    LOG_ZERO, tol = -30.0, 1e-8
+    frozen_idx = np.where(np.isclose(theta_log_arr, LOG_ZERO, atol=tol))[0].tolist()
+    base = Path(_RUN_DIR) / f"weights_{stage}_last"
+    payload = {
+        "ts": _now_iso(),
+        "stage": stage,
+        "gen": int(gen) if gen is not None else None,
+        "loss": float(loss),
+        "val_loss": (float(val_loss) if val_loss is not None and np.isfinite(val_loss) else None),
+        "selection": selection,
+        "random_state": int(random_state) if random_state is not None else None,
+        "train_mask": (np.asarray(train_mask, bool).tolist() if train_mask is not None else None),
+        "frozen_idx": frozen_idx,
+        "theta_log": theta_log_arr.tolist(),
+        "W": {"W_ii": float(W_ii), "W_pp": float(W_pp), "W_mm": float(W_mm),
+              "W_is": float(W_is), "W_pi": float(W_pi), "W_mi": float(W_mi)},
+        "g": {"g_i": float(g_i), "g_m": float(g_m)},
+        "d": {"d_i": float(d_i), "d_m": float(d_m)},
+        "theta": {"theta_c": float(theta_c), "theta_d": float(theta_d)},
+        "model_params": {k: float(v) if isinstance(v, (int, float, np.floating)) else v for k, v in model_params.items()},
+    }
+    # Atomic-ish: write then replace, so a reader never sees a truncated file.
+    tmp = base.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+    tmp.replace(base.with_suffix(".json"))
+    np.save(base.with_suffix(".npy"), theta_log_arr)
 
 
 def _save_de_result(de_result, stage="de1", tag="v2", fit_idx=None, random_state=None, algo="de"):
@@ -499,13 +550,12 @@ def _log_bounds_weights_v2():
     bW_pi = (1e-7, 1e-1)
     bW_mi = (1e-3, 10)
 
-    # gains: g_i, g_m
-    bG_i_m = (1e-1, 2e2)
-    # bG_s   = (1e-12, 1e-11)
-
-    # offsets: d_i, d_m
-    bD_i_m = (1e-5, 1e2)
-    # bD_s   = (1e-12, 1e-11)
+    # gains: g_i kept away from zero; g_m may be negligible (paper / ckpt ≈ 0)
+    bG_i = (1e-1, 2e2)
+    bG_m = (1e-12, 2e2)
+    # offsets: d_i kept; d_m may be negligible
+    bD_i = (1e-5, 1e2)
+    bD_m = (1e-12, 1e2)
 
     # thresholds (set around amplitude of M neurons; allow discordant a bit higher)
     bTh_c  = (0.1, 0.99999)     # theta_c (concordant)
@@ -517,8 +567,8 @@ def _log_bounds_weights_v2():
         # np.log(btau_i[0]), np.log(btau_p[0]), np.log(btau_m[0]),
         np.log(bW_ii[0]), np.log(bW_pp[0]), np.log(bW_mm[0]),
         np.log(bW_is[0]), np.log(bW_pi[0]), np.log(bW_mi[0]),
-        np.log(bG_i_m[0]), np.log(bG_i_m[0]), # g_i, g_m
-        np.log(bD_i_m[0]), np.log(bD_i_m[0]), # d_i, d_m
+        np.log(bG_i[0]), np.log(bG_m[0]),  # g_i, g_m
+        np.log(bD_i[0]), np.log(bD_m[0]),  # d_i, d_m
         np.log(bTh_c[0]), np.log(bTh_d[0]),
         # *([np.log(bN[0])] * 5)
     ]
@@ -527,8 +577,8 @@ def _log_bounds_weights_v2():
         # np.log(btau_i[1]), np.log(btau_p[1]), np.log(btau_m[1]),
         np.log(bW_ii[1]), np.log(bW_pp[1]), np.log(bW_mm[1]),
         np.log(bW_is[1]), np.log(bW_pi[1]), np.log(bW_mi[1]),
-        np.log(bG_i_m[1]), np.log(bG_i_m[1]),   # g_i, g_m
-        np.log(bD_i_m[1]), np.log(bD_i_m[1]),   # d_i, d_m
+        np.log(bG_i[1]), np.log(bG_m[1]),   # g_i, g_m
+        np.log(bD_i[1]), np.log(bD_m[1]),   # d_i, d_m
         np.log(bTh_c[1]), np.log(bTh_d[1]),
         # *([np.log(bN[1])] * 5)
     ]
@@ -655,7 +705,7 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 gradient_mode=False,
                 grad_options=None,
                 verbose=verbose,
-                backend='auto',
+                backend='numba',  # hard-require; no silent numpy fallback (fit speedups)
                 **model_params,
             )
         except Exception:
@@ -923,9 +973,22 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              theta_log0=None, init_params=None, sobol_count=64,
                              resume_from="none", resume_theta_log=None, resume_path=None,
                              train_mask=None, blocks_per_session_stage2=None, n_jobs=1,
-                             parallel_backend='loky', deterministic_stage2=False):
+                             parallel_backend='loky', deterministic_stage2=False,
+                             cma_early_stop_patience=8,
+                             cma_early_stop_beat_loss=0.4044,
+                             local_refine_after_cma=True,
+                             local_refine_idx=None,
+                             local_refine_use_powell=False,
+                             local_refine_maxls=100,
+                             local_refine_patience=8,
+                             local_refine_max_wall_s=None,
+                             local_refine_method="powell",
+                             local_refine_cma_sigma=0.05,
+                             stage2_n_stim_seeds=3,
+                             stage2_stim_aggregate="sample",
+                             val_stim_seed=None):
     """
-    Two-stage optimizer with configurable global search (DE or CMA-ES) + L-BFGS-B.
+    Two-stage optimizer with configurable global search (DE or CMA-ES) + local polish.
     Supports freezing a subset of parameters via `train_mask` (bool array or index list).
     When `train_mask` is None, behavior is identical to the unfrozen version.
     Masked parameters are fixed to zero (log-space value LOG_ZERO ≈ -30).
@@ -939,15 +1002,70 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         cma_opts_stage1 / cma_opts_stage2: Optional dicts merged into CMA options per stage.
         blocks_per_session_stage2: If provided, use this for Stage 2 evaluations instead of global blocks_per_session.
                                    Stage 1 always uses the global blocks_per_session.
-        n_jobs: Number of parallel workers for CMA-ES candidate evaluation. Default 1 (sequential).
-                Use -1 to use all available CPU cores, or specify a positive integer.
+        n_jobs: Workers for CMA candidate evals (Stage 2 and optional CMA polish).
+                Default 1 (sequential). Use -1 for all cores.
         parallel_backend: Backend for joblib parallel execution. Options:
-            - 'loky': Multiprocessing (default, true parallelism, better for CPU-bound tasks)
-            - 'threading': Threads (lower overhead, but limited by GIL for CPU-bound tasks)
-            Test both to see which is faster for your specific workload.
-        deterministic_stage2: If True and blocks_per_session_stage2 is not None, Stage 2 evaluations
-                              reseed NumPy so that the same stimulus batch is reused for every loss
-                              evaluation (useful to reduce Monte Carlo noise during CMA refinement).
+            - 'loky': Multiprocessing (default). Used for CMA Stage-2 candidate evals —
+                      true multicore, ~5x faster than threading (bench: 89 s vs 369 s)
+                      because the numba kernel is @njit WITHOUT nogil and holds the GIL.
+            - 'threading': Threads in one process (used for CMA-polish candidate evals,
+                      which close over non-picklable nested closures).
+        deterministic_stage2: If True and blocks_per_session_stage2 is not None, Stage 2
+                              builds fixed stim bundle(s) once and reuses them (see
+                              stage2_stim_aggregate).
+        cma_early_stop_patience: After early-stop is armed, stop CMA when best_overall has not
+                                 improved for this many gens. Default 8. Set 0 to disable.
+        cma_early_stop_beat_loss: Quality gate for early-stop. Plateau stopping is armed only once
+                                  the beat metric < this value (default 0.4044 = known WEIGHTS_REL
+                                  baseline). With held-out selection the beat metric is the *train*
+                                  loss of the held-out incumbent (same scale as 0.4044); plateau
+                                  itself is timed on held-out. Set None to disable the gate.
+        local_refine_after_cma: If True (default), run a bounded local polish after CMA Stage 2
+                                on `local_refine_idx`. Polish uses the same Stage-2 train-loss
+                                protocol (`stage2_stim_aggregate` over `stage2_n_stim_seeds`
+                                bundles) and the same held-out gate (`val_stim_seed`) as Stage 2.
+        local_refine_idx: Full-vector indices to polish after CMA. Default None = the
+                          "prior" set [6, 8, 10, 11] (g_i, d_i, theta_c, theta_d) — the
+                          focused polish that closes the CMA integrator-gain overshoot
+                          WITHOUT touching W. Full-12 "active" refine (pass list(range(12))
+                          or the active idx) reaches slightly lower in-sample loss but
+                          overfits the training bundle (held-out worse; 2026-08-04g) because
+                          the extra W freedom fits noise, so it is opt-in. Always intersected
+                          with train_mask.
+        local_refine_use_powell: If True and method='cma', fall back to Powell when CMA polish
+                                 fails to beat the start loss. Default False (Powell is already
+                                 the default method).
+        local_refine_maxls: Unused (kept for API compat; was L-BFGS-B maxls, now removed).
+        local_refine_patience: Stop polish early after this many iters/gens with no best-loss
+                               improvement (default 8; used by Powell callback + CMA polish).
+                               Set 0 to disable.
+        local_refine_max_wall_s: Safety cap (seconds) on total local-refine wall time,
+                                 checked each iteration/generation; on exceed, stop and keep
+                                 the best-so-far vector. Default None = no cap. Useful when
+                                 refining many dims under a Slurm --time limit.
+        local_refine_method: Polish optimizer: 'powell' (default — bounded Powell; best
+                             held-out 2026-08-04f/g) or 'cma' (small-sigma CMA-ES restart
+                             on the refine dims). L-BFGS removed (stalled on this surface).
+        local_refine_cma_sigma: Initial sigma for method='cma', as a fraction of the median
+                                refine-dim bound span (default 0.05 = a local restart).
+        stage2_n_stim_seeds: Number of fixed Stage-2 (and polish) stim bundles (default 3).
+                             Bundles are built once from RandomState(seed+100003+k). How they
+                             enter the train loss is controlled by stage2_stim_aggregate.
+        stage2_stim_aggregate: How multi-bundle train loss is formed (default 'sample'):
+            - 'sample': each eval draws ONE of the K fixed bundles at random (~1× wall vs
+              single-bundle; over many evals the optimizer sees all K — anti-overfit without
+              the K× cost of averaging).
+            - 'mean': each eval averages loss over all K bundles (~K× wall; lower variance
+              per eval; kept as an opt-in for diagnostics).
+        val_stim_seed: If set (int) AND deterministic Stage-2 with a bps override is active,
+                       hold out a separate stimulus bundle (built like the bench eval:
+                       RandomState(val_stim_seed + 100003)) that the optimizer NEVER trains
+                       on. Stage-2 CMA then SELECTS the incumbent with the lowest held-out
+                       loss (not lowest train loss) and EARLY-STOPS on held-out plateau, and
+                       the post-CMA polish is kept only if it does not worsen held-out loss.
+                       Rolling checkpoints store this held-out incumbent. Must differ from
+                       random_state..random_state+stage2_n_stim_seeds-1 (a collision is
+                       warned + ignored). Default None = no held-out selection.
     """
     
     if '_RUN_DIR' in globals() and (_RUN_DIR is not None):
@@ -955,19 +1073,80 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     else:
         run_dir, ckpt_dir, log_path = _ensure_run_dirs()
 
+    # Declared once for Stage-1 DE workers (must precede any assignment in this fn).
+    global _LOSS_ACTIVE_DE_CONTEXT
+
     rng = np.random.RandomState(random_state)
-    # Optional fixed seed for Stage 2 stimulus generation so all Stage 2 evals see the same stimuli.
+    # Optional fixed seed(s) for Stage 2 stimulus generation so Stage-2 evals are stable.
+    stage2_n_stim_seeds = max(1, int(stage2_n_stim_seeds or 1))
+    agg = str(stage2_stim_aggregate or "sample").strip().lower()
+    if agg not in {"sample", "mean"}:
+        raise ValueError("stage2_stim_aggregate must be 'sample' or 'mean'")
+    stage2_stim_aggregate = agg
     if deterministic_stage2 and (blocks_per_session_stage2 is not None):
         stage2_stim_seed = int(random_state) + 100003  # any deterministic offset is fine
     else:
         stage2_stim_seed = None
 
-    stage2_stimuli_bundle = None
+    stage2_stimuli_bundles = []
     if stage2_stim_seed is not None and blocks_per_session_stage2 is not None:
-        stage2_stimuli_bundle = build_stimuli_bundle(
-            blocks_per_session_stage2,
-            stim_rng=np.random.RandomState(stage2_stim_seed),
-            **model_params,
+        for k in range(stage2_n_stim_seeds):
+            stage2_stimuli_bundles.append(
+                build_stimuli_bundle(
+                    blocks_per_session_stage2,
+                    stim_rng=np.random.RandomState(stage2_stim_seed + k),
+                    **model_params,
+                )
+            )
+    # Back-compat single-bundle name used by older call sites / workers
+    stage2_stimuli_bundle = stage2_stimuli_bundles[0] if stage2_stimuli_bundles else None
+    # Dedicated RNG for per-eval bundle sampling (independent of optimizer rng draws).
+    _stage2_bundle_rng = np.random.RandomState(int(random_state) + 900001)
+    if stage2_n_stim_seeds > 1 and stage2_stimuli_bundles:
+        # Logical seeds match CLI --seed / --val-seed: RandomState(seed + 100003 + k).
+        log_lo, log_hi = int(random_state), int(random_state) + stage2_n_stim_seeds - 1
+        if stage2_stim_aggregate == "sample":
+            print(
+                f"[Stage2] train loss samples 1 of {stage2_n_stim_seeds} fixed stim bundles "
+                f"per eval (~1× wall; logical seeds {log_lo}..{log_hi})"
+            )
+        else:
+            print(
+                f"[Stage2] averaging loss over {stage2_n_stim_seeds} stim bundles "
+                f"(~{stage2_n_stim_seeds}× wall; logical seeds {log_lo}..{log_hi})"
+            )
+
+    # Held-out validation bundle (never trained on): built like the bench eval so that
+    # `--val-seed S` here matches `--eval-seed S` in bench_fit_local_after_cma.py.
+    # Requires deterministic Stage-2 (fixed train bundles) so "held-out" is well-defined.
+    val_stimuli_bundle = None
+    if (
+        val_stim_seed is not None
+        and blocks_per_session_stage2 is not None
+        and deterministic_stage2
+    ):
+        val_seed_int = int(val_stim_seed)
+        train_seed_range = set(range(int(random_state), int(random_state) + stage2_n_stim_seeds))
+        if val_seed_int in train_seed_range:
+            print(
+                f"[Stage2/val] WARNING: val_stim_seed={val_seed_int} collides with the "
+                f"training seed range {sorted(train_seed_range)}; disabling held-out selection."
+            )
+        else:
+            val_stimuli_bundle = build_stimuli_bundle(
+                blocks_per_session_stage2,
+                stim_rng=np.random.RandomState(val_seed_int + 100003),
+                **model_params,
+            )
+            print(
+                f"[Stage2/val] held-out selection ON: val bundle from seed "
+                f"{val_seed_int} (RandomState {val_seed_int + 100003}); CMA selects + "
+                f"early-stops on held-out loss, polish kept only if held-out not worsened."
+            )
+    elif val_stim_seed is not None:
+        print(
+            "[Stage2/val] WARNING: val_stim_seed set but deterministic_stage2 + "
+            "blocks_per_session_stage2 required; disabling held-out selection."
         )
 
     full_bounds = _log_bounds_weights_v2()
@@ -1101,13 +1280,13 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                                     stim_rng=None)
     
     # Stage 2 loss wrapper with blocks_per_session override and optional deterministic seeding
-    def loss_active_stage2(x_act, verbose=None):
+    def loss_active_stage2(x_act, verbose=None, bundle_idx=None):
         """
         Loss function for Stage 2 with blocks_per_session override.
-        When deterministic_stage2 is True and a stage2_stim_seed is set, a local
-        NumPy RNG is constructed with that seed and passed into loss_weights_core_v2,
-        so that create_stimuli(...) generates the same stimuli batch on every
-        Stage-2 evaluation. Otherwise behaves like loss_active with an override.
+        When deterministic_stage2 is True, uses prebuilt stim bundle(s):
+          - aggregate='sample' (default): one randomly chosen bundle per eval (~1× wall)
+          - aggregate='mean': mean over all bundles (~K× wall)
+        Pass bundle_idx to force a specific bundle (used by parallel CMA workers).
         
         Args:
             verbose: If None, uses default (True). Set to False to disable printing
@@ -1116,14 +1295,37 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         th_full = full_from_active(x_act)
         verbose_val = verbose if verbose is not None else True
 
-        return _tracked_loss_weights_v2(
+        def _one(bundle):
+            return float(_tracked_loss_weights_v2(
+                th_full, mean_data_results, prior_regions, behavior,
+                model_type=model_type, plot=False, verbose=verbose_val,
+                random_state=random_state, train_mask=train_mask,
+                blocks_per_session_override=blocks_per_session_stage2,
+                stim_rng=None,
+                stimuli_bundle=bundle,
+            ))
+
+        if not stage2_stimuli_bundles:
+            return _one(None)
+        n_b = len(stage2_stimuli_bundles)
+        if n_b == 1 or stage2_stim_aggregate == "mean":
+            vals = [_one(b) for b in stage2_stimuli_bundles]
+            return float(np.mean(vals))
+        if bundle_idx is not None:
+            return _one(stage2_stimuli_bundles[int(bundle_idx) % n_b])
+        return _one(stage2_stimuli_bundles[int(_stage2_bundle_rng.randint(0, n_b))])
+
+    def _val_loss_active(x_act):
+        """Held-out loss for active-space vector `x_act` on the val bundle (never trained
+        on). Runs in the main process only (called on CMA improvements + around polish)."""
+        if val_stimuli_bundle is None:
+            return np.inf
+        th_full = full_from_active(x_act)
+        return float(_safe_loss_weights_v2(
             th_full, mean_data_results, prior_regions, behavior,
-            model_type=model_type, plot=False, verbose=verbose_val,
-            random_state=random_state, train_mask=train_mask,
+            model_type=model_type, plot=False, debug=False,
             blocks_per_session_override=blocks_per_session_stage2,
-            stim_rng=None,
-            stimuli_bundle=stage2_stimuli_bundle,
-        )
+            verbose=False, stimuli_bundle=val_stimuli_bundle))
 
     def _make_init_population(bounds, popsize, rng, x0=None, jitter=0.05):
         L = np.array([lo for lo, hi in bounds])
@@ -1156,7 +1358,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         hi = np.minimum(Ub, v + pad*span)
         return list(zip(lo.tolist(), hi.tolist()))
 
-    def _run_cma_es(bounds, x0=None, maxiter=200, opts_extra=None, sigma_scale=None, loss_func=None, n_jobs=1, parallel_backend='loky'):
+    def _run_cma_es(bounds, x0=None, maxiter=200, opts_extra=None, sigma_scale=None, loss_func=None, n_jobs=1, parallel_backend='loky',
+                    early_stop_patience=None, early_stop_beat_loss=None, checkpoint_stage=None,
+                    val_eval=None):
         if cma is None:
             raise ImportError("pycma is required for CMA-ES global search.")
 
@@ -1170,6 +1374,13 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         eval_behavior = behavior
         eval_model_type = model_type
         eval_blocks_override = blocks_per_session_stage2 if loss_func == loss_active_stage2 else None
+        # Capture Stage-2 stim bundles for parallel workers
+        eval_stim_bundles = (
+            list(stage2_stimuli_bundles)
+            if (loss_func == loss_active_stage2 and stage2_stimuli_bundles)
+            else None
+        )
+        eval_stim_aggregate = stage2_stim_aggregate if eval_stim_bundles else "mean"
         
         # Capture variables needed for full_from_active function
         # These are needed because full_from_active is a closure that references local variables
@@ -1177,6 +1388,29 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         eval_idx = idx.copy() if hasattr(idx, 'copy') else idx
         eval_train_mask = train_mask.copy() if hasattr(train_mask, 'copy') else train_mask
         eval_log_zero = LOG_ZERO  # Capture LOG_ZERO constant
+
+        # Patience / quality gate: prefer explicit args, else opts_extra, else outer defaults.
+        opts_extra = dict(opts_extra) if opts_extra else {}
+        if early_stop_patience is None and 'early_stop_patience' in opts_extra:
+            early_stop_patience = opts_extra.pop('early_stop_patience')
+        elif 'early_stop_patience' in opts_extra:
+            opts_extra.pop('early_stop_patience')
+        if early_stop_beat_loss is None and 'early_stop_beat_loss' in opts_extra:
+            early_stop_beat_loss = opts_extra.pop('early_stop_beat_loss')
+        elif 'early_stop_beat_loss' in opts_extra:
+            opts_extra.pop('early_stop_beat_loss')
+        if early_stop_patience is None:
+            early_stop_patience = cma_early_stop_patience
+        if early_stop_beat_loss is None:
+            early_stop_beat_loss = cma_early_stop_beat_loss
+        if early_stop_patience is not None:
+            early_stop_patience = int(early_stop_patience)
+            if early_stop_patience <= 0:
+                early_stop_patience = None
+        if early_stop_beat_loss is not None:
+            early_stop_beat_loss = float(early_stop_beat_loss)
+            if not np.isfinite(early_stop_beat_loss):
+                early_stop_beat_loss = None
         
         # Set up parallelization if requested
         use_parallel = (n_jobs != 1) and (n_jobs is not None)
@@ -1276,15 +1510,82 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         x0_final = best_x if best_x is not None else x0
         es = cma.CMAEvolutionStrategy(x0_final.tolist(), sigma0, opts)
         
+        # Held-out validation selection/early-stop trackers. When val_eval is provided we
+        # select the incumbent with the lowest HELD-OUT loss (not train) and time the
+        # plateau early-stop off held-out, so the returned point is the one that generalizes.
+        use_val = val_eval is not None
+        best_val_f = np.inf
+        best_val_x = None
+        best_val_train = np.inf
+        val_plateau = 0
+        if use_val and best_x is not None and np.isfinite(best_f):
+            try:
+                v0 = float(val_eval(best_x))
+            except Exception:
+                v0 = np.inf
+            if np.isfinite(v0):
+                best_val_f, best_val_x, best_val_train = v0, best_x.copy(), float(best_f)
+                print(f"[CMA-ES/val] start: train={float(best_f):.6f} held-out={v0:.6f}")
+
+        def _ckpt_incumbent(gen_tag, x_act, train_loss, vloss=None, sel=None):
+            """Write rolling Stage-2 checkpoint for the current selection incumbent."""
+            if checkpoint_stage is None or x_act is None or not np.isfinite(train_loss):
+                return
+            try:
+                _save_rolling_checkpoint(
+                    full_from_active(x_act), float(train_loss),
+                    stage=checkpoint_stage, gen=int(gen_tag) if gen_tag is not None else None,
+                    train_mask=train_mask, random_state=random_state,
+                    val_loss=vloss, selection=sel,
+                )
+            except Exception:
+                pass
+
+        # Restart hole fix: persist the Stage-2 entry point immediately (before any
+        # generation improves), so a kill during early CMA can warm-restart.
+        if use_val and best_val_x is not None:
+            _ckpt_incumbent(-1, best_val_x, best_val_train, best_val_f, "held_out")
+        elif best_x is not None and np.isfinite(best_f):
+            _ckpt_incumbent(-1, best_x, best_f, None, "train")
+
         # Track consecutive generations with all infinite losses
         consecutive_inf_gens = 0
         max_inf_gens = 5  # If 5 consecutive generations all give infinite loss, increase sigma
         
-        # Track convergence: no improvement for N generations
+        # Track convergence: no improvement for N generations (sigma adaptation)
         no_improvement_count = 0
         no_improvement_threshold = 20  # If no improvement for 20 generations, reduce sigma for finer search
         last_improvement_gen = 0
         gen_count = 0
+        # Separate plateau counter for early-stop (not reset by sigma adaptation)
+        plateau_count = 0
+        early_stopped = False
+        early_stop_armed = False
+        if early_stop_patience is not None:
+            if early_stop_beat_loss is not None:
+                beat_note = (
+                    "train-of-held-out-incumbent" if use_val else "best_overall"
+                )
+                msg_pat = (
+                    f"[CMA-ES] early_stop_patience={early_stop_patience} "
+                    f"(armed only after {beat_note} < {early_stop_beat_loss:.6f})"
+                )
+            else:
+                msg_pat = (
+                    f"[CMA-ES] early_stop_patience={early_stop_patience} "
+                    f"(no beat-loss gate — can freeze a worse plateau)"
+                )
+            print(msg_pat)
+            try:
+                _log_info(msg_pat, {
+                    "early_stop_patience": int(early_stop_patience),
+                    "early_stop_beat_loss": (
+                        float(early_stop_beat_loss)
+                        if early_stop_beat_loss is not None else None
+                    ),
+                })
+            except Exception:
+                pass
 
         while not es.stop():
             samples = es.ask()
@@ -1294,32 +1595,76 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 cand_arr = np.minimum(Ub, np.maximum(Lb, cand_arr))
                 xs.append(cand_arr)
 
+            # Per-candidate bundle indices for sample aggregate (assigned in main so
+            # loky workers stay deterministic / picklable).
+            n_bundles = len(eval_stim_bundles) if eval_stim_bundles else 0
+            if (
+                n_bundles > 1
+                and eval_stim_aggregate == "sample"
+            ):
+                bundle_idxs = [
+                    int(_stage2_bundle_rng.randint(0, n_bundles)) for _ in xs
+                ]
+            else:
+                bundle_idxs = [None] * len(xs)
+
             # Evaluate candidates in parallel or sequentially
             if use_parallel:
-                def eval_single(x):
+                def eval_single(x, bidx=None):
                     try:
                         th_full = eval_theta_log0.copy()
                         th_full[eval_idx] = x
                         th_full[~eval_train_mask] = eval_log_zero
-                        val = float(_safe_loss_weights_v2(
-                            th_full, eval_mean_data, eval_prior_regions, eval_behavior,
-                            model_type=eval_model_type, plot=False, debug=False,
-                            blocks_per_session_override=eval_blocks_override,
-                            verbose=False
-                        ))
+                        if eval_stim_bundles:
+                            if eval_stim_aggregate == "mean" or bidx is None:
+                                vals_b = [
+                                    float(_safe_loss_weights_v2(
+                                        th_full, eval_mean_data, eval_prior_regions, eval_behavior,
+                                        model_type=eval_model_type, plot=False, debug=False,
+                                        blocks_per_session_override=eval_blocks_override,
+                                        verbose=False,
+                                        stimuli_bundle=bundle,
+                                    ))
+                                    for bundle in eval_stim_bundles
+                                ]
+                                val = float(np.mean(vals_b))
+                            else:
+                                bundle = eval_stim_bundles[int(bidx) % len(eval_stim_bundles)]
+                                val = float(_safe_loss_weights_v2(
+                                    th_full, eval_mean_data, eval_prior_regions, eval_behavior,
+                                    model_type=eval_model_type, plot=False, debug=False,
+                                    blocks_per_session_override=eval_blocks_override,
+                                    verbose=False,
+                                    stimuli_bundle=bundle,
+                                ))
+                        else:
+                            val = float(_safe_loss_weights_v2(
+                                th_full, eval_mean_data, eval_prior_regions, eval_behavior,
+                                model_type=eval_model_type, plot=False, debug=False,
+                                blocks_per_session_override=eval_blocks_override,
+                                verbose=False,
+                                stimuli_bundle=stage2_stimuli_bundle if eval_blocks_override is not None else None,
+                            ))
                     except Exception as e:
                         try:
                             val = float(eval_func(x, verbose=False))
                         except TypeError:
                             val = float(eval_func(x))
                     return val if np.isfinite(val) else np.inf
+                # Backend note (bench 2026-08-03l): loky beats threading ~5x here
+                # (7 vs 36 s/gen at bps=20, n_jobs=8) because the numba kernel does
+                # not release the GIL, so threads serialize CMA candidate evals.
+                # Keep parallel_backend='loky' (default) for Stage-2 CMA.
                 vals = Parallel(n_jobs=n_jobs_actual, backend=parallel_backend, batch_size='auto', verbose=0)(
-                    delayed(eval_single)(x) for x in xs
+                    delayed(eval_single)(x, bidx) for x, bidx in zip(xs, bundle_idxs)
                 )
             else:
                 vals = []
-                for cand_arr in xs:
-                    val = float(eval_func(cand_arr))
+                for cand_arr, bidx in zip(xs, bundle_idxs):
+                    try:
+                        val = float(eval_func(cand_arr, bundle_idx=bidx))
+                    except TypeError:
+                        val = float(eval_func(cand_arr))
                     if not np.isfinite(val):
                         val = np.inf
                     vals.append(val)
@@ -1348,8 +1693,32 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
 
             if improved:
                 no_improvement_count = 0
+                plateau_count = 0
+                # Score the new train-incumbent on the held-out bundle; keep the best-val one.
+                # Checkpoint the *selection* incumbent (held-out when active, else train).
+                if use_val and best_x is not None and np.isfinite(best_f):
+                    try:
+                        vloss = float(val_eval(best_x))
+                    except Exception:
+                        vloss = np.inf
+                    if np.isfinite(vloss) and vloss < best_val_f - 1e-9:
+                        best_val_f, best_val_x, best_val_train = vloss, best_x.copy(), float(best_f)
+                        val_plateau = 0
+                        print(f"[CMA-ES/val] gen {gen_count:03d}: NEW held-out best="
+                              f"{vloss:.6f} (train={float(best_f):.6f})")
+                        _ckpt_incumbent(gen_count, best_val_x, best_val_train, best_val_f, "held_out")
+                    else:
+                        val_plateau += 1
+                        print(f"[CMA-ES/val] gen {gen_count:03d}: train improved to "
+                              f"{float(best_f):.6f} but held-out={vloss:.6f} "
+                              f"(best held-out={best_val_f:.6f}, plateau={val_plateau})")
+                else:
+                    _ckpt_incumbent(gen_count, best_x, best_f, None, "train")
             else:
                 no_improvement_count += 1
+                plateau_count += 1
+                if use_val:
+                    val_plateau += 1
 
             # Adaptive sigma reduction: if no improvement for many generations, reduce sigma for finer search
             if no_improvement_count >= no_improvement_threshold and gen_count - last_improvement_gen >= no_improvement_threshold:
@@ -1359,7 +1728,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                     new_sigma = max(current_sigma * 0.7, min_sigma)
                     print(f"[CMA-ES] No improvement for {no_improvement_count} generations, reducing sigma from {current_sigma:.4f} to {new_sigma:.4f} for finer search")
                     es.sigma = new_sigma
-                    no_improvement_count = 0  # Reset counter after adjustment
+                    no_improvement_count = 0  # Reset sigma-adaptation counter only
 
             es.tell(xs, vals)
             # Lightweight per-generation logging (no per-candidate spam)
@@ -1386,23 +1755,116 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 # Never let logging crash the optimizer
                 pass
             gen_count += 1
+
+            # Arm early-stop only after beating the known-best gate (if set).
+            # With held-out selection, arm on the *train* loss of the held-out incumbent
+            # (same scale as beat_loss=0.4044); plateau itself is timed on held-out.
+            gate_metric = (
+                best_val_train if (use_val and np.isfinite(best_val_train)) else best_f
+            )
+            if (
+                early_stop_patience is not None
+                and early_stop_beat_loss is not None
+                and not early_stop_armed
+                and np.isfinite(gate_metric)
+                and gate_metric < early_stop_beat_loss
+            ):
+                early_stop_armed = True
+                msg_arm = (
+                    f"[CMA-ES] early-stop armed at gen {gen_count}: "
+                    f"{'train(held-out-incumbent)' if use_val else 'best_overall'}="
+                    f"{float(gate_metric):.6f} < beat_loss={early_stop_beat_loss:.6f}"
+                )
+                print(msg_arm)
+                try:
+                    _log_info(msg_arm, {
+                        "stage": "cma",
+                        "early_stop_armed": True,
+                        "gen": int(gen_count),
+                        "gate_metric": float(gate_metric),
+                        "best_overall": float(best_f),
+                        "best_val": float(best_val_f) if np.isfinite(best_val_f) else None,
+                        "beat_loss": float(early_stop_beat_loss),
+                        "use_val": bool(use_val),
+                    })
+                except Exception:
+                    pass
+
+            # Ungated mode (beat_loss=None): arm immediately so patience alone can stop.
+            if (
+                early_stop_patience is not None
+                and early_stop_beat_loss is None
+                and not early_stop_armed
+            ):
+                early_stop_armed = True
+
+            # Plateau early-stop: only after armed. With held-out selection the plateau
+            # is timed on held-out (val_plateau); otherwise on train best_overall.
+            plateau_for_stop = val_plateau if use_val else plateau_count
+            if (
+                early_stop_patience is not None
+                and early_stop_armed
+                and plateau_for_stop >= early_stop_patience
+            ):
+                early_stopped = True
+                msg_stop = (
+                    f"[CMA-ES] early stop at gen {gen_count}: no "
+                    f"{'held-out' if use_val else 'best_overall'} improvement "
+                    f"for {plateau_for_stop} gens (patience={early_stop_patience}"
+                    + (
+                        f", beat_loss={early_stop_beat_loss:.6f}"
+                        if early_stop_beat_loss is not None else ""
+                    )
+                    + f"); best_overall={float(best_f):.6f}"
+                    + (f", best_heldout={float(best_val_f):.6f}" if use_val else "")
+                )
+                print(msg_stop)
+                try:
+                    _log_info(msg_stop, {
+                        "stage": "cma",
+                        "early_stop": True,
+                        "gen": int(gen_count),
+                        "plateau_count": int(plateau_for_stop),
+                        "patience": int(early_stop_patience),
+                        "beat_loss": (
+                            float(early_stop_beat_loss)
+                            if early_stop_beat_loss is not None else None
+                        ),
+                        "best_overall": float(best_f),
+                        "best_val": float(best_val_f) if use_val and np.isfinite(best_val_f) else None,
+                        "use_val": bool(use_val),
+                    })
+                except Exception:
+                    pass
+                break
+
         result = es.result
-        if best_x is None:
+        # Prefer the held-out-selected incumbent when val_eval is active.
+        if use_val and best_val_x is not None and np.isfinite(best_val_f):
+            final_x = best_val_x
+            final_f = float(best_val_train)  # report train loss of the selected point
+            print(
+                f"[CMA-ES/val] selecting held-out best: held-out={float(best_val_f):.6f} "
+                f"(its train={float(best_val_train):.6f}; train-only best was {float(best_f):.6f})"
+            )
+        elif best_x is None:
             final_x = np.asarray(result.xbest, float)
+            final_f = float(result.fbest)
         else:
             final_x = best_x
+            final_f = best_f if np.isfinite(best_f) else float(result.fbest)
         final_x = np.minimum(Ub, np.maximum(Lb, final_x))
-        alt_f = float(result.fbest)
-        final_f = best_f if np.isfinite(best_f) else alt_f
         if not np.isfinite(final_f):
             final_f = np.inf
 
+        stop_msg = "early_stop_patience" if early_stopped else str(es.stop())
         return types.SimpleNamespace(
             x=np.asarray(final_x, float),
             fun=float(final_f),
             nit=es.countiter,
             nfev=es.countevals,
-            message=str(es.stop())
+            message=stop_msg,
+            val_fun=(float(best_val_f) if use_val and np.isfinite(best_val_f) else None),
         )
 
     def _effective_cma_popsize(bounds, opts_extra=None):
@@ -1490,7 +1952,6 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     else:
         if method_stage1 == "de":
             # Initialize global context for CPU-parallel DE worker
-            global _LOSS_ACTIVE_DE_CONTEXT
             _LOSS_ACTIVE_DE_CONTEXT = {
                 "theta_log0": theta_log0,
                 "idx": idx,
@@ -1586,11 +2047,11 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
 
     # threshold for deciding whether to enter Stage 2
     if L_threshold is None:
-    # if (resume_from in {"de1", "de2", "local"}) and (checkpoint_frozen_idx is not None):
-        # fi = list(checkpoint_frozen_idx)
-        ti = sum(train_mask)
-        # set L_threshold based on how many ids are frozen / their pattern
-        if len(ti) >= 10:
+        # Auto threshold from the number of *active* (unfrozen) params:
+        # near-full fits (>=10 active) start Stage 2 only from a good basin (0.8);
+        # heavily frozen fits get a looser gate (3.0).
+        n_active = int(np.sum(train_mask))
+        if n_active >= 10:
             L_threshold = 0.8
         else:
             L_threshold = 3.0
@@ -1611,84 +2072,125 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     except Exception:
         pass
 
-    # Borderline regime: run a bit more Stage 1 CMA (only if CMA was used)
-    if (L_threshold < stage1_loss < borderline_hi) and (method_stage1 == "cma") and (de1_maxiter > 0):
-        extra_iters = max(10, int(de1_maxiter // 2))
-        print(f"[Stage1 CMA-ES] Borderline loss {stage1_loss:.3f} ∈ ({L_threshold}, {borderline_hi}); "
-              f"extending Stage 1 by {extra_iters} iterations")
-        _log_info("[Stage1] extending CMA for borderline loss", {
-            "stage1_loss": float(stage1_loss),
-            "extra_iters": int(extra_iters)
-        })
-        de1_ext = _run_cma_es(
-            bounds=bnds_act,
-            x0=de1_x,
-            maxiter=extra_iters,
-            opts_extra=cma_opts_stage1,
-            n_jobs=n_jobs,
-            parallel_backend=parallel_backend,
-        )
-        stage1_loss_ext = float(de1_ext.fun)
-        print(f"[Stage1 CMA-ES] extended run loss={stage1_loss_ext:.6f} (prev={stage1_loss:.6f})")
-        _log_info("[Stage1] extended CMA result", {
-            "stage1_loss_prev": float(stage1_loss),
-            "stage1_loss_ext": float(stage1_loss_ext)
-        })
-        if stage1_loss_ext < stage1_loss:
-            de1 = de1_ext
-            de1_x = de1_ext.x
-            stage1_loss = stage1_loss_ext
-            _save_de_result(
-                de1,
-                stage="de1_ext",
-                tag="v2",
-                fit_idx=idx,
-                random_state=random_state,
-                algo="cma",
+    # Borderline regime: extend Stage 1 when loss ∈ [L_threshold, borderline_hi).
+    # CMA: more gens from current best. DE: another DE run seeded around current best.
+    # Also allow resume_from='de1' (Stage-1 ckpt restart) even when de1_maxiter was
+    # zeroed by the driver — otherwise a borderline DE ckpt would FIT_FAILED with no extend.
+    if (
+        L_threshold <= stage1_loss < borderline_hi
+        and resume_from in ("none", "de1")
+    ):
+        _base_iters = int(de1_maxiter) if int(de1_maxiter or 0) > 0 else 40
+        extra_iters = max(10, _base_iters // 2)
+        if method_stage1 == "cma":
+            print(f"[Stage1 CMA-ES] Borderline loss {stage1_loss:.3f} ∈ [{L_threshold}, {borderline_hi}); "
+                  f"extending Stage 1 by {extra_iters} iterations")
+            _log_info("[Stage1] extending CMA for borderline loss", {
+                "stage1_loss": float(stage1_loss),
+                "extra_iters": int(extra_iters)
+            })
+            de1_ext = _run_cma_es(
+                bounds=bnds_act,
+                x0=de1_x,
+                maxiter=extra_iters,
+                opts_extra=cma_opts_stage1,
+                n_jobs=n_jobs,
+                parallel_backend=parallel_backend,
             )
+            stage1_loss_ext = float(de1_ext.fun)
+            print(f"[Stage1 CMA-ES] extended run loss={stage1_loss_ext:.6f} (prev={stage1_loss:.6f})")
+            _log_info("[Stage1] extended CMA result", {
+                "stage1_loss_prev": float(stage1_loss),
+                "stage1_loss_ext": float(stage1_loss_ext)
+            })
+            if stage1_loss_ext < stage1_loss:
+                de1 = de1_ext
+                de1_x = de1_ext.x
+                stage1_loss = stage1_loss_ext
+                _save_de_result(
+                    de1,
+                    stage="de1_ext",
+                    tag="v2",
+                    fit_idx=idx,
+                    random_state=random_state,
+                    algo="cma",
+                )
+        elif method_stage1 == "de":
+            print(f"[Stage1 DE] Borderline loss {stage1_loss:.3f} ∈ [{L_threshold}, {borderline_hi}); "
+                  f"extending Stage 1 by {extra_iters} iterations around current best")
+            _log_info("[Stage1] extending DE for borderline loss", {
+                "stage1_loss": float(stage1_loss),
+                "extra_iters": int(extra_iters)
+            })
+            _LOSS_ACTIVE_DE_CONTEXT = {
+                "theta_log0": theta_log0,
+                "idx": idx,
+                "train_mask": train_mask,
+                "LOG_ZERO": LOG_ZERO,
+                "full_bounds": full_bounds,
+                "mean_data_results": mean_data_results,
+                "prior_regions": prior_regions,
+                "behavior": behavior,
+                "model_type": model_type,
+                "random_state": random_state,
+                "blocks_per_session_override": None,
+            }
+            init_pop_ext = _make_init_population(bnds_act, de_popsize, rng, de1_x, jitter_scale)
+            de1_ext = differential_evolution(
+                func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
+                maxiter=extra_iters, popsize=de_popsize, init=init_pop_ext,
+                polish=False, updating='deferred', workers=n_jobs, seed=int(random_state) + 17,
+            )
+            stage1_loss_ext = float(de1_ext.fun)
+            print(f"[Stage1 DE] extended run loss={stage1_loss_ext:.6f} (prev={stage1_loss:.6f})")
+            _log_info("[Stage1] extended DE result", {
+                "stage1_loss_prev": float(stage1_loss),
+                "stage1_loss_ext": float(stage1_loss_ext)
+            })
+            if stage1_loss_ext < stage1_loss:
+                de1 = de1_ext
+                de1_x = de1_ext.x
+                stage1_loss = stage1_loss_ext
+                _save_de_result(
+                    de1,
+                    stage="de1_ext",
+                    tag="v2",
+                    fit_idx=idx,
+                    random_state=random_state,
+                    algo="de",
+                )
+
+    def _failed_stage1_return(reason):
+        """Stage 1 did not reach L_threshold — do not enter Stage 2; mark fit failed."""
+        print(f"\n>>> FIT FAILED ({reason}): Stage 1 loss={stage1_loss:.3f} "
+              f"(L_threshold={L_threshold}, borderline_hi={borderline_hi}); skipping Stage 2 <<<")
+        _log_info("[Stage2] skipped — fit failed", {
+            "stage1_loss": float(stage1_loss),
+            "L_threshold": float(L_threshold),
+            "borderline_hi": float(borderline_hi),
+            "reason": reason,
+        })
+        theta_best_full = full_from_active(de1_x)
+        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
+         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
+        return {
+            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
+            'g': (g_i, g_m), 'd': (d_i, d_m),
+            'theta': (theta_c, theta_d),
+            'theta_log': theta_best_full, 'loss': float(stage1_loss),
+            'bounds_stage1': full_bounds, 'bounds_stage2': bnds_act,
+            'fit_idx': idx,
+            'run_dir': str(run_dir),
+            'log_path': str(log_path),
+            'fit_status': 'failed_stage1',
+            'fail_reason': reason,
+        }
 
     # Decide whether to proceed to Stage 2
     if stage1_loss >= borderline_hi:
-        # Clearly bad basin: discard Stage 2 and return Stage 1 result only
-        print(f"\n>>> Discarding Stage 2: Stage 1 loss={stage1_loss:.3f} ≥ {borderline_hi} <<<")
-        _log_info("[Stage2] skipped due to high Stage 1 loss", {
-            "stage1_loss": float(stage1_loss),
-            "borderline_hi": float(borderline_hi)
-        })
-        theta_best_full = full_from_active(de1_x)
-        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
-         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
-        return {
-            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
-            'g': (g_i, g_m), 'd': (d_i, d_m),
-            'theta': (theta_c, theta_d),
-            'theta_log': theta_best_full, 'loss': float(stage1_loss),
-            'bounds_stage1': full_bounds, 'bounds_stage2': bnds_act,
-            'fit_idx': idx,
-            'run_dir': str(run_dir),
-            'log_path': str(log_path),
-        }
+        return _failed_stage1_return("stage1_loss_ge_borderline_hi")
     elif stage1_loss >= L_threshold:
-        # Borderline but failed to improve enough with extra Stage 1
-        print(f"\n>>> Skipping Stage 2: Stage 1 loss={stage1_loss:.3f} ≥ {L_threshold} after extension <<<")
-        _log_info("[Stage2] skipped after borderline Stage 1", {
-            "stage1_loss": float(stage1_loss),
-            "L_threshold": float(L_threshold),
-            "borderline_hi": float(borderline_hi)
-        })
-        theta_best_full = full_from_active(de1_x)
-        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
-         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
-        return {
-            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
-            'g': (g_i, g_m), 'd': (d_i, d_m),
-            'theta': (theta_c, theta_d),
-            'theta_log': theta_best_full, 'loss': float(stage1_loss),
-            'bounds_stage1': full_bounds, 'bounds_stage2': bnds_act,
-            'fit_idx': idx,
-            'run_dir': str(run_dir),
-            'log_path': str(log_path),
-        }
+        return _failed_stage1_return("stage1_loss_ge_L_threshold_after_extend")
 
     # At this point, stage1_loss < L_threshold → proceed with Stage 2 as before
     # Skip Stage 2 entirely if de2_maxiter <= 0
@@ -1706,8 +2208,21 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         )
         cand2 = [de2_x] + elite + ([x0_act] if x0_act is not None else [])
     elif resume_from == "local":
+        # Skip Stage-2 CMA; re-enter polish / finalize from the resumed vector.
+        # Must define `de2` — polish reject / no-refine paths read de2.fun.
         de2_x = resume_x_act
+        _loss_s2 = (
+            loss_active_stage2 if blocks_per_session_stage2 is not None else loss_active
+        )
+        fun0 = (
+            float(resume_loss)
+            if resume_loss is not None and np.isfinite(resume_loss)
+            else float(_loss_s2(de2_x))
+        )
+        de2 = types.SimpleNamespace(x=np.asarray(de2_x, float), fun=fun0)
         cand2 = [de2_x] + elite + ([x0_act] if x0_act is not None else [])
+        print(f"\n>>> Resume: skipping Stage 2 CMA (resume_from=local); "
+              f"start loss≈{fun0:.6f} <<<")
     else:
         # Use Stage 2 loss wrapper if override is provided, otherwise use regular loss
         loss_func_stage2 = loss_active_stage2 if blocks_per_session_stage2 is not None else loss_active
@@ -1722,10 +2237,26 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         
         if method_stage2 == "de":
             init_pop2 = _make_init_population(bnds_shrunk, de_popsize, rng, focus_vec, jitter_scale)
+            # Stage-2 DE candidate evals run in parallel like Stage 1 (was workers=1,
+            # leaving cores idle for DE->DE schedules). loss_func_stage2 is a nested
+            # closure (not picklable for scipy's multiprocessing Pool), so parallelize
+            # via a threading map instead: no pickling, and the numba kernel releases
+            # the GIL. Falls back to serial when n_jobs == 1.
+            if n_jobs is not None and n_jobs != 1:
+                from joblib import Parallel, delayed
+
+                def _de2_worker_map(fn, it):
+                    return Parallel(n_jobs=n_jobs, backend="threading")(
+                        delayed(fn)(x) for x in it
+                    )
+
+                de2_workers = _de2_worker_map
+            else:
+                de2_workers = 1
             de2 = differential_evolution(
                 func=loss_func_stage2, bounds=bnds_shrunk, strategy='best1bin',
                 maxiter=de2_maxiter, popsize=de_popsize, init=init_pop2,
-                polish=False, updating='deferred', workers=1, seed=random_state
+                polish=False, updating='deferred', workers=de2_workers, seed=random_state
             )
         else:
             lam2 = _effective_cma_popsize(bnds_shrunk, cma_opts_stage2)
@@ -1741,6 +2272,10 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 loss_func=loss_func_stage2,
                 n_jobs=n_jobs,
                 parallel_backend=parallel_backend,
+                early_stop_patience=cma_early_stop_patience,
+                early_stop_beat_loss=cma_early_stop_beat_loss,
+                checkpoint_stage="stage2",  # rolling restart checkpoint per improved gen
+                val_eval=(_val_loss_active if val_stimuli_bundle is not None else None),
             )
         de2_x = de2.x
         _save_de_result(
@@ -1784,12 +2319,313 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         print("[Post-Stage2] Skipped (Stage 2 was skipped)")
         seeds = [de2_x]  # Use Stage 2 result (which is Stage 1 result) as the seed
         
-    if use_cma:
-        print(f"\n>>> Skipping local refinement (L-BFGS-B) - CMA-ES used in {'Stage 1' if method_stage1 == 'cma' else ''} {'Stage 2' if method_stage2 == 'cma' else ''} <<<")
-        # Use best from Stage 2 directly
+    # Loss used for local polish: Stage-2 protocol when available (bps override + stim bundles)
+    loss_func_local = (
+        loss_active_stage2 if blocks_per_session_stage2 is not None else loss_active
+    )
+
+    if use_cma and not local_refine_after_cma:
+        print(
+            f"\n>>> Skipping local polish - CMA-ES used in "
+            f"{'Stage 1' if method_stage1 == 'cma' else ''} "
+            f"{'Stage 2' if method_stage2 == 'cma' else ''} "
+            f"(local_refine_after_cma=False) <<<"
+        )
         best_xa = de2_x
         best_fun = float(de2.fun)
         best_loc = types.SimpleNamespace(x=de2_x, fun=best_fun)
+    elif use_cma and local_refine_after_cma:
+        # Post-CMA polish. Default: the focused "prior" set [6,8,10,11]
+        # (g_i, d_i, theta_c, theta_d) — closes CMA integrator-gain overshoot without
+        # touching W. Full-12 "active" refine (pass list(range(12))) reaches lower
+        # in-sample loss but overfits the training bundle (held-out worse; 2026-08-04g),
+        # so it is opt-in. Always intersected with train_mask.
+        default_refine = [6, 8, 10, 11]
+        refine_full = list(local_refine_idx) if local_refine_idx is not None else default_refine
+        refine_full = [int(i) for i in refine_full if 0 <= int(i) < D_full and train_mask[int(i)]]
+        if not refine_full:
+            print("[Local-after-CMA] no refine indices in train_mask; using CMA best")
+            best_xa = de2_x
+            best_fun = float(de2.fun)
+            best_loc = types.SimpleNamespace(x=de2_x, fun=best_fun)
+        else:
+            theta_cma = full_from_active(de2_x)
+            # Pre-polish held-out baseline (used to reject polish that overfits train).
+            val_before_polish = None
+            if val_stimuli_bundle is not None:
+                try:
+                    val_before_polish = float(_val_loss_active(de2_x))
+                    print(f"[Local-after-CMA/val] pre-polish held-out={val_before_polish:.6f}")
+                except Exception:
+                    val_before_polish = None
+            bnds_ref = [full_bounds[i] for i in refine_full]
+            L_ref = np.array([lo for lo, _ in bnds_ref], float)
+            U_ref = np.array([hi for _, hi in bnds_ref], float)
+            x0_ref = np.minimum(U_ref, np.maximum(L_ref, theta_cma[refine_full].astype(float)))
+
+            def _full_from_refine(x_ref):
+                th = theta_cma.copy()
+                th[refine_full] = x_ref
+                th[~train_mask] = LOG_ZERO
+                return th
+
+            import threading
+            _refine_lock = threading.Lock()
+            _refine_nfev = [0]
+            _refine_best = [np.inf]
+            _refine_best_x = [x0_ref.copy()]
+            _refine_t0 = time.perf_counter()
+
+            # Worker count for optional CMA-polish candidate evals (threading: closures
+            # holding a Lock are not loky-picklable; GIL-bound but quality > speed here).
+            if n_jobs == -1:
+                n_jobs_ref = int(os.environ.get("JOBLIB_N_JOBS") or (os.cpu_count() or 1))
+            else:
+                n_jobs_ref = max(1, int(n_jobs or 1))
+
+            def loss_refine(x_ref, verbose=False):
+                """Polish train loss = Stage-2 protocol (sample/mean over stage2 bundles)."""
+                th = _full_from_refine(x_ref)
+                val = float(loss_func_local(th[idx], verbose=verbose))
+                with _refine_lock:
+                    _refine_nfev[0] += 1
+                    nfev = _refine_nfev[0]
+                    if val < _refine_best[0]:
+                        _refine_best[0] = val
+                        _refine_best_x[0] = np.asarray(x_ref, float).copy()
+                    best = _refine_best[0]
+                if (nfev == 1) or (nfev % 5 == 0):
+                    print(
+                        f"[Local-after-CMA] nfev={nfev}  "
+                        f"last={val:.6f}  best={best:.6f}  "
+                        f"wall={time.perf_counter() - _refine_t0:.0f}s"
+                    )
+                return val
+
+            def loss_refine_bounded(x_ref):
+                xb = np.minimum(U_ref, np.maximum(L_ref, x_ref))
+                return loss_refine(xb, verbose=False)
+
+            class _LocalRefinePlateau(Exception):
+                pass
+
+            _stall = {"iters": 0, "best_at_cb": np.inf}
+            patience = int(local_refine_patience or 0)
+            max_wall = (float(local_refine_max_wall_s)
+                        if local_refine_max_wall_s is not None else None)
+
+            def _plateau_callback(xk):
+                """Powell/CMA shared: stop on train-loss plateau or wall cap."""
+                best = _refine_best[0]
+                if best < _stall["best_at_cb"] - 1e-5:
+                    _stall["best_at_cb"] = best
+                    _stall["iters"] = 0
+                else:
+                    _stall["iters"] += 1
+                elapsed = time.perf_counter() - _refine_t0
+                print(
+                    f"[Local-after-CMA] iter callback: best={best:.6f}  "
+                    f"stall_iters={_stall['iters']}/{patience or 'off'}  "
+                    f"wall={elapsed:.0f}s"
+                    + (f"/{max_wall:.0f}s" if max_wall is not None else "")
+                )
+                if patience > 0 and _stall["iters"] >= patience:
+                    raise _LocalRefinePlateau(
+                        f"no best-loss improve for {patience} polish iters"
+                    )
+                if max_wall is not None and elapsed >= max_wall:
+                    raise _LocalRefinePlateau(
+                        f"wall-clock cap reached ({elapsed:.0f}s >= {max_wall:.0f}s)"
+                    )
+
+            def _cma_polish_refine():
+                """Small-sigma CMA-ES restart on the refine dims (optional polish method)."""
+                import cma as _cma
+                span_ref = np.maximum(U_ref - L_ref, 1e-12)
+                sigma0 = float(local_refine_cma_sigma) * float(np.median(span_ref))
+                if not np.isfinite(sigma0) or sigma0 <= 0:
+                    sigma0 = 1e-2
+                popsize = max(6, 4 + int(3 * np.log(len(refine_full) + 1)))
+                es = _cma.CMAEvolutionStrategy(
+                    x0_ref.tolist(), sigma0,
+                    {"bounds": [L_ref.tolist(), U_ref.tolist()],
+                     "maxiter": int(local_maxiter), "seed": int(random_state),
+                     "verb_disp": 0, "popsize": popsize},
+                )
+                cma_stall, cma_best_at, gen = 0, np.inf, 0
+                while not es.stop():
+                    cands = [np.minimum(U_ref, np.maximum(L_ref, np.asarray(c, float)))
+                             for c in es.ask()]
+                    if n_jobs_ref > 1:
+                        from joblib import Parallel, delayed
+                        vals = Parallel(n_jobs=n_jobs_ref, backend="threading")(
+                            delayed(loss_refine)(c, False) for c in cands)
+                    else:
+                        vals = [loss_refine(c, False) for c in cands]
+                    vals = [float(v) if np.isfinite(v) else 1e11 for v in vals]
+                    es.tell([c.tolist() for c in cands], vals)
+                    gen += 1
+                    best = _refine_best[0]
+                    if best < cma_best_at - 1e-5:
+                        cma_best_at, cma_stall = best, 0
+                    else:
+                        cma_stall += 1
+                    elapsed = time.perf_counter() - _refine_t0
+                    print(f"[Local-after-CMA/cma] gen={gen} best={best:.6f} "
+                          f"stall={cma_stall}/{patience or 'off'} wall={elapsed:.0f}s")
+                    if patience > 0 and cma_stall >= patience:
+                        print("[Local-after-CMA/cma] early stop (plateau)")
+                        break
+                    if max_wall is not None and elapsed >= max_wall:
+                        print("[Local-after-CMA/cma] early stop (wall cap)")
+                        break
+                return types.SimpleNamespace(
+                    x=np.asarray(_refine_best_x[0], float), fun=float(_refine_best[0]),
+                    nit=gen, nfev=_refine_nfev[0], success=True, message="cma", jac=None)
+
+            g_i0, d_i0 = float(np.exp(theta_cma[6])), float(np.exp(theta_cma[8]))
+            method = str(local_refine_method or "powell").lower()
+            if method == "lbfgs":
+                print("[Local-after-CMA] WARNING: method='lbfgs' removed; using 'powell'")
+                method = "powell"
+            if stage2_stimuli_bundles and stage2_n_stim_seeds > 1:
+                n_stim_note = (
+                    f"train={stage2_stim_aggregate}({stage2_n_stim_seeds} stim)"
+                )
+            elif stage2_stimuli_bundles:
+                n_stim_note = "train=single"
+            else:
+                n_stim_note = "train=single"
+            val_note = (
+                f", held-out gate ON (seed={int(val_stim_seed)})"
+                if val_stimuli_bundle is not None else ", held-out gate off"
+            )
+            wall_note = (
+                f"max_wall={max_wall:.0f}s"
+                if max_wall is not None else "max_wall=off"
+            )
+            print(
+                f"\n>>> Local refine after CMA on idx={refine_full} "
+                f"(method={method}, g_i,d_i,θ start: g_i={g_i0:.4g}, d_i={d_i0:.4g}; "
+                f"maxiter={int(local_maxiter)}, n_jobs={n_jobs_ref}, "
+                f"patience={patience or 'off'}, {wall_note}, "
+                f"{n_stim_note}{val_note}, "
+                f"powell_fallback={'on' if local_refine_use_powell else 'off'}) <<<"
+            )
+            f0 = float(loss_refine(x0_ref, verbose=False))
+            _stall["best_at_cb"] = f0
+            print(f"[Local-after-CMA] start loss={f0:.6f}")
+
+            def _powell_fallback(base_x, cur_fun):
+                if (not local_refine_use_powell) or (float(cur_fun) < f0 - 1e-9):
+                    return None
+                print("[Local-after-CMA] no improvement — Powell fallback")
+                try:
+                    pt = minimize(loss_refine_bounded, np.asarray(base_x, float),
+                                  method="Powell", callback=_plateau_callback,
+                                  options={"maxiter": max(5, int(local_maxiter))})
+                except _LocalRefinePlateau as e:
+                    print(f"[Local-after-CMA] early stop (plateau): {e}")
+                    pt = types.SimpleNamespace(
+                        x=np.asarray(_refine_best_x[0], float), fun=float(_refine_best[0]),
+                        nit=None, nfev=_refine_nfev[0], success=False, message=str(e))
+                print(f"[Local-after-CMA] Powell: loss={pt.fun:.6g}, nit≈{getattr(pt,'nit',None)}")
+                return pt
+
+            if method == "powell":
+                try:
+                    loc_try = minimize(
+                        loss_refine_bounded, x0_ref, method="Powell",
+                        callback=_plateau_callback,
+                        options={"maxiter": int(local_maxiter)},
+                    )
+                except _LocalRefinePlateau as e:
+                    print(f"[Local-after-CMA] early stop (plateau): {e}")
+                    loc_try = types.SimpleNamespace(
+                        x=np.asarray(_refine_best_x[0], float), fun=float(_refine_best[0]),
+                        nit=None, nfev=_refine_nfev[0], success=False, message=str(e))
+                print(f"[Local-after-CMA] Powell: loss={loc_try.fun:.6g}, "
+                      f"nit≈{getattr(loc_try,'nit',None)}, nfev≈{_refine_nfev[0]}")
+            elif method == "cma":
+                loc_try = _cma_polish_refine()
+                print(f"[Local-after-CMA] CMA: loss={loc_try.fun:.6g}, "
+                      f"gens≈{getattr(loc_try,'nit',None)}, nfev≈{_refine_nfev[0]}")
+                pt = _powell_fallback(loc_try.x, loc_try.fun)
+                if pt is not None and float(pt.fun) <= float(loc_try.fun):
+                    loc_try = pt
+            else:
+                raise ValueError(
+                    f"unknown local_refine_method {method!r} (use 'powell' or 'cma')"
+                )
+
+            # Prefer tracked best (plateau stop can leave result.x suboptimal)
+            if float(_refine_best[0]) < float(loc_try.fun) - 1e-12:
+                loc_try = types.SimpleNamespace(
+                    x=np.asarray(_refine_best_x[0], float), fun=float(_refine_best[0]),
+                    nit=getattr(loc_try, "nit", None), nfev=getattr(loc_try, "nfev", None),
+                    success=getattr(loc_try, "success", None),
+                    message=getattr(loc_try, "message", None), jac=getattr(loc_try, "jac", None))
+
+            # The saved polish vector MUST live inside the box. Powell can return an
+            # out-of-bounds result.x whose reported .fun was actually measured at the *clipped*
+            # point (loss_refine_bounded clips before every eval), so saving the raw result.x
+            # gave params that re-score to the 1e11 penalty on reload — e.g. Powell/active
+            # escaped to W_mm=3.59, W_pp=0.0075 (2026-08-04g). Clip, then recompute the loss AT
+            # the clipped vector so reported == re-scored.
+            loc_x_clipped = np.minimum(U_ref, np.maximum(L_ref, np.asarray(loc_try.x, float)))
+            theta_best_loc = _full_from_refine(loc_x_clipped)
+            best_xa = theta_best_loc[idx]
+            best_fun = float(loss_func_local(theta_best_loc[idx]))
+            # Held-out gate: keep polish only if it does not worsen the held-out loss.
+            # Prevents the active-refine overfit mode (lower train, higher held-out).
+            if val_before_polish is not None:
+                try:
+                    val_after = float(_val_loss_active(best_xa))
+                except Exception:
+                    val_after = np.inf
+                if (not np.isfinite(val_after)) or (val_after > val_before_polish + 1e-6):
+                    print(
+                        f"[Local-after-CMA/val] REJECT polish: held-out "
+                        f"{val_before_polish:.6f} → {val_after:.6f} (worse); "
+                        f"keeping pre-polish CMA params (train {f0:.6f})"
+                    )
+                    best_xa = de2_x
+                    best_fun = float(de2.fun)
+                    theta_best_loc = full_from_active(de2_x)
+                else:
+                    print(
+                        f"[Local-after-CMA/val] KEEP polish: held-out "
+                        f"{val_before_polish:.6f} → {val_after:.6f}"
+                    )
+            best_loc = types.SimpleNamespace(x=best_xa, fun=best_fun, jac=getattr(loc_try, "jac", None))
+            g_i1, d_i1 = float(np.exp(theta_best_loc[6])), float(np.exp(theta_best_loc[8]))
+            print(
+                f"[Local-after-CMA] done: loss {f0:.6f} → {best_fun:.6f}; "
+                f"g_i {g_i0:.4g} → {g_i1:.4g}; d_i {d_i0:.4g} → {d_i1:.4g}; "
+                f"nfev_total≈{_refine_nfev[0]} wall={time.perf_counter() - _refine_t0:.0f}s"
+            )
+            try:
+                _log_info(
+                    f"[Local-after-CMA] g_i {g_i0:.6g}->{g_i1:.6g} loss {f0:.6f}->{best_fun:.6f}",
+                    {
+                        "stage": "local_after_cma",
+                        "method": method,
+                        "refine_idx": refine_full,
+                        "g_i_before": g_i0,
+                        "g_i_after": g_i1,
+                        "d_i_before": d_i0,
+                        "d_i_after": d_i1,
+                        "loss_before": f0,
+                        "loss_after": best_fun,
+                        "nfev": int(_refine_nfev[0]),
+                        "n_jobs": int(n_jobs_ref),
+                        "patience": int(patience),
+                        "stage2_n_stim_seeds": int(stage2_n_stim_seeds),
+                        "val_before": val_before_polish,
+                    },
+                )
+            except Exception:
+                pass
     else:
         from scipy.optimize import approx_fprime
 
@@ -1807,7 +2643,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 xm = x.copy(); xp = x.copy()
                 xm[i] = np.clip(x[i]-h, L[i]+1e-12, U[i]-1e-12)
                 xp[i] = np.clip(x[i]+h, L[i]+1e-12, U[i]-1e-12)
-                fm = loss_active(xm); fp = loss_active(xp)
+                fm = loss_func_local(xm); fp = loss_func_local(xp)
                 return (fp - fm) / (xp[i] - xm[i])
             try:
                 g = np.array([cdiff(i) for i in range(x.size)], float)
@@ -1843,7 +2679,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         def loss_active_bounded(x):
             # project into [L_act, U_act] before evaluating
             xb = np.minimum(U_act, np.maximum(L_act, x))
-            return loss_active(xb)
+            return loss_func_local(xb)
 
         for si, xa0 in enumerate(seeds, 1):
             x_curr = _project_in_bounds(np.asarray(xa0, float), bnds_local)
@@ -1859,7 +2695,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                                        options={'maxiter': int(local_maxiter)})
                 else:
                     loc_try = minimize(
-                        fun=loss_active, x0=x_curr, method='L-BFGS-B', bounds=bnds_local,
+                        fun=loss_func_local, x0=x_curr, method='L-BFGS-B', bounds=bnds_local,
                         options={'maxiter': int(local_maxiter), 'ftol': 1e-14, 'gtol': 1e-10, 'eps': 1e-6, 'maxls': 100}
                     )
 
@@ -1909,6 +2745,17 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
      g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
 
+    # Final rolling snapshot so --resume auto sees the polished / selected vector as latest.
+    try:
+        _save_rolling_checkpoint(
+            theta_best_full, float(best_fun),
+            stage="stage2", gen=None,
+            train_mask=train_mask, random_state=random_state,
+            selection="final",
+        )
+    except Exception:
+        pass
+
     return {
         'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
         'g': (g_i, g_m), 'd': (d_i, d_m),
@@ -1918,6 +2765,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         'fit_idx': idx,
         'run_dir': str(run_dir),
         'log_path': str(log_path),
+        'fit_status': 'ok',
     }
 
 
@@ -2150,87 +2998,91 @@ def fit_weights_local_refine(mean_data_results, prior_regions, behavior,
 
 
 
-# --------- USAGE -----------
-mean_data_results = np.load('mean_data_results.npy', allow_pickle=True).flat[0]
-behavior = np.load(Path(pth_res, 'behavior.npy'), allow_pickle=True).flat[0]
-prior_regions = {'int_regs_choice': int_regs, 'int_regs_stim': int_regs,
-        'move_regs_choice': move_regs, 'move_regs_stim': move_regs}
-prior_regions['stim_regs'] = ['VISpm', 'FRP', 'VISal']
+# --------- USAGE (guarded — importing this module must not start a fit) -----------
+if __name__ == '__main__':
+    mean_data_results = np.load('mean_data_results.npy', allow_pickle=True).flat[0]
+    behavior = np.load(Path(pth_res, 'behavior.npy'), allow_pickle=True).flat[0]
+    prior_regions = {'int_regs_choice': int_regs, 'int_regs_stim': int_regs,
+            'move_regs_choice': move_regs, 'move_regs_stim': move_regs}
+    prior_regions['stim_regs'] = ['VISpm', 'FRP', 'VISal']
 
-model_type = 'data'
-model_params['direct_offset'] = False
-blocks_per_session=5
+    model_type = 'data'
+    model_params['direct_offset'] = False
+    blocks_per_session=5
 
-dt = 2.0
-steps_before_obs = 500
-max_obs_per_trial = 1000
-max_steps_per_trial = steps_before_obs + max_obs_per_trial
-# Ensure model_params carries the updated dt-dependent values
-model_params['dt'] = dt
-from model_functions import _update_model_params_for_dt
-_update_model_params_for_dt(model_params, dt)
-
-
-loss_history.clear(); _eval_counter['n'] = 0
-
-frozen_idx = []           # indices to freeze
-train_mask = np.ones(12, dtype=bool)
-train_mask[frozen_idx] = False     # fit all except frozen ones
-disable_realtime_plot()
+    dt = 2.0
+    steps_before_obs = 500
+    max_obs_per_trial = 1000
+    max_steps_per_trial = steps_before_obs + max_obs_per_trial
+    # Ensure model_params carries the updated dt-dependent values
+    model_params['dt'] = dt
+    from model_functions import _update_model_params_for_dt
+    _update_model_params_for_dt(model_params, dt)
 
 
-# ---run the complete two-stage fitting process---
-CMA_stds2 = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 1.0, 1.0, 0.1, 0.1, 0.1, 0.1]
+    loss_history.clear(); _eval_counter['n'] = 0
 
-best_v2 = fit_weights_two_stage_v2(
-    mean_data_results, prior_regions, behavior, model_type=model_type,
-    random_state=56,
-    top_k=0,
-    # Stage 1: DE as global explorer (now parallelizable via n_jobs)
-    global_method_stage1='de',
-    de_popsize=8,
-    de1_maxiter=40,   # DE Stage 1 iterations
-    sobol_count=8, 
-    # Stage 2: CMA-ES for focused refinement
-    global_method_stage2='cma',
-    cma_sigma_scale=0.25,  # Base sigma scale (used by CMA-ES)
-    cma_sigma_scale_stage2=0.02,  # Smaller sigma for Stage 2 refinement
-    cma_opts_stage2={
-        'popsize': 16,
-        'tolfun': 5e-4,  # Tighter tolerance for better convergence
-        'tolx': 5e-5,  # Tighter tolerance for parameter convergence
-        'CMA_stds': list(np.array(CMA_stds2)[train_mask]),
-        'CMA_diagonal': False,  # Use full covariance matrix for better adaptation
-    },
-    de2_maxiter=40,   # CMA-ES Stage 2 iterations
-    train_mask=train_mask,
-#     resume_from='de2',
-#     resume_path=str(resume_path),
-#     resume_theta_log=theta_log_de1,
-    blocks_per_session_stage2=20,  # Increased to reduce loss noise
-    n_jobs=16,  # Parallel evaluation for DE and CMA-ES
-    parallel_backend='loky',
-    deterministic_stage2=True,
-    L_threshold=2,
-)
-
-print(best_v2)
+    frozen_idx = []           # indices to freeze
+    train_mask = np.ones(12, dtype=bool)
+    train_mask[frozen_idx] = False     # fit all except frozen ones
+    disable_realtime_plot()
 
 
-# ---restart from checkpoint for local refine run---
-### comment out if running complete two-stage fit process
-# fname = "weights_v2_loss0p7153_20251029-115424.npy"
-# resume_path = Path(save_dir) / "weights_run_20251028_180629" / fname
-# assert resume_path.exists(), f"Checkpoint not found: {resume_path}"
-# theta_log0 = np.load(resume_path, allow_pickle=True)
-# _ensure_run_dirs(run_dir=resume_path.parent)
+    # ---run the complete two-stage fitting process---
+    CMA_stds2 = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 1.0, 1.0, 0.1, 0.1, 0.1, 0.1]
 
-# res = fit_weights_local_refine(mean_data_results, prior_regions, behavior,
-#                                theta_log0=theta_log0,
-#                                model_type=model_type,
-#                                train_mask=train_mask)
+    best_v2 = fit_weights_two_stage_v2(
+        mean_data_results, prior_regions, behavior, model_type=model_type,
+        random_state=56,
+        top_k=0,
+        # Stage 1: DE as global explorer (now parallelizable via n_jobs)
+        global_method_stage1='de',
+        de_popsize=8,
+        de1_maxiter=40,   # DE Stage 1 iterations
+        sobol_count=8,
+        # Stage 2: CMA-ES for focused refinement
+        global_method_stage2='cma',
+        cma_sigma_scale=0.25,  # Base sigma scale (used by CMA-ES)
+        cma_sigma_scale_stage2=0.02,  # Smaller sigma for Stage 2 refinement
+        cma_opts_stage2={
+            'popsize': 16,
+            'tolfun': 5e-4,  # Tighter tolerance for better convergence
+            'tolx': 5e-5,  # Tighter tolerance for parameter convergence
+            'CMA_stds': list(np.array(CMA_stds2)[train_mask]),
+            'CMA_diagonal': False,  # Use full covariance matrix for better adaptation
+        },
+        de2_maxiter=40,   # CMA-ES Stage 2 iterations
+        train_mask=train_mask,
+    #     resume_from='de2',
+    #     resume_path=str(resume_path),
+    #     resume_theta_log=theta_log_de1,
+        blocks_per_session_stage2=20,  # Increased to reduce loss noise
+        n_jobs=16,  # Parallel evaluation for DE and CMA-ES
+        parallel_backend='loky',
+        deterministic_stage2=True,
+        L_threshold=2,
+        local_refine_after_cma=True,  # polish g_i/d_i/θ after CMA (Phase 2c)
+        local_refine_patience=8,      # stop polish only on plateau
+        # stage2_n_stim_seeds=3, stage2_stim_aggregate='sample',  # 1-of-3 per eval (~1× wall)
+    )
 
-# print("Optimized gains:", res["g"])
-# print("Other parameters (frozen):", res["W"], res["theta"])
-# print(res)
+    print(best_v2)
+
+
+    # ---restart from checkpoint for local refine run---
+    ### comment out if running complete two-stage fit process
+    # fname = "weights_v2_loss0p7153_20251029-115424.npy"
+    # resume_path = Path(save_dir) / "weights_run_20251028_180629" / fname
+    # assert resume_path.exists(), f"Checkpoint not found: {resume_path}"
+    # theta_log0 = np.load(resume_path, allow_pickle=True)
+    # _ensure_run_dirs(run_dir=resume_path.parent)
+
+    # res = fit_weights_local_refine(mean_data_results, prior_regions, behavior,
+    #                                theta_log0=theta_log0,
+    #                                model_type=model_type,
+    #                                train_mask=train_mask)
+
+    # print("Optimized gains:", res["g"])
+    # print("Other parameters (frozen):", res["W"], res["theta"])
+    # print(res)
 
