@@ -292,18 +292,29 @@ def main(argv=None):
         "stim_regs": ["VISpm", "FRP", "VISal"],
     }
 
-    # --- decide resume source: in-folder checkpoint (restart) > external warm start ---
+    # --- decide resume source ---
+    # Prefer a *good* in-folder checkpoint for kill/restart. Skip penalty dumps
+    # (loss>=1e10) so a failed smoke cannot block a later --resume-json warm start.
+    # With --force and an explicit --resume-json, always use the external JSON
+    # (ignores in-folder junk from prior runs in the same run dir).
     resume_meta_mp = {}
     resume_theta = None
     resume_loss = None
     resume_source = None
     resume_kind = None
-    if args.resume == "auto" and run_dir.exists():
+    prefer_external = bool(args.force and args.resume_json)
+    if args.resume == "auto" and run_dir.exists() and not prefer_external:
         found = _find_resume(run_dir)
         if found is not None:
-            resume_theta, resume_loss, resume_meta_mp, resume_source, resume_kind = found
-            print(f"[resume] latest checkpoint '{resume_source}' "
-                  f"(kind={resume_kind}) loss={resume_loss:.6f}")
+            th, loss, mp, src, kind = found
+            if np.isfinite(loss) and float(loss) < 1e10:
+                resume_theta, resume_loss, resume_meta_mp = th, loss, mp
+                resume_source, resume_kind = src, kind
+                print(f"[resume] latest checkpoint '{resume_source}' "
+                      f"(kind={resume_kind}) loss={resume_loss:.6f}")
+            else:
+                print(f"[resume] ignoring in-folder '{src}' (loss={loss:.6g} looks "
+                      f"like a penalty dump); will try --resume-json / cold start")
 
     if resume_theta is None and args.resume_json:
         meta = json.loads(Path(args.resume_json).read_text())
@@ -316,7 +327,9 @@ def main(argv=None):
         resume_meta_mp = meta.get("model_params", {})
         resume_source = f"external:{Path(args.resume_json).name}"
         resume_kind = "stage2"
-        print(f"[resume] external warm start '{resume_source}' loss={resume_loss:.6f}")
+        why = " (--force prefers external)" if prefer_external else ""
+        print(f"[resume] external warm start '{resume_source}' "
+              f"loss={resume_loss:.6f}{why}")
 
     if args.pipeline == "cma_only" and resume_theta is None:
         raise SystemExit("--pipeline cma_only needs a warm start (--resume-json) or an "
