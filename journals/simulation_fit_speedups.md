@@ -787,6 +787,25 @@ Bugs found and fixed in this check:
 
 No further blockers found for batch submit under sample aggregate + 6 h Slurm.
 
+### 2026-08-05c — ORCD smoke: Stage-1 DE spawn broke context (fixed)
+
+ORCD smoke (`fw_smoke`, Python 3.13) failed at Stage-1 DE:
+
+`RuntimeError: Stage 1 DE context not initialized`
+
+Cause: `differential_evolution(..., workers=n_jobs)` uses the default mp start
+method, which on this node is **spawn** (worker re-imported `model_functions` —
+second `ONE bypassed` line). Spawn does not inherit `_LOSS_ACTIVE_DE_CONTEXT`.
+(Journal 2026-08-04e had flagged this for mac; ORCD/3.13 hits it too.)
+
+**Fix:** `_make_de_workers` — explicit `multiprocessing.get_context('fork').Pool`
+with initializer that installs the context; pass `pool.map` as scipy `workers`.
+Used for Stage-1 DE and borderline DE extend. Look for log line
+`[Stage1 DE] parallel via fork Pool (n_jobs=16)`.
+
+Also: `sbatch --export=...,FREEZE=7,9,...` truncates at the comma → only `g_m`
+frozen. Worker now accepts `FREEZE=7|9`; smoke/submit should use `|` in export.
+
 ## Questions to be resolved
 
 1. ~~End-to-end or weights-only?~~ **Answered:** 0.404 baseline = **weights with retinal frozen**. 1–2 h target applies first to that setting; retinal is a separate budgeted stage.
