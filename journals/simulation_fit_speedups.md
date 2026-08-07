@@ -7,9 +7,9 @@
 
 **Out of scope:** prior-distance / recovery analysis, session-`session_dfs` cache, real-data insertion cache. Those speed up *analysis reuse*, not fitting.
 
-**Status:** Cluster-ready after 2026-08-05a pre-submit fixes. Backend **loky** + numba; ONE bypassed on fit path. Defaults: **`stage2_n_stim_seeds=3`** with **`stage2_stim_aggregate='sample'`** (1-of-3 per eval ≈1× wall, not mean≈3×); **`--val-seed`** held-out select + early-stop + polish gate; rolling ckpt stores **held-out incumbent**; resume = **latest mtime**; polish = **Powell/`prior`** with **`LOCAL_REFINE_MAX_WALL_S=1800`**. Slurm default **6 h**. Full snapshot in **"Current fitting pipeline (reference)"**.
+**Status:** Weights-only ORCD batch complete (2026-08-06a). **Joint** retinal + `g_s`/`d_s` + weights pipeline added (2026-08-06b): [`fit_joint.py`](../fit_joint.py) + `scripts/run_fit_joint*.sh`. Backend **loky** + numba; ONE bypassed. Weights-only defaults unchanged.
 
-Sources: 2026-07-20 Goal 2 (reframed); baselines 2026-08-03b–c; parity 2026-08-03d; profile 2026-08-03e; short-opt 2026-08-03f; early-stop 2026-08-03g–i; effectiveness 2026-08-03j–k; pipeline review + cluster 2026-08-03l–m; pre-submit 2026-08-05a.
+Sources: 2026-07-20 Goal 2 (reframed); baselines 2026-08-03b–c; …; ORCD batch 2026-08-06a; joint pipeline 2026-08-06b.
 
 **Agent constraints** (also `.cursor/rules/fit-speedups.mdc` + `AGENTS.md`):
 
@@ -806,9 +806,175 @@ Used for Stage-1 DE and borderline DE extend. Look for log line
 Also: `sbatch --export=...,FREEZE=7,9,...` truncates at the comma → only `g_m`
 frozen. Worker now accepts `FREEZE=7|9`; smoke/submit should use `|` in export.
 
+### 2026-08-05d — ORCD CMA smoke: data path + resume junk (fixed)
+
+After DE-fork fix, a tiny cold DE still hit loss 1e11 (expected for 2-iter budget).
+`cma_only` warm-start from the Nov 2025 `loss0p4044` JSON initially also scored
+1e11: missing `data_act_block_during{stim,choice}.npy` under
+`$ONE_CACHE_DIR/manifold/figs/` (driver symlinks into cwd). Copied those onto ORCD.
+
+Second failure mode: re-smoke with `FORCE=1` + same `OUT_TAG` resumed the previous
+run’s `weights_final_loss1e+11_*.json` instead of `RESUME_JSON`. **Fix** in
+`scripts/run_fit_weights.py`: ignore in-folder loss ≥ 1e10; with `--force` +
+`--resume-json`, prefer the external warm start.
+
+Clean smoke (`OUT_TAG=smoke_cma2`, `PIPELINE=cma_only`, seed 999, freeze `7|9`):
+external resume loss 0.404; Stage-2 CMA + Powell → final **0.616** (held-out ~0.579);
+loky `n_jobs=16` healthy; wall ~73 s for the tiny budget. Cleared for batch.
+
+### 2026-08-06a — ORCD batch results (2 variants × 5 seeds)
+
+Submitted on ORCD (`mit_normal`, 16 cpu / 40G / 6 h):
+
+```bash
+VARIANTS="none: gain:7|9" SEEDS="56 34 78 89 202" \
+  bash scripts/submit_fit_weights_sharded.sh
+```
+
+Pipeline: cold `de_cma_local`, retinal frozen, `stage2_stim_aggregate=sample`,
+held-out selection (`val_seed=seed+7777`), Powell polish on `prior` `[6,8,10,11]`,
+`LOCAL_REFINE_MAX_WALL_S=1800`, `beat_loss=0.4044`. Commit on node: `162ab73`.
+
+**Local mirror:**  
+`~/Downloads/ONE/openalyx.internationalbrainlab.org/models/remote/weights_run_fw_*`  
+(ORCD source: `…/ONE/alyx/models/weights_run_fw_*`). All **10/10** wrote `FIT_DONE`
+(finished ~2026-08-05 19:53–20:00 EDT — wall well under 6 h).
+
+Final train loss (selected / `weights_final_*.json`; beat bar **0.4044**):
+
+| Seed | `none` (free g_m,d_m) | `gain` (freeze g_m,d_m ≈0) |
+|------|----------------------:|---------------------------:|
+| 89 | 0.348 | **0.217** |
+| 78 | 0.808 | **0.249** |
+| 202 | **0.254** | 0.462 |
+| 34 | **0.275** | 0.873 |
+| 56 | 0.637 | 2.136 |
+
+**Beat bar (≤0.4044):** none — s202, s34, s89; gain — s89, s78.  
+**Misses:** none s56 / s78; gain s202 (close), s34, s56 (bad).
+
+Best-of-variant:
+
+| Variant | Best seed | Final loss | g_i | d_i | g_m | d_m |
+|---------|----------:|-----------:|----:|----:|----:|----:|
+| gain (mask 7,9) | 89 | 0.217 | 10.65 | 8.29 | ~0 | ~0 |
+| gain | 78 | 0.249 | 134.8 | 25.4 | ~0 | ~0 |
+| none | 202 | 0.254 | 10.12 | 0.75 | ~0 | ~0 |
+| none | 34 | 0.275 | 138.4 | 22.1 | ~4e-5 | ~3e-7 |
+
+**Takeaways**
+
+1. **Pipeline works on ORCD** — DE fork pool + loky CMA + Powell polish; all jobs
+   completed; several seeds **beat the Nov 2025 0.404 baseline** (best 0.217).
+2. **Seed variance is large** — same settings span ~0.22–2.1; multi-start was
+   necessary. Prefer finals from good seeds; do not average across failures.
+3. **Freezing g_m/d_m is fine when the seed is good** — best `none` fits also drive
+   g_m,d_m ≈ 0; the gain mask is not costly at the winners. Gain s56 (loss 2.14)
+   shows a frozen bad basin can still finish with `FIT_DONE` (Stage-1 cleared the
+   gate; scientific reject is by loss, not exit code).
+4. **Wall ≪ 6 h** on this campaign — consistent with the ~0.5–1.5 h estimate under
+   sample aggregate; time budget is comfortable for restarts / longer polish if needed.
+
+Next (optional): more seeds on weak cells; score winners on a common held-out stim
+bundle for apples-to-apples comparison. For nonzero `g_s`/`d_s`, use the **joint**
+pipeline (2026-08-06b) — do not freeze retinal while fitting sensory prior gains.
+
+### 2026-08-06b — Joint fit pipeline (retinal + g_s/d_s + weights)
+
+**Why joint:** `g_s`/`d_s` enter S via `tanh(a·(v + g_s·P)·S0 + d_s·P)` and change
+adaptation through `W_as·|S|`. Fitting retinal at `g_s=d_s=0` then freezing it
+misattributes prior-driven S structure. `g_s·P` also couples to weight params that
+shape P. So sensory-prior models need retinal ∪ `{g_s,d_s}` ∪ W/θ co-optimized.
+
+**Layout (21-d mixed; indices 0–11 match `fit_weights`):**
+
+| idx | params |
+|-----|--------|
+| 0–5 | `W_*` (log) |
+| 6–9 | `g_i,g_m,d_i,d_m` (log) |
+| 10–11 | `θ_c,θ_d` (log) |
+| 12–13 | **`g_s`,`d_s`** (log) |
+| 14–20 | retinal: `α_w` (log), **`β_w` asinh**, `α_d`,`β_d`,`τ_a`,`W_as`,`W_ss` (log) |
+
+Freeze fill uses `LOG_ZERO` except **`β_w→asinh(0)=0`** when frozen. Bounds detail: **2026-08-06c**.
+
+**Loss:** one `run_model` → `L = L_w(I/P/M traj + I/M prior) + L_S(S rms vs avg_mean_R)`.
+Equal-sum v1; components visible in verbose steps / checkpoints (`layout: joint21`).
+
+**Code:** [`fit_joint.py`](../fit_joint.py) (pack/unpack/loss/save);
+[`fit_weights.fit_weights_two_stage_v2`](../fit_weights.py) accepts optional hooks
+(`safe_loss_fn`, `bounds_fn`, `freeze_fill`, `loss_extra_kwargs`, …) so the 12-d
+weights path is unchanged. Drivers: `scripts/run_fit_joint.py`,
+`run_fit_joint_slurm.sh`, `submit_fit_joint_sharded.sh`. Run dirs:
+`weights_run_fj[_tag]_<mtype>_mask<slug>_s<seed>/`.
+
+**Defaults:** variant `sensory:6|7|8|9` (I/M prior gains frozen ≈0); `L_threshold=3.5`,
+`beat_loss=1.2` (joint scale); polish `prior` → `[6,8,10,11,12,13]` ∩ train_mask
+(with sensory freeze → θ + g_s/d_s). Needs `avg_mean_R.npy` (symlink from
+`paper-brain-wide-map/` or ONE figs).
+
+**ORCD smoke (tiny budget):**
+
+```bash
+cd ~/int-brain-lab/prior-mech-analysis
+# ensure avg_mean_R.npy + act_block + mean_data_results available
+sbatch --parsable --mem=40G --cpus-per-task=16 --time=1:00:00 \
+  --job-name=fj_smoke \
+  --export=ALL,MTYPE=sensory,FREEZE=6\|7\|8\|9,SEED=999,PIPELINE=de_cma_local,OUT_TAG=smoke,\
+DE1_MAXITER=2,DE2_MAXITER=3,POPSIZE=8,SOBOL_COUNT=4,PATIENCE=0,\
+LOCAL_REFINE_MAX_WALL_S=60,FORCE=1 \
+  scripts/run_fit_joint_slurm.sh
+```
+
+**Full sensory campaign:**
+
+```bash
+VARIANTS="sensory:6|7|8|9" SEEDS="56 34 78 89 202" \
+  bash scripts/submit_fit_joint_sharded.sh
+```
+
+### 2026-08-06c — Joint bounds audit; β_w asinh; freeze-clamp fix
+
+Reviewed native bounds and optimizer coords for all 21 dims (same bounds at
+Stage-1 DE, Stage-2 CMA, and polish — only active mask changes).
+
+**Native bounds** (`fit_joint.NATIVE_BOUNDS`; weights block = `fit_weights._log_bounds_weights_v2`):
+
+| idx | name | native | opt coord |
+|-----|------|--------|-----------|
+| 0–5 | W_* | as weights | log |
+| 6 | g_i | (0.1, 200) | log |
+| 7 | g_m | (1e-12, 200) | log |
+| 8 | d_i | (1e-5, 100) | log |
+| 9 | d_m | (1e-12, 100) | log |
+| 10–11 | θ | (0.1, 0.99999) | log |
+| 12 | g_s | (0.1, 200) like g_i | log |
+| 13 | d_s | (1e-5, 100) like d_i | log |
+| 14 | α_w | (1, 2.6) | log |
+| 15 | **β_w** | (−0.2, 0.2) | **asinh(β/0.05)** |
+| 16–20 | α_d, β_d, τ_a, W_as, W_ss | fit_retinal | log |
+
+**Bug fixed:** after `--freeze`, several paths clamped the *full* vector to bounds,
+so frozen `g_i` was pulled from `LOG_ZERO` up to Lb=`log(0.1)` → native 0.1 (not ~0).
+DE worker + resume now clamp **free dims only**. Freeze fill for β_w is asinh(0)=0.
+
+**β_w sampling:** was uniform in native [−0.2, 0.2] (unlike log-uniform on positives).
+Now optimizer stores `z=asinh(β/0.05)`; DE/Sobol/CMA sample uniformly in z → denser
+near β≈0, qualitatively matching log-magnitude exploration. CMA_stds[15]=0.1 (asinh).
+
+**Later todos (do not block smoke):**
+
+1. **Review loss functions and how real data is gathered for the losses** — joint
+   `L_w` (I/P/M traj + I/M prior vs `mean_data_results` / act_block) + `L_S`
+   (`compute_sse_stim_right` vs `avg_mean_R`); check alignment with paper targets,
+   windows, region lists, and whether S should also enter prior-distance terms.
+2. Joint λ (Lw vs LS) if one term dominates on ORCD smoke.
+
 ## Questions to be resolved
 
-1. ~~End-to-end or weights-only?~~ **Answered:** 0.404 baseline = **weights with retinal frozen**. 1–2 h target applies first to that setting; retinal is a separate budgeted stage.
+1. ~~End-to-end or weights-only?~~ **Answered:** 0.404 baseline = **weights with retinal frozen**. Joint path is for models with trainable `g_s`/`d_s`.
 2. ~~Acceptable search approximations (shorter trials / fewer blocks)?~~ **Answered: no.** Keep production trial length and `bps`; do not reuse stim across generations. Unused-output skipping OK if loss-identical. Sampling 1-of-K *fixed* bundles per eval is allowed (not cross-generation stim reuse of one batch for a whole gen).
 3. ~~Target machine for the 1–2 h claim?~~ **ORCD `mit_normal`**, 16 cpu; laptop benches for s/gen.
-4. **When to unfreeze retinal?** Only if weights-only refits leave unacceptable S residuals vs `avg_mean_R`.
+4. ~~When to unfreeze retinal?~~ **Answered for sensory prior:** co-optimize retinal with `g_s`/`d_s` via joint pipeline (2026-08-06b). Weights-only (`g_s=d_s=0`) may keep retinal frozen.
+5. **Joint λ (Lw vs LS):** equal-sum v1 — retune if one term dominates on ORCD smoke.
+6. **Later:** review loss functions + real-data gathering for Lw / LS (see 2026-08-06c).

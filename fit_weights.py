@@ -838,6 +838,7 @@ def _loss_active_de_worker(x_act):
     """
     Top-level DE worker for Stage 1 (CPU-parallel, quiet).
     Uses a module-level context set inside fit_weights_two_stage_v2.
+    Supports joint fits via ctx['safe_loss_fn'] / freeze_fill / loss_extra_kwargs.
     """
     if _LOSS_ACTIVE_DE_CONTEXT is None:
         raise RuntimeError("Stage 1 DE context not initialized")
@@ -850,6 +851,9 @@ def _loss_active_de_worker(x_act):
     train_mask = ctx["train_mask"]
     LOG_ZERO = ctx["LOG_ZERO"]
     full_bounds = ctx["full_bounds"]
+    freeze_fill = ctx.get("freeze_fill")
+    safe_loss_fn = ctx.get("safe_loss_fn") or _safe_loss_weights_v2
+    loss_extra = ctx.get("loss_extra_kwargs") or {}
 
     mean_data_results = ctx["mean_data_results"]
     prior_regions = ctx["prior_regions"]
@@ -861,15 +865,20 @@ def _loss_active_de_worker(x_act):
     # Reconstruct full log-parameter vector from active coordinates
     th_full = theta_log0.copy()
     th_full[idx] = x_act
-    th_full[~train_mask] = LOG_ZERO
+    if freeze_fill is not None:
+        th_full[~train_mask] = np.asarray(freeze_fill, float)[~train_mask]
+    else:
+        th_full[~train_mask] = LOG_ZERO
 
-    # Clamp to full bounds for safety
+    # Clamp FREE dims only. Clamping frozen dims would pull LOG_ZERO up to the
+    # lower bound (e.g. g_i → 0.1 instead of ~0), breaking --freeze semantics.
     Lb_full = np.array([L for (L, U) in full_bounds], float)
     Ub_full = np.array([U for (L, U) in full_bounds], float)
-    th_full = np.minimum(Ub_full, np.maximum(Lb_full, th_full))
+    th_full[train_mask] = np.minimum(
+        Ub_full[train_mask], np.maximum(Lb_full[train_mask], th_full[train_mask]))
 
     # Quiet evaluation: no printing/logging, no tracked counters
-    return _safe_loss_weights_v2(
+    return safe_loss_fn(
         th_full,
         mean_data_results,
         prior_regions,
@@ -880,6 +889,7 @@ def _loss_active_de_worker(x_act):
         blocks_per_session_override=blocks_per_session_override,
         verbose=False,
         stim_rng=None,
+        **loss_extra,
     )
 
 
@@ -1031,11 +1041,26 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              local_refine_cma_sigma=0.05,
                              stage2_n_stim_seeds=3,
                              stage2_stim_aggregate="sample",
-                             val_stim_seed=None):
+                             val_stim_seed=None,
+                             # Optional vector API hooks (joint fit / alternate layouts)
+                             safe_loss_fn=None,
+                             tracked_loss_fn=None,
+                             bounds_fn=None,
+                             unpack_result_fn=None,
+                             save_params_fn=None,
+                             save_rolling_fn=None,
+                             freeze_fill=None,
+                             loss_extra_kwargs=None,
+                             default_refine_idx=None):
     """
     Two-stage optimizer with configurable global search (DE or CMA-ES) + local polish.
     Supports freezing a subset of parameters via `train_mask` (bool array or index list).
     When `train_mask` is None, behavior is identical to the unfrozen version.
+
+    Optional hooks (all default to the 12-d weights path):
+      safe_loss_fn / tracked_loss_fn / bounds_fn / unpack_result_fn /
+      save_params_fn / save_rolling_fn / freeze_fill (per-dim frozen values) /
+      loss_extra_kwargs (merged into every loss call) / default_refine_idx.
     Masked parameters are fixed to zero (log-space value LOG_ZERO ≈ -30).
 
     Args:
@@ -1194,8 +1219,47 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             "blocks_per_session_stage2 required; disabling held-out selection."
         )
 
-    full_bounds = _log_bounds_weights_v2()
+    # --- vector API (defaults = 12-d weights; joint fit passes hooks) ---
+    LOG_ZERO = -30.0  # log-space value corresponding to ~0 actual
+    _safe = safe_loss_fn or _safe_loss_weights_v2
+    _tracked = tracked_loss_fn or _tracked_loss_weights_v2
+    _bounds = bounds_fn or _log_bounds_weights_v2
+    _save_p = save_params_fn or _save_params_v2
+    _save_r = save_rolling_fn or _save_rolling_checkpoint
+    _loss_extra = dict(loss_extra_kwargs or {})
+    _freeze_fill = (None if freeze_fill is None else np.asarray(freeze_fill, float))
+
+    def _call_safe(th, *a, **kw):
+        merged = {**_loss_extra, **kw}
+        return _safe(th, *a, **merged)
+
+    def _call_tracked(th, *a, **kw):
+        merged = {**_loss_extra, **kw}
+        return _tracked(th, *a, **merged)
+
+    def _apply_frozen(th, mask):
+        th = np.asarray(th, float).copy()
+        if _freeze_fill is not None:
+            th[~mask] = _freeze_fill[~mask]
+        else:
+            th[~mask] = LOG_ZERO
+        return th
+
+    def _unpack_result(th):
+        if unpack_result_fn is not None:
+            return unpack_result_fn(th)
+        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
+         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(th)
+        return {
+            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
+            'g': (g_i, g_m), 'd': (d_i, d_m),
+            'theta': (theta_c, theta_d),
+        }
+
+    full_bounds = _bounds()
     D_full = len(full_bounds)
+    if _freeze_fill is not None and len(_freeze_fill) != D_full:
+        raise ValueError(f"freeze_fill length {len(_freeze_fill)} != D_full={D_full}")
 
     def _normalize_global_method(name, default="de"):
         nm = (name or default)
@@ -1246,17 +1310,22 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             raise ValueError(f"train_mask has length {tm_arr.shape[0]} but expected {D_full}.")
         init_mask = tm_arr
 
-    LOG_ZERO = -30.0  # log-space value corresponding to ~0 actual
-
     # --- initial vector (full) ---
     if theta_log0 is None and init_params is not None:
-        theta_log0 = pack_theta_log_weights_v2(init_params)
+        # Prefer pack via bounds length: joint callers pass theta_log0 directly.
+        if D_full == 12:
+            theta_log0 = pack_theta_log_weights_v2(init_params)
+        else:
+            raise ValueError("init_params packing for non-12-d layouts requires theta_log0")
     elif theta_log0 is None and init_params is None:
         # only print the random-init message when not resuming from a checkpoint
         if (resume_from is None) or (str(resume_from).lower() == "none"):
             print("[Init] No init_params or theta_log0 provided — initializing free params within bounds; "
                   "masked params fixed to ~0 actual.")
-        theta_log0 = np.full(D_full, LOG_ZERO, dtype=float)
+        if _freeze_fill is not None:
+            theta_log0 = _freeze_fill.copy()
+        else:
+            theta_log0 = np.full(D_full, LOG_ZERO, dtype=float)
         if init_mask.any():
             Lb_free = np.array([full_bounds[i][0] for i in range(D_full) if init_mask[i]], float)
             Ub_free = np.array([full_bounds[i][1] for i in range(D_full) if init_mask[i]], float)
@@ -1264,11 +1333,11 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     else:
         theta_log0 = np.asarray(theta_log0, float)
 
-    # clamp to bounds for free params only; keep masked fixed at LOG_ZERO
+    # clamp to bounds for free params only; keep masked fixed at freeze fill / LOG_ZERO
     Lb_full = np.array([L for (L, U) in full_bounds], float)
     Ub_full = np.array([U for (L, U) in full_bounds], float)
     theta_log0[init_mask] = np.minimum(Ub_full[init_mask], np.maximum(Lb_full[init_mask], theta_log0[init_mask]))
-    theta_log0[~init_mask] = LOG_ZERO
+    theta_log0 = _apply_frozen(theta_log0, init_mask)
 
     # --- build train mask (active parameters) ---
     if train_mask is None:
@@ -1284,19 +1353,15 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
 
     idx = np.where(train_mask)[0]
     if idx.size == 0:
-        loss = _tracked_loss_weights_v2(theta_log0, mean_data_results, prior_regions, behavior,
-                                        model_type=model_type, plot=plot,
-                                        stim_rng=None)
-        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
-         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_log0)
-        return {
-            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
-            'g': (g_i, g_m), 'd': (d_i, d_m),
-            'theta': (theta_c, theta_d),
+        loss = _call_tracked(theta_log0, mean_data_results, prior_regions, behavior,
+                             model_type=model_type, plot=plot, stim_rng=None)
+        out = _unpack_result(theta_log0)
+        out.update({
             'theta_log': theta_log0.copy(), 'loss': float(loss),
             'bounds_stage1': full_bounds, 'bounds_stage2': [full_bounds[i] for i in idx],
-            'fit_idx': idx
-        }
+            'fit_idx': idx,
+        })
+        return out
 
     bnds_act = [full_bounds[i] for i in idx]
     Lb_act = np.array([L for (L, U) in bnds_act], float)
@@ -1305,8 +1370,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     def full_from_active(x_act):
         th = theta_log0.copy()
         th[idx] = x_act
-        th[~train_mask] = LOG_ZERO
-        return th
+        return _apply_frozen(th, train_mask)
 
     def loss_active(x_act, verbose=None):
         """
@@ -1319,10 +1383,10 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         th_full = full_from_active(x_act)
         # Use verbose parameter if provided, otherwise default to True for backward compatibility
         verbose_val = verbose if verbose is not None else True
-        return _tracked_loss_weights_v2(th_full, mean_data_results, prior_regions, behavior,
-                                    model_type=model_type, plot=False, verbose=verbose_val,
-                                    random_state=random_state, train_mask=train_mask,
-                                    stim_rng=None)
+        return _call_tracked(th_full, mean_data_results, prior_regions, behavior,
+                             model_type=model_type, plot=False, verbose=verbose_val,
+                             random_state=random_state, train_mask=train_mask,
+                             stim_rng=None)
     
     # Stage 2 loss wrapper with blocks_per_session override and optional deterministic seeding
     def loss_active_stage2(x_act, verbose=None, bundle_idx=None):
@@ -1341,7 +1405,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         verbose_val = verbose if verbose is not None else True
 
         def _one(bundle):
-            return float(_tracked_loss_weights_v2(
+            return float(_call_tracked(
                 th_full, mean_data_results, prior_regions, behavior,
                 model_type=model_type, plot=False, verbose=verbose_val,
                 random_state=random_state, train_mask=train_mask,
@@ -1366,7 +1430,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         if val_stimuli_bundle is None:
             return np.inf
         th_full = full_from_active(x_act)
-        return float(_safe_loss_weights_v2(
+        return float(_call_safe(
             th_full, mean_data_results, prior_regions, behavior,
             model_type=model_type, plot=False, debug=False,
             blocks_per_session_override=blocks_per_session_stage2,
@@ -1433,6 +1497,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         eval_idx = idx.copy() if hasattr(idx, 'copy') else idx
         eval_train_mask = train_mask.copy() if hasattr(train_mask, 'copy') else train_mask
         eval_log_zero = LOG_ZERO  # Capture LOG_ZERO constant
+        eval_freeze_fill = (None if _freeze_fill is None else _freeze_fill.copy())
+        eval_safe = _safe
+        eval_loss_extra = dict(_loss_extra)
 
         # Patience / quality gate: prefer explicit args, else opts_extra, else outer defaults.
         opts_extra = dict(opts_extra) if opts_extra else {}
@@ -1577,7 +1644,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             if checkpoint_stage is None or x_act is None or not np.isfinite(train_loss):
                 return
             try:
-                _save_rolling_checkpoint(
+                _save_r(
                     full_from_active(x_act), float(train_loss),
                     stage=checkpoint_stage, gen=int(gen_tag) if gen_tag is not None else None,
                     train_mask=train_mask, random_state=random_state,
@@ -1659,36 +1726,37 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                     try:
                         th_full = eval_theta_log0.copy()
                         th_full[eval_idx] = x
-                        th_full[~eval_train_mask] = eval_log_zero
+                        if eval_freeze_fill is not None:
+                            th_full[~eval_train_mask] = eval_freeze_fill[~eval_train_mask]
+                        else:
+                            th_full[~eval_train_mask] = eval_log_zero
+                        _kw = dict(
+                            model_type=eval_model_type, plot=False, debug=False,
+                            blocks_per_session_override=eval_blocks_override,
+                            verbose=False, **eval_loss_extra,
+                        )
                         if eval_stim_bundles:
                             if eval_stim_aggregate == "mean" or bidx is None:
                                 vals_b = [
-                                    float(_safe_loss_weights_v2(
+                                    float(eval_safe(
                                         th_full, eval_mean_data, eval_prior_regions, eval_behavior,
-                                        model_type=eval_model_type, plot=False, debug=False,
-                                        blocks_per_session_override=eval_blocks_override,
-                                        verbose=False,
-                                        stimuli_bundle=bundle,
+                                        stimuli_bundle=bundle, **_kw,
                                     ))
                                     for bundle in eval_stim_bundles
                                 ]
                                 val = float(np.mean(vals_b))
                             else:
                                 bundle = eval_stim_bundles[int(bidx) % len(eval_stim_bundles)]
-                                val = float(_safe_loss_weights_v2(
+                                val = float(eval_safe(
                                     th_full, eval_mean_data, eval_prior_regions, eval_behavior,
-                                    model_type=eval_model_type, plot=False, debug=False,
-                                    blocks_per_session_override=eval_blocks_override,
-                                    verbose=False,
-                                    stimuli_bundle=bundle,
+                                    stimuli_bundle=bundle, **_kw,
                                 ))
                         else:
-                            val = float(_safe_loss_weights_v2(
+                            val = float(eval_safe(
                                 th_full, eval_mean_data, eval_prior_regions, eval_behavior,
-                                model_type=eval_model_type, plot=False, debug=False,
-                                blocks_per_session_override=eval_blocks_override,
-                                verbose=False,
-                                stimuli_bundle=stage2_stimuli_bundle if eval_blocks_override is not None else None,
+                                stimuli_bundle=(stage2_stimuli_bundle
+                                                if eval_blocks_override is not None else None),
+                                **_kw,
                             ))
                     except Exception as e:
                         try:
@@ -1974,8 +2042,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         resume_theta_log = np.asarray(resume_theta_log, float)
         resume_theta_log[train_mask] = np.minimum(Ub_full[train_mask],
                                                   np.maximum(Lb_full[train_mask], resume_theta_log[train_mask]))
-        resume_theta_log[~train_mask] = LOG_ZERO
-        resume_theta_log = np.minimum(Ub_full, np.maximum(Lb_full, resume_theta_log))
+        resume_theta_log = _apply_frozen(resume_theta_log, train_mask)
+        # Do NOT clamp frozen dims (see DE worker comment on LOG_ZERO vs Lb).
         # use resumed full vector as the starting point so full_from_active really
         # reflects the checkpoint instead of any earlier random initialization
         theta_log0 = resume_theta_log.copy()
@@ -2009,6 +2077,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "model_type": model_type,
                 "random_state": random_state,
                 "blocks_per_session_override": None,
+                "safe_loss_fn": _safe,
+                "freeze_fill": _freeze_fill,
+                "loss_extra_kwargs": _loss_extra,
             }
             print(f"[Stage1 DE] (active dims={len(idx)}) pop={de_popsize*len(idx)}, iters={de1_maxiter}")
             init_pop1 = _make_init_population(bnds_act, de_popsize, rng, x0_act, jitter_scale)
@@ -2065,11 +2136,13 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         print(f"[Post-Stage1] scoring candidates (active): {len(cand1)}")
 
         from joblib import Parallel, delayed
+        _post1_fulls = [full_from_active(th) for th in cand1]
         vals1 = Parallel(n_jobs=n_jobs, backend=parallel_backend)(
-            delayed(_safe_loss_weights_v2)(
-                full_from_active(th), mean_data_results, prior_regions, behavior,
-                model_type=model_type, plot=False, debug=False, verbose=False, stim_rng=None
-            ) for th in cand1
+            delayed(_safe)(
+                th, mean_data_results, prior_regions, behavior,
+                model_type=model_type, plot=False, debug=False, verbose=False, stim_rng=None,
+                **_loss_extra,
+            ) for th in _post1_fulls
         )
         k_elite = max(5, int(np.ceil(elite_frac * len(cand1))))
         elite = [cand1[i] for i in np.argsort(vals1)[:k_elite]]
@@ -2183,6 +2256,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "model_type": model_type,
                 "random_state": random_state,
                 "blocks_per_session_override": None,
+                "safe_loss_fn": _safe,
+                "freeze_fill": _freeze_fill,
+                "loss_extra_kwargs": _loss_extra,
             }
             init_pop_ext = _make_init_population(bnds_act, de_popsize, rng, de1_x, jitter_scale)
             de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
@@ -2225,12 +2301,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             "reason": reason,
         })
         theta_best_full = full_from_active(de1_x)
-        (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
-         g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
-        return {
-            'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
-            'g': (g_i, g_m), 'd': (d_i, d_m),
-            'theta': (theta_c, theta_d),
+        out = _unpack_result(theta_best_full)
+        out.update({
             'theta_log': theta_best_full, 'loss': float(stage1_loss),
             'bounds_stage1': full_bounds, 'bounds_stage2': bnds_act,
             'fit_idx': idx,
@@ -2238,7 +2310,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             'log_path': str(log_path),
             'fit_status': 'failed_stage1',
             'fail_reason': reason,
-        }
+        })
+        return out
 
     # Decide whether to proceed to Stage 2
     if stage1_loss >= borderline_hi:
@@ -2394,7 +2467,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         # touching W. Full-12 "active" refine (pass list(range(12))) reaches lower
         # in-sample loss but overfits the training bundle (held-out worse; 2026-08-04g),
         # so it is opt-in. Always intersected with train_mask.
-        default_refine = [6, 8, 10, 11]
+        default_refine = (list(default_refine_idx)
+                          if default_refine_idx is not None else [6, 8, 10, 11])
         refine_full = list(local_refine_idx) if local_refine_idx is not None else default_refine
         refine_full = [int(i) for i in refine_full if 0 <= int(i) < D_full and train_mask[int(i)]]
         if not refine_full:
@@ -2420,8 +2494,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             def _full_from_refine(x_ref):
                 th = theta_cma.copy()
                 th[refine_full] = x_ref
-                th[~train_mask] = LOG_ZERO
-                return th
+                return _apply_frozen(th, train_mask)
 
             import threading
             _refine_lock = threading.Lock()
@@ -2708,8 +2781,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         def _penalty_coords_active(x, step=1e-6):
             """Indices in active space where f(x + step*e_i) triggers penalty."""
             hits = []
-            f_pen = lambda v: _tracked_loss_weights_v2(full_from_active(v), mean_data_results, prior_regions, behavior,
-                                                       model_type=model_type, plot=False, debug=False)
+            f_pen = lambda v: _call_tracked(full_from_active(v), mean_data_results, prior_regions, behavior,
+                                            model_type=model_type, plot=False, debug=False)
             for i in range(x.size):
                 xv = x.copy(); xv[i] = xv[i] + step
                 fv = f_pen(xv)
@@ -2790,18 +2863,17 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         # save full-vector snapshot with gradient if available
         grad_vec = getattr(best_loc, "jac", None)
         theta_best_full_tmp = full_from_active(best_xa)
-        _save_params_v2(theta_best_full_tmp, best_fun, tag="2stagelocalrefine",
-                        random_state=random_state, train_mask=train_mask, grad=grad_vec)
+        _save_p(theta_best_full_tmp, best_fun, tag="2stagelocalrefine",
+                random_state=random_state, train_mask=train_mask, grad=grad_vec)
     except Exception:
         pass
     
     theta_best_full = full_from_active(best_xa)
-    (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
-     g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_best_full)
+    out = _unpack_result(theta_best_full)
 
     # Final rolling snapshot so --resume auto sees the polished / selected vector as latest.
     try:
-        _save_rolling_checkpoint(
+        _save_r(
             theta_best_full, float(best_fun),
             stage="stage2", gen=None,
             train_mask=train_mask, random_state=random_state,
@@ -2810,17 +2882,15 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     except Exception:
         pass
 
-    return {
-        'W': (W_ii, W_pp, W_mm, W_is, W_pi, W_mi),
-        'g': (g_i, g_m), 'd': (d_i, d_m),
-        'theta': (theta_c, theta_d),
+    out.update({
         'theta_log': theta_best_full, 'loss': best_fun,
         'bounds_stage1': full_bounds, 'bounds_stage2': bnds_shrunk,
         'fit_idx': idx,
         'run_dir': str(run_dir),
         'log_path': str(log_path),
         'fit_status': 'ok',
-    }
+    })
+    return out
 
 
 
