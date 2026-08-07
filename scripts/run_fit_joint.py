@@ -186,7 +186,9 @@ def build_args(argv=None):
     ap.add_argument("--resume", choices=["auto", "off"], default="auto")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--backend", choices=["loky", "threading"], default="loky")
-    ap.add_argument("--bps-stage1", type=int, default=5)
+    ap.add_argument("--bps-stage1", type=int, default=15,
+                    help="blocks/session in Stage 1 (default 15; higher than weights-only "
+                         "5 so S side×contrast buckets usually reach ≥10 trials)")
     ap.add_argument("--bps-stage2", type=int, default=20)
     ap.add_argument("--de1-maxiter", type=int, default=40)
     ap.add_argument("--de2-maxiter", type=int, default=40)
