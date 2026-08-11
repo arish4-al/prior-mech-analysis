@@ -1051,7 +1051,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              save_rolling_fn=None,
                              freeze_fill=None,
                              loss_extra_kwargs=None,
-                             default_refine_idx=None):
+                             default_refine_idx=None,
+                             de1_inf_restarts=2):
     """
     Two-stage optimizer with configurable global search (DE or CMA-ES) + local polish.
     Supports freezing a subset of parameters via `train_mask` (bool array or index list).
@@ -1064,6 +1065,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     Masked parameters are fixed to zero (log-space value LOG_ZERO ≈ -30).
 
     Args:
+        de1_inf_restarts: If Stage-1 DE ends at penalty loss (>=1e11; often NaN S
+                          buckets / invalid sims), re-run DE this many times with a
+                          fresh uniform population (basin jump). Default 2; 0 disables.
         global_method_stage1: 'de' (default) or 'cma'/'cmaes' to select Stage 1 global optimizer.
         global_method_stage2: Override for Stage 2; defaults to `global_method_stage1`.
         cma_sigma_scale: Fraction of (hi-lo) span used as default sigma for CMA-ES Stage 1.
@@ -2081,27 +2085,56 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "freeze_fill": _freeze_fill,
                 "loss_extra_kwargs": _loss_extra,
             }
-            print(f"[Stage1 DE] (active dims={len(idx)}) pop={de_popsize*len(idx)}, iters={de1_maxiter}")
-            init_pop1 = _make_init_population(bnds_act, de_popsize, rng, x0_act, jitter_scale)
-            # Insert DE iteration counter and callback
-            _de_iter = {'i': 0}
-            def _de_callback(xk, convergence):
-                _de_iter['i'] += 1
-                try:
-                    _log_info(f"[DE1] iter={_de_iter['i']}")
-                except Exception:
-                    pass
-                return False
-            de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
-            try:
-                de1 = differential_evolution(
-                    func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
-                    maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
-                    polish=False, updating='deferred', workers=de_workers,
-                    seed=random_state, callback=_de_callback,
+            # Flat all-penalty landscape (NaN S buckets → 1e11) makes scipy DE
+            # converge after ~1 generation. Restart with a fresh uniform pop.
+            n_de_attempts = 1 + max(0, int(de1_inf_restarts))
+            de1 = None
+            for _de_attempt in range(n_de_attempts):
+                _seed_att = int(random_state) + 10007 * int(_de_attempt)
+                _rng_att = np.random.RandomState(_seed_att)
+                _x0_att = x0_act if _de_attempt == 0 else None  # restarts: no x0 inject
+                _tag = (f" basin-jump restart {_de_attempt}/{n_de_attempts - 1}"
+                        if _de_attempt else "")
+                print(
+                    f"[Stage1 DE] (active dims={len(idx)}) pop={de_popsize*len(idx)}, "
+                    f"iters={de1_maxiter}{_tag}"
                 )
-            finally:
-                de_cleanup()
+                init_pop1 = _make_init_population(
+                    bnds_act, de_popsize, _rng_att, _x0_att, jitter_scale)
+                _de_iter = {'i': 0}
+
+                def _de_callback(xk, convergence):
+                    _de_iter['i'] += 1
+                    try:
+                        _log_info(f"[DE1] iter={_de_iter['i']}")
+                    except Exception:
+                        pass
+                    return False
+
+                de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
+                try:
+                    de1 = differential_evolution(
+                        func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
+                        maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
+                        polish=False, updating='deferred', workers=de_workers,
+                        seed=_seed_att, callback=_de_callback,
+                    )
+                finally:
+                    de_cleanup()
+                _best = float(de1.fun) if de1 is not None else 1e11
+                if np.isfinite(_best) and _best < 1e11:
+                    if _de_attempt:
+                        print(
+                            f"[Stage1 DE] basin-jump recovered finite loss={_best:.6f} "
+                            f"(attempt {_de_attempt + 1}/{n_de_attempts})"
+                        )
+                    break
+                if _de_attempt + 1 < n_de_attempts:
+                    print(
+                        f"[Stage1 DE] best still penalty ({_best:.3g}); "
+                        f"jumping to a new random basin "
+                        f"({_de_attempt + 1}/{n_de_attempts - 1} restarts left)"
+                    )
         else:
             lam = _effective_cma_popsize(bnds_act, cma_opts_stage1)
             print(f"[Stage1 CMA-ES] (active dims={len(idx)}) lambda={lam}, iters={de1_maxiter}, n_jobs={n_jobs}")
