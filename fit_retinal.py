@@ -500,10 +500,11 @@ def _safe_loss_retinal(theta_log, *args, **kwargs):
 
 
 def _tracked_loss_retinal(theta_log, mean_data_results, prior_regions, behavior, debug=False,
-                          model_type="data", plot=False, verbose=True, SAVE_THRESH_V2=0.85,
+                          model_type="data", plot=False, verbose=True, SAVE_THRESH_V2=None,
                           random_state=None, train_mask=None, blocks_per_session_override=None,
                           stim_rng=None, stimuli_bundle=None, avg_data_R=None, s_baseline=0.0,
                           fit_mode="rms"):
+    """Tracked L_S. No opportunistic mid-run JSON dumps (use stage rolling / finals)."""
     loss = _safe_loss_retinal(
         theta_log, mean_data_results, prior_regions, behavior,
         model_type=model_type, plot=False, debug=debug,
@@ -541,13 +542,6 @@ def _tracked_loss_retinal(theta_log, mean_data_results, prior_regions, behavior,
                 f"⟨t_sim⟩={diag['t_sim']/calls:.4f}s  "
                 f"⟨t_loss⟩={diag['t_loss']/max(1, diag['evals']):.4f}s"
             )
-    if (np.isfinite(loss) and loss < SAVE_THRESH_V2) or (step % 1000 == 0):
-        try:
-            _save_params_retinal(theta_log, loss, tag="v2",
-                                 random_state=random_state, train_mask=train_mask)
-        except Exception as e:
-            if verbose:
-                print(f"[warn] save failed: {e}")
     return float(loss)
 
 
@@ -560,6 +554,8 @@ def fit_retinal_two_stage(avg_data_R, mean_data_results=None, prior_regions=None
     if avg_data_R is None:
         raise ValueError("fit_retinal_two_stage requires avg_data_R")
     apply_retinal_stage_a_defaults(model_params)
+    # α_w/β_w bake into create_stimuli — rebuild from fixed seeds each Stage-2 eval.
+    kwargs.setdefault("stage2_restim", True)
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_retinal,
