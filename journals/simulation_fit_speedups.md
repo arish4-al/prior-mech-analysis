@@ -908,10 +908,17 @@ weights path is unchanged. Drivers: `scripts/run_fit_joint.py`,
 `run_fit_joint_slurm.sh`, `submit_fit_joint_sharded.sh`. Run dirs:
 `weights_run_fj[_tag]_<mtype>_mask<slug>_s<seed>/`.
 
-**Defaults:** variant `sensory:6|7|8|9` (I/M prior gains frozen ≈0); `L_threshold=3.5`,
-`beat_loss=1.2` (joint scale); polish `prior` → `[6,8,10,11,12,13]` ∩ train_mask
-(with sensory freeze → θ + g_s/d_s). Needs `avg_mean_R.npy` (symlink from
-`paper-brain-wide-map/` or ONE figs).
+**Defaults:** variant `sensory:6|7|8|9` (I/M prior gains frozen ≈0); `L_threshold=10`,
+`bps_stage1=10` (match `fit_retinal`), `beat_loss=1.2` (joint scale); polish `prior`
+→ `[6,8,10,11,12,13]` ∩ train_mask (with sensory freeze → θ + g_s/d_s). Needs
+`avg_mean_R.npy` (symlink from `paper-brain-wide-map/` or ONE figs).
+
+### 2026-08-10 — Joint Stage-1 gate / bps defaults
+
+Cold joint DE often finished with finite best ~5–6 or all-`1e11` under the
+weights-era `L_threshold=3.5` (borderline_hi=3.9), so Stage 1 aborted even when
+`fit_retinal`-scale S averaging at `bps=10` was fine. Raised defaults to
+`BPS_STAGE1=10`, `L_THRESHOLD=10` in `run_fit_joint.py` / slurm / submit scripts.
 
 **ORCD smoke (tiny budget):**
 
