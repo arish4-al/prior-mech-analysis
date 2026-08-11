@@ -496,6 +496,10 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
     """
     if avg_data_R is None:
         raise ValueError("fit_joint_two_stage requires avg_data_R")
+    # stage2_restim: rebuild stim from fixed seeds each eval so free α_w/β_w
+    # (baked into create_stimuli) actually move during CMA/polish. Callers may
+    # override via kwargs.
+    kwargs.setdefault("stage2_restim", True)
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_joint,

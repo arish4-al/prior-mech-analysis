@@ -372,11 +372,13 @@ def load_theta_from_ckpt(path):
     else:
         raise ValueError("Unsupported checkpoint type (use .npy or .json).")
 
-    # Infer D_full (12-d weights vs 21-d joint). Do not assume weights-only.
+    # Infer D_full (12-d weights / 21-d joint / 7-d retinal). Do not assume weights-only.
     D_full = len(_log_bounds_weights_v2())
     if meta is not None:
         if meta.get("layout") == "joint21":
             D_full = 21
+        elif meta.get("layout") == "retinal7":
+            D_full = 7
         elif meta.get("train_mask") is not None:
             D_full = int(len(meta["train_mask"]))
         else:
@@ -389,7 +391,7 @@ def load_theta_from_ckpt(path):
                 idxs.extend(int(i) for i in frozen_meta)
             if idxs:
                 D_full = max(D_full, max(idxs) + 1)
-            elif theta_active.size in (12, 21):
+            elif theta_active.size in (7, 12, 21):
                 # Full-vector dumps (no mask) — trust length.
                 D_full = int(theta_active.size)
 
@@ -419,9 +421,11 @@ def load_theta_from_ckpt(path):
     # --- reconstruct full vector if we know which coords were active ---
     if (train_mask is not None) and (theta_active.size == int(np.count_nonzero(train_mask))):
         theta_full = np.full(D_full, LOG_ZERO, dtype=float)
-        # Joint β_w (idx 15) uses asinh coords; LOG_ZERO would be wrong if frozen.
+        # β_w uses asinh coords; LOG_ZERO would be wrong if frozen.
         if D_full == 21 and (not train_mask[15]):
             theta_full[15] = 0.0  # asinh(0)
+        elif D_full == 7 and (not train_mask[1]):
+            theta_full[1] = 0.0  # asinh(0)
         theta_full[train_mask] = theta_active
         return theta_full, train_mask
 
@@ -1065,6 +1069,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              stage2_n_stim_seeds=3,
                              stage2_stim_aggregate="sample",
                              val_stim_seed=None,
+                             stage2_restim=False,
                              # Optional vector API hooks (joint fit / alternate layouts)
                              safe_loss_fn=None,
                              tracked_loss_fn=None,
@@ -1108,8 +1113,12 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             - 'threading': Threads in one process (used for CMA-polish candidate evals,
                       which close over non-picklable nested closures).
         deterministic_stage2: If True and blocks_per_session_stage2 is not None, Stage 2
-                              builds fixed stim bundle(s) once and reuses them (see
-                              stage2_stim_aggregate).
+                              uses fixed stim seed(s) (see stage2_stim_aggregate).
+        stage2_restim: If True with deterministic_stage2, do **not** cache stimulus
+                       arrays — each eval rebuilds stim via RandomState(seed) under the
+                       *current* model_params. Required when α_w/β_w are free (they bake
+                       into create_stimuli); joint Stage B should set this. Weights-only
+                       (retinal frozen) can keep False and reuse cached bundles.
         cma_early_stop_patience: After early-stop is armed, stop CMA when best_overall has not
                                  improved for this many gens. Default 8. Set 0 to disable.
         cma_early_stop_beat_loss: Quality gate for early-stop. Plateau stopping is armed only once
@@ -1180,43 +1189,60 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     if agg not in {"sample", "mean"}:
         raise ValueError("stage2_stim_aggregate must be 'sample' or 'mean'")
     stage2_stim_aggregate = agg
+    stage2_restim = bool(stage2_restim)
     if deterministic_stage2 and (blocks_per_session_stage2 is not None):
         stage2_stim_seed = int(random_state) + 100003  # any deterministic offset is fine
     else:
         stage2_stim_seed = None
 
+    # Fixed Stage-2 stim identities: either cached bundles (retinal frozen) or
+    # integer seeds rebuilt every eval (α_w/β_w free — joint / retinal Stage B).
+    stage2_stim_seeds_list = []
     stage2_stimuli_bundles = []
     if stage2_stim_seed is not None and blocks_per_session_stage2 is not None:
-        for k in range(stage2_n_stim_seeds):
-            stage2_stimuli_bundles.append(
-                build_stimuli_bundle(
-                    blocks_per_session_stage2,
-                    stim_rng=np.random.RandomState(stage2_stim_seed + k),
-                    **model_params,
+        stage2_stim_seeds_list = [
+            int(stage2_stim_seed + k) for k in range(stage2_n_stim_seeds)
+        ]
+        if not stage2_restim:
+            for seed_k in stage2_stim_seeds_list:
+                stage2_stimuli_bundles.append(
+                    build_stimuli_bundle(
+                        blocks_per_session_stage2,
+                        stim_rng=np.random.RandomState(seed_k),
+                        **model_params,
+                    )
                 )
-            )
     # Back-compat single-bundle name used by older call sites / workers
     stage2_stimuli_bundle = stage2_stimuli_bundles[0] if stage2_stimuli_bundles else None
-    # Dedicated RNG for per-eval bundle sampling (independent of optimizer rng draws).
+    # Dedicated RNG for per-eval bundle/seed sampling (independent of optimizer rng draws).
     _stage2_bundle_rng = np.random.RandomState(int(random_state) + 900001)
-    if stage2_n_stim_seeds > 1 and stage2_stimuli_bundles:
+    _stage2_has_fixed_stim = bool(stage2_stim_seeds_list)
+    if stage2_n_stim_seeds > 1 and _stage2_has_fixed_stim:
         # Logical seeds match CLI --seed / --val-seed: RandomState(seed + 100003 + k).
         log_lo, log_hi = int(random_state), int(random_state) + stage2_n_stim_seeds - 1
+        mode = "seed-restim" if stage2_restim else "cached bundles"
         if stage2_stim_aggregate == "sample":
             print(
-                f"[Stage2] train loss samples 1 of {stage2_n_stim_seeds} fixed stim bundles "
-                f"per eval (~1× wall; logical seeds {log_lo}..{log_hi})"
+                f"[Stage2] train loss samples 1 of {stage2_n_stim_seeds} fixed stim "
+                f"({mode}) per eval (~1× wall; logical seeds {log_lo}..{log_hi})"
             )
         else:
             print(
-                f"[Stage2] averaging loss over {stage2_n_stim_seeds} stim bundles "
-                f"(~{stage2_n_stim_seeds}× wall; logical seeds {log_lo}..{log_hi})"
+                f"[Stage2] averaging loss over {stage2_n_stim_seeds} stim "
+                f"({mode}; ~{stage2_n_stim_seeds}× wall; logical seeds {log_lo}..{log_hi})"
             )
+    elif _stage2_has_fixed_stim and stage2_restim:
+        print(
+            f"[Stage2] seed-restim ON: rebuild stim each eval from "
+            f"RandomState({stage2_stim_seeds_list[0]}) under current model_params "
+            f"(α_w/β_w free-safe)"
+        )
 
-    # Held-out validation bundle (never trained on): built like the bench eval so that
-    # `--val-seed S` here matches `--eval-seed S` in bench_fit_local_after_cma.py.
-    # Requires deterministic Stage-2 (fixed train bundles) so "held-out" is well-defined.
+    # Held-out validation (never trained on). Requires deterministic Stage-2 so
+    # "held-out" is a fixed seed identity. With stage2_restim, rebuild from that
+    # seed each val eval (so α_w/β_w updates apply); else cache one bundle.
     val_stimuli_bundle = None
+    val_stim_rng_seed = None  # RandomState seed for restim held-out
     if (
         val_stim_seed is not None
         and blocks_per_session_stage2 is not None
@@ -1230,21 +1256,32 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 f"training seed range {sorted(train_seed_range)}; disabling held-out selection."
             )
         else:
-            val_stimuli_bundle = build_stimuli_bundle(
-                blocks_per_session_stage2,
-                stim_rng=np.random.RandomState(val_seed_int + 100003),
-                **model_params,
-            )
-            print(
-                f"[Stage2/val] held-out selection ON: val bundle from seed "
-                f"{val_seed_int} (RandomState {val_seed_int + 100003}); CMA selects + "
-                f"early-stops on held-out loss, polish kept only if held-out not worsened."
-            )
+            val_stim_rng_seed = int(val_seed_int + 100003)
+            if stage2_restim:
+                print(
+                    f"[Stage2/val] held-out selection ON (seed-restim): val seed "
+                    f"{val_seed_int} (RandomState {val_stim_rng_seed}); CMA selects + "
+                    f"early-stops on held-out loss, polish kept only if held-out not worsened."
+                )
+            else:
+                val_stimuli_bundle = build_stimuli_bundle(
+                    blocks_per_session_stage2,
+                    stim_rng=np.random.RandomState(val_stim_rng_seed),
+                    **model_params,
+                )
+                print(
+                    f"[Stage2/val] held-out selection ON: val bundle from seed "
+                    f"{val_seed_int} (RandomState {val_stim_rng_seed}); CMA selects + "
+                    f"early-stops on held-out loss, polish kept only if held-out not worsened."
+                )
     elif val_stim_seed is not None:
         print(
             "[Stage2/val] WARNING: val_stim_seed set but deterministic_stage2 + "
             "blocks_per_session_stage2 required; disabling held-out selection."
         )
+    val_held_out_on = (val_stimuli_bundle is not None) or (
+        stage2_restim and val_stim_rng_seed is not None
+    )
 
     # --- vector API (defaults = 12-d weights; joint fit passes hooks) ---
     LOG_ZERO = -30.0  # log-space value corresponding to ~0 actual
@@ -1419,10 +1456,12 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     def loss_active_stage2(x_act, verbose=None, bundle_idx=None):
         """
         Loss function for Stage 2 with blocks_per_session override.
-        When deterministic_stage2 is True, uses prebuilt stim bundle(s):
-          - aggregate='sample' (default): one randomly chosen bundle per eval (~1× wall)
-          - aggregate='mean': mean over all bundles (~K× wall)
-        Pass bundle_idx to force a specific bundle (used by parallel CMA workers).
+        When deterministic_stage2 is True:
+          - stage2_restim=False: reuse prebuilt stim bundle(s)
+          - stage2_restim=True: rebuild stim each eval from fixed seed(s) (α_w/β_w free-safe)
+          - aggregate='sample' (default): one randomly chosen identity per eval (~1× wall)
+          - aggregate='mean': mean over all identities (~K× wall)
+        Pass bundle_idx to force a specific identity (used by parallel CMA workers).
         
         Args:
             verbose: If None, uses default (True). Set to False to disable printing
@@ -1431,7 +1470,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         th_full = full_from_active(x_act)
         verbose_val = verbose if verbose is not None else True
 
-        def _one(bundle):
+        def _one_bundle(bundle):
             return float(_call_tracked(
                 th_full, mean_data_results, prior_regions, behavior,
                 model_type=model_type, plot=False, verbose=verbose_val,
@@ -1441,22 +1480,49 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 stimuli_bundle=bundle,
             ))
 
+        def _one_seed(seed):
+            return float(_call_tracked(
+                th_full, mean_data_results, prior_regions, behavior,
+                model_type=model_type, plot=False, verbose=verbose_val,
+                random_state=random_state, train_mask=train_mask,
+                blocks_per_session_override=blocks_per_session_stage2,
+                stim_rng=np.random.RandomState(int(seed)),
+                stimuli_bundle=None,
+            ))
+
+        if stage2_restim and stage2_stim_seeds_list:
+            n_b = len(stage2_stim_seeds_list)
+            if n_b == 1 or stage2_stim_aggregate == "mean":
+                return float(np.mean([_one_seed(s) for s in stage2_stim_seeds_list]))
+            if bundle_idx is not None:
+                return _one_seed(stage2_stim_seeds_list[int(bundle_idx) % n_b])
+            return _one_seed(
+                stage2_stim_seeds_list[int(_stage2_bundle_rng.randint(0, n_b))]
+            )
         if not stage2_stimuli_bundles:
-            return _one(None)
+            return _one_bundle(None)
         n_b = len(stage2_stimuli_bundles)
         if n_b == 1 or stage2_stim_aggregate == "mean":
-            vals = [_one(b) for b in stage2_stimuli_bundles]
-            return float(np.mean(vals))
+            return float(np.mean([_one_bundle(b) for b in stage2_stimuli_bundles]))
         if bundle_idx is not None:
-            return _one(stage2_stimuli_bundles[int(bundle_idx) % n_b])
-        return _one(stage2_stimuli_bundles[int(_stage2_bundle_rng.randint(0, n_b))])
+            return _one_bundle(stage2_stimuli_bundles[int(bundle_idx) % n_b])
+        return _one_bundle(stage2_stimuli_bundles[int(_stage2_bundle_rng.randint(0, n_b))])
 
     def _val_loss_active(x_act):
-        """Held-out loss for active-space vector `x_act` on the val bundle (never trained
-        on). Runs in the main process only (called on CMA improvements + around polish)."""
-        if val_stimuli_bundle is None:
+        """Held-out loss for active-space vector `x_act` (never trained on).
+        Runs in the main process only (called on CMA improvements + around polish)."""
+        if not val_held_out_on:
             return np.inf
         th_full = full_from_active(x_act)
+        if stage2_restim and val_stim_rng_seed is not None:
+            return float(_call_safe(
+                th_full, mean_data_results, prior_regions, behavior,
+                model_type=model_type, plot=False, debug=False,
+                blocks_per_session_override=blocks_per_session_stage2,
+                verbose=False,
+                stim_rng=np.random.RandomState(int(val_stim_rng_seed)),
+                stimuli_bundle=None,
+            ))
         return float(_call_safe(
             th_full, mean_data_results, prior_regions, behavior,
             model_type=model_type, plot=False, debug=False,
@@ -1510,13 +1576,22 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         eval_behavior = behavior
         eval_model_type = model_type
         eval_blocks_override = blocks_per_session_stage2 if loss_func == loss_active_stage2 else None
-        # Capture Stage-2 stim bundles for parallel workers
+        # Capture Stage-2 stim identities for parallel workers (bundles or restim seeds).
+        _stage2_eval = (loss_func == loss_active_stage2)
+        eval_stim_restim = bool(stage2_restim and _stage2_eval and stage2_stim_seeds_list)
+        eval_stim_seeds = (
+            list(stage2_stim_seeds_list) if eval_stim_restim else None
+        )
         eval_stim_bundles = (
             list(stage2_stimuli_bundles)
-            if (loss_func == loss_active_stage2 and stage2_stimuli_bundles)
+            if (_stage2_eval and stage2_stimuli_bundles and not eval_stim_restim)
             else None
         )
-        eval_stim_aggregate = stage2_stim_aggregate if eval_stim_bundles else "mean"
+        eval_stim_aggregate = (
+            stage2_stim_aggregate
+            if (eval_stim_bundles or eval_stim_seeds)
+            else "mean"
+        )
         
         # Capture variables needed for full_from_active function
         # These are needed because full_from_active is a closure that references local variables
@@ -1734,15 +1809,15 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 cand_arr = np.minimum(Ub, np.maximum(Lb, cand_arr))
                 xs.append(cand_arr)
 
-            # Per-candidate bundle indices for sample aggregate (assigned in main so
-            # loky workers stay deterministic / picklable).
-            n_bundles = len(eval_stim_bundles) if eval_stim_bundles else 0
-            if (
-                n_bundles > 1
-                and eval_stim_aggregate == "sample"
-            ):
+            # Per-candidate stim-identity indices for sample aggregate (assigned in
+            # main so loky workers stay deterministic / picklable).
+            n_stim_ids = (
+                len(eval_stim_seeds) if eval_stim_seeds
+                else (len(eval_stim_bundles) if eval_stim_bundles else 0)
+            )
+            if n_stim_ids > 1 and eval_stim_aggregate == "sample":
                 bundle_idxs = [
-                    int(_stage2_bundle_rng.randint(0, n_bundles)) for _ in xs
+                    int(_stage2_bundle_rng.randint(0, n_stim_ids)) for _ in xs
                 ]
             else:
                 bundle_idxs = [None] * len(xs)
@@ -1762,7 +1837,25 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                             blocks_per_session_override=eval_blocks_override,
                             verbose=False, **eval_loss_extra,
                         )
-                        if eval_stim_bundles:
+                        if eval_stim_seeds:
+                            if eval_stim_aggregate == "mean" or bidx is None:
+                                vals_b = [
+                                    float(eval_safe(
+                                        th_full, eval_mean_data, eval_prior_regions, eval_behavior,
+                                        stim_rng=np.random.RandomState(int(seed)),
+                                        stimuli_bundle=None, **_kw,
+                                    ))
+                                    for seed in eval_stim_seeds
+                                ]
+                                val = float(np.mean(vals_b))
+                            else:
+                                seed = eval_stim_seeds[int(bidx) % len(eval_stim_seeds)]
+                                val = float(eval_safe(
+                                    th_full, eval_mean_data, eval_prior_regions, eval_behavior,
+                                    stim_rng=np.random.RandomState(int(seed)),
+                                    stimuli_bundle=None, **_kw,
+                                ))
+                        elif eval_stim_bundles:
                             if eval_stim_aggregate == "mean" or bidx is None:
                                 vals_b = [
                                     float(eval_safe(
@@ -2459,7 +2552,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 early_stop_patience=cma_early_stop_patience,
                 early_stop_beat_loss=cma_early_stop_beat_loss,
                 checkpoint_stage="stage2",  # rolling restart checkpoint per improved gen
-                val_eval=(_val_loss_active if val_stimuli_bundle is not None else None),
+                val_eval=(_val_loss_active if val_held_out_on else None),
             )
         de2_x = de2.x
         _save_de_result(
@@ -2537,7 +2630,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             theta_cma = full_from_active(de2_x)
             # Pre-polish held-out baseline (used to reject polish that overfits train).
             val_before_polish = None
-            if val_stimuli_bundle is not None:
+            if val_held_out_on:
                 try:
                     val_before_polish = float(_val_loss_active(de2_x))
                     print(f"[Local-after-CMA/val] pre-polish held-out={val_before_polish:.6f}")
@@ -2667,22 +2760,29 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                     x=np.asarray(_refine_best_x[0], float), fun=float(_refine_best[0]),
                     nit=gen, nfev=_refine_nfev[0], success=True, message="cma", jac=None)
 
-            g_i0, d_i0 = float(np.exp(theta_cma[6])), float(np.exp(theta_cma[8]))
+            # g_i / d_i live at 6 / 8 only in the 12-d weights / 21-d joint layouts.
+            if len(theta_cma) > 8:
+                g_i0, d_i0 = float(np.exp(theta_cma[6])), float(np.exp(theta_cma[8]))
+                gain_note = f"g_i,d_i,θ start: g_i={g_i0:.4g}, d_i={d_i0:.4g}"
+            else:
+                g_i0 = d_i0 = float("nan")
+                gain_note = f"D={len(theta_cma)} (no g_i/d_i slots)"
             method = str(local_refine_method or "powell").lower()
             if method == "lbfgs":
                 print("[Local-after-CMA] WARNING: method='lbfgs' removed; using 'powell'")
                 method = "powell"
-            if stage2_stimuli_bundles and stage2_n_stim_seeds > 1:
+            if _stage2_has_fixed_stim and stage2_n_stim_seeds > 1:
                 n_stim_note = (
-                    f"train={stage2_stim_aggregate}({stage2_n_stim_seeds} stim)"
+                    f"train={stage2_stim_aggregate}({stage2_n_stim_seeds} stim"
+                    f"{', restim' if stage2_restim else ''})"
                 )
-            elif stage2_stimuli_bundles:
-                n_stim_note = "train=single"
+            elif _stage2_has_fixed_stim:
+                n_stim_note = "train=single" + (", restim" if stage2_restim else "")
             else:
                 n_stim_note = "train=single"
             val_note = (
                 f", held-out gate ON (seed={int(val_stim_seed)})"
-                if val_stimuli_bundle is not None else ", held-out gate off"
+                if val_held_out_on else ", held-out gate off"
             )
             wall_note = (
                 f"max_wall={max_wall:.0f}s"
@@ -2690,7 +2790,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             )
             print(
                 f"\n>>> Local refine after CMA on idx={refine_full} "
-                f"(method={method}, g_i,d_i,θ start: g_i={g_i0:.4g}, d_i={d_i0:.4g}; "
+                f"(method={method}, {gain_note}; "
                 f"maxiter={int(local_maxiter)}, n_jobs={n_jobs_ref}, "
                 f"patience={patience or 'off'}, {wall_note}, "
                 f"{n_stim_note}{val_note}, "
@@ -2782,10 +2882,15 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                         f"{val_before_polish:.6f} → {val_after:.6f}"
                     )
             best_loc = types.SimpleNamespace(x=best_xa, fun=best_fun, jac=getattr(loc_try, "jac", None))
-            g_i1, d_i1 = float(np.exp(theta_best_loc[6])), float(np.exp(theta_best_loc[8]))
+            if len(theta_best_loc) > 8:
+                g_i1, d_i1 = float(np.exp(theta_best_loc[6])), float(np.exp(theta_best_loc[8]))
+                gain_delta = f"g_i {g_i0:.4g} → {g_i1:.4g}; d_i {d_i0:.4g} → {d_i1:.4g}; "
+            else:
+                g_i1 = d_i1 = float("nan")
+                gain_delta = ""
             print(
                 f"[Local-after-CMA] done: loss {f0:.6f} → {best_fun:.6f}; "
-                f"g_i {g_i0:.4g} → {g_i1:.4g}; d_i {d_i0:.4g} → {d_i1:.4g}; "
+                f"{gain_delta}"
                 f"nfev_total≈{_refine_nfev[0]} wall={time.perf_counter() - _refine_t0:.0f}s"
             )
             try:
