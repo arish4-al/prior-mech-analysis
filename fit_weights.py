@@ -350,7 +350,6 @@ def load_theta_from_ckpt(path):
     """
     p = Path(path)
     LOG_ZERO = -30.0
-    D_full = len(_log_bounds_weights_v2())
     meta = None
     train_mask = None
 
@@ -372,6 +371,27 @@ def load_theta_from_ckpt(path):
         theta_active = np.array(meta["theta_log"], dtype=float)
     else:
         raise ValueError("Unsupported checkpoint type (use .npy or .json).")
+
+    # Infer D_full (12-d weights vs 21-d joint). Do not assume weights-only.
+    D_full = len(_log_bounds_weights_v2())
+    if meta is not None:
+        if meta.get("layout") == "joint21":
+            D_full = 21
+        elif meta.get("train_mask") is not None:
+            D_full = int(len(meta["train_mask"]))
+        else:
+            fit_idx_meta = meta.get("fit_idx", meta.get("fit_id", None))
+            frozen_meta = meta.get("frozen_idx", None)
+            idxs = []
+            if fit_idx_meta is not None:
+                idxs.extend(int(i) for i in fit_idx_meta)
+            if frozen_meta is not None:
+                idxs.extend(int(i) for i in frozen_meta)
+            if idxs:
+                D_full = max(D_full, max(idxs) + 1)
+            elif theta_active.size in (12, 21):
+                # Full-vector dumps (no mask) — trust length.
+                D_full = int(theta_active.size)
 
     # --- infer train_mask from metadata, if available ---
     if meta is not None:
@@ -399,6 +419,9 @@ def load_theta_from_ckpt(path):
     # --- reconstruct full vector if we know which coords were active ---
     if (train_mask is not None) and (theta_active.size == int(np.count_nonzero(train_mask))):
         theta_full = np.full(D_full, LOG_ZERO, dtype=float)
+        # Joint β_w (idx 15) uses asinh coords; LOG_ZERO would be wrong if frozen.
+        if D_full == 21 and (not train_mask[15]):
+            theta_full[15] = 0.0  # asinh(0)
         theta_full[train_mask] = theta_active
         return theta_full, train_mask
 
@@ -2024,8 +2047,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 if frozen_idx is None:
                     fit_idx = meta.get("fit_idx", meta.get("fit_id", None))
                     if fit_idx is not None:
-                        D_full = len(_log_bounds_weights_v2())
-                        frozen_idx = [i for i in range(D_full) if i not in fit_idx]
+                        # Use fitter D_full (12 or 21); never reset to weights-only 12.
+                        fit_set = {int(i) for i in fit_idx}
+                        frozen_idx = [i for i in range(D_full) if i not in fit_set]
                 if frozen_idx is not None:
                     checkpoint_frozen_idx = [int(i) for i in frozen_idx]
         except Exception:
