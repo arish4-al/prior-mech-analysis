@@ -44,10 +44,9 @@ POPSIZE="${POPSIZE:-16}"
 SOBOL_COUNT="${SOBOL_COUNT:-8}"
 PATIENCE="${PATIENCE:-8}"
 BEAT_LOSS="${BEAT_LOSS:-1.2}"
-L_THRESHOLD="${L_THRESHOLD:-3.5}"
-# Stage-1 needs denser (side,contrast) coverage for S avg (≥10 trials/bucket);
-# 5 blocks is tight — default 15 for joint (weights-only still uses 5).
-BPS_STAGE1="${BPS_STAGE1:-15}"
+L_THRESHOLD="${L_THRESHOLD:-10}"
+# Stage 1: match fit_retinal session length (weights-only still uses 5).
+BPS_STAGE1="${BPS_STAGE1:-10}"
 BPS_STAGE2="${BPS_STAGE2:-20}"
 STAGE2_N_STIM_SEEDS="${STAGE2_N_STIM_SEEDS:-3}"
 STAGE2_STIM_AGGREGATE="${STAGE2_STIM_AGGREGATE:-sample}"
