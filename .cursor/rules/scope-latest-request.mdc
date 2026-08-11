@@ -1,0 +1,37 @@
+---
+description: Scope to the latest user ask; do not silently change loss/science semantics
+alwaysApply: true
+---
+
+# Scope to the latest request
+
+## Contract
+
+The **latest user message** defines what to implement. Prior turns may contain
+analysis, hypotheses, or a menu of options — those are **not** approval to ship
+them unless the user re-asks for that option.
+
+## Do not over-scope
+
+- If the user asks for an **optimizer / search** change (e.g. DE basin jump when
+  stuck at penalty), change only the search loop. Do **not** also rewrite the
+  loss, NaN policy, bucket rules, or data averaging “while you’re there.”
+- If the user asks for a **diagnosis**, do not implement fixes unless they say to.
+- If an earlier message listed several solutions and the user then picks one,
+  implement **only** that one.
+
+## Loss and science semantics are sticky
+
+Do not change without an explicit ask:
+
+- What makes a loss NaN / penalty (including S bucket `<10` → NaN curves)
+- Whether sparse buckets are skipped vs fail-closed
+- Canonical windows, truncation, nulls, split definitions (see prior-distance rule)
+
+Prefer asking over “helpfully” softening a hard failure mode the user relies on.
+
+## Long threads
+
+Conversation summaries and earlier proposals bias agents toward implementing the
+“root cause fix” instead of the narrow latest ask. When in doubt, re-read the
+**last user message** and treat anything else as context only.

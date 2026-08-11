@@ -13,7 +13,8 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Split conditioning vs unsplit prior distance](split_conditioning_vs_unsplit.md) | f1/f2 composition artefact; stim-side vs fully unsplit; contrast-matched vs label-shuffle null comparison (Tables A–C) |
 | [Direct sensory prior coupling (g_s / d_s)](direct_sensory_prior_coupling.md) | Whether direct P→S coupling is detectable; all g_s/d_s sweeps; adaptation-gate placement; I-first vs S-first thresholds; presence unsplit sweep |
 | [Simulation infrastructure](simulation_infrastructure.md) | Session cache, unified `--run-experiment` entry point, the 4 × 5 analysis matrix |
-| [Faster model fitting](simulation_fit_speedups.md) | Fit to baseline loss (~0.40) in ≲1–2 h; weights ORCD batch; joint retinal+g_s/d_s+weights pipeline |
+| [Faster model fitting](simulation_fit_speedups.md) | Fit to baseline loss (~0.40) in ≲1–2 h; weights-only ORCD batch / optimizer speedups |
+| [Joint fitting pipeline](joint_fitting_pipeline.md) | Retinal + `g_s`/`d_s` + weights (`L_w+L_S`); regular vs sensory freeze masks; ORCD drivers |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
 ## Real data (`block_analysis_allsplits.py`, BWM)

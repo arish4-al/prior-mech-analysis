@@ -350,7 +350,6 @@ def load_theta_from_ckpt(path):
     """
     p = Path(path)
     LOG_ZERO = -30.0
-    D_full = len(_log_bounds_weights_v2())
     meta = None
     train_mask = None
 
@@ -372,6 +371,27 @@ def load_theta_from_ckpt(path):
         theta_active = np.array(meta["theta_log"], dtype=float)
     else:
         raise ValueError("Unsupported checkpoint type (use .npy or .json).")
+
+    # Infer D_full (12-d weights vs 21-d joint). Do not assume weights-only.
+    D_full = len(_log_bounds_weights_v2())
+    if meta is not None:
+        if meta.get("layout") == "joint21":
+            D_full = 21
+        elif meta.get("train_mask") is not None:
+            D_full = int(len(meta["train_mask"]))
+        else:
+            fit_idx_meta = meta.get("fit_idx", meta.get("fit_id", None))
+            frozen_meta = meta.get("frozen_idx", None)
+            idxs = []
+            if fit_idx_meta is not None:
+                idxs.extend(int(i) for i in fit_idx_meta)
+            if frozen_meta is not None:
+                idxs.extend(int(i) for i in frozen_meta)
+            if idxs:
+                D_full = max(D_full, max(idxs) + 1)
+            elif theta_active.size in (12, 21):
+                # Full-vector dumps (no mask) — trust length.
+                D_full = int(theta_active.size)
 
     # --- infer train_mask from metadata, if available ---
     if meta is not None:
@@ -399,6 +419,9 @@ def load_theta_from_ckpt(path):
     # --- reconstruct full vector if we know which coords were active ---
     if (train_mask is not None) and (theta_active.size == int(np.count_nonzero(train_mask))):
         theta_full = np.full(D_full, LOG_ZERO, dtype=float)
+        # Joint β_w (idx 15) uses asinh coords; LOG_ZERO would be wrong if frozen.
+        if D_full == 21 and (not train_mask[15]):
+            theta_full[15] = 0.0  # asinh(0)
         theta_full[train_mask] = theta_active
         return theta_full, train_mask
 
@@ -1051,7 +1074,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              save_rolling_fn=None,
                              freeze_fill=None,
                              loss_extra_kwargs=None,
-                             default_refine_idx=None):
+                             default_refine_idx=None,
+                             de1_inf_restarts=2):
     """
     Two-stage optimizer with configurable global search (DE or CMA-ES) + local polish.
     Supports freezing a subset of parameters via `train_mask` (bool array or index list).
@@ -1064,6 +1088,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     Masked parameters are fixed to zero (log-space value LOG_ZERO ≈ -30).
 
     Args:
+        de1_inf_restarts: If Stage-1 DE ends at penalty loss (>=1e11; often NaN S
+                          buckets / invalid sims), re-run DE this many times with a
+                          fresh uniform population (basin jump). Default 2; 0 disables.
         global_method_stage1: 'de' (default) or 'cma'/'cmaes' to select Stage 1 global optimizer.
         global_method_stage2: Override for Stage 2; defaults to `global_method_stage1`.
         cma_sigma_scale: Fraction of (hi-lo) span used as default sigma for CMA-ES Stage 1.
@@ -2020,8 +2047,9 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 if frozen_idx is None:
                     fit_idx = meta.get("fit_idx", meta.get("fit_id", None))
                     if fit_idx is not None:
-                        D_full = len(_log_bounds_weights_v2())
-                        frozen_idx = [i for i in range(D_full) if i not in fit_idx]
+                        # Use fitter D_full (12 or 21); never reset to weights-only 12.
+                        fit_set = {int(i) for i in fit_idx}
+                        frozen_idx = [i for i in range(D_full) if i not in fit_set]
                 if frozen_idx is not None:
                     checkpoint_frozen_idx = [int(i) for i in frozen_idx]
         except Exception:
@@ -2081,27 +2109,56 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "freeze_fill": _freeze_fill,
                 "loss_extra_kwargs": _loss_extra,
             }
-            print(f"[Stage1 DE] (active dims={len(idx)}) pop={de_popsize*len(idx)}, iters={de1_maxiter}")
-            init_pop1 = _make_init_population(bnds_act, de_popsize, rng, x0_act, jitter_scale)
-            # Insert DE iteration counter and callback
-            _de_iter = {'i': 0}
-            def _de_callback(xk, convergence):
-                _de_iter['i'] += 1
-                try:
-                    _log_info(f"[DE1] iter={_de_iter['i']}")
-                except Exception:
-                    pass
-                return False
-            de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
-            try:
-                de1 = differential_evolution(
-                    func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
-                    maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
-                    polish=False, updating='deferred', workers=de_workers,
-                    seed=random_state, callback=_de_callback,
+            # Flat all-penalty landscape (NaN S buckets → 1e11) makes scipy DE
+            # converge after ~1 generation. Restart with a fresh uniform pop.
+            n_de_attempts = 1 + max(0, int(de1_inf_restarts))
+            de1 = None
+            for _de_attempt in range(n_de_attempts):
+                _seed_att = int(random_state) + 10007 * int(_de_attempt)
+                _rng_att = np.random.RandomState(_seed_att)
+                _x0_att = x0_act if _de_attempt == 0 else None  # restarts: no x0 inject
+                _tag = (f" basin-jump restart {_de_attempt}/{n_de_attempts - 1}"
+                        if _de_attempt else "")
+                print(
+                    f"[Stage1 DE] (active dims={len(idx)}) pop={de_popsize*len(idx)}, "
+                    f"iters={de1_maxiter}{_tag}"
                 )
-            finally:
-                de_cleanup()
+                init_pop1 = _make_init_population(
+                    bnds_act, de_popsize, _rng_att, _x0_att, jitter_scale)
+                _de_iter = {'i': 0}
+
+                def _de_callback(xk, convergence):
+                    _de_iter['i'] += 1
+                    try:
+                        _log_info(f"[DE1] iter={_de_iter['i']}")
+                    except Exception:
+                        pass
+                    return False
+
+                de_workers, de_cleanup = _make_de_workers(n_jobs, _LOSS_ACTIVE_DE_CONTEXT)
+                try:
+                    de1 = differential_evolution(
+                        func=_loss_active_de_worker, bounds=bnds_act, strategy='best1bin',
+                        maxiter=de1_maxiter, popsize=de_popsize, init=init_pop1,
+                        polish=False, updating='deferred', workers=de_workers,
+                        seed=_seed_att, callback=_de_callback,
+                    )
+                finally:
+                    de_cleanup()
+                _best = float(de1.fun) if de1 is not None else 1e11
+                if np.isfinite(_best) and _best < 1e11:
+                    if _de_attempt:
+                        print(
+                            f"[Stage1 DE] basin-jump recovered finite loss={_best:.6f} "
+                            f"(attempt {_de_attempt + 1}/{n_de_attempts})"
+                        )
+                    break
+                if _de_attempt + 1 < n_de_attempts:
+                    print(
+                        f"[Stage1 DE] best still penalty ({_best:.3g}); "
+                        f"jumping to a new random basin "
+                        f"({_de_attempt + 1}/{n_de_attempts - 1} restarts left)"
+                    )
         else:
             lam = _effective_cma_popsize(bnds_act, cma_opts_stage1)
             print(f"[Stage1 CMA-ES] (active dims={len(idx)}) lambda={lam}, iters={de1_maxiter}, n_jobs={n_jobs}")

@@ -51,6 +51,19 @@ Source: [canonical_analysis_conventions.md](journals/canonical_analysis_conventi
 - **Cursor rule:** `.cursor/rules/prior-distance-analysis.mdc` (auto-loaded for agents)
 - **Experiment history:** `journals/*.md` — topic notes with dated results inside, not agent defaults
 
+## Scope — latest ask wins (avoid over-fixing)
+
+Long fitting/diagnosis threads accumulate menus of possible fixes. Agents must
+**not** treat earlier proposals as approved work.
+
+- Implement only what the **latest user message** asks for.
+- Optimizer/search changes ≠ rewriting loss / NaN / bucket semantics unless asked.
+- Diagnosis-only turns: no code changes unless requested.
+- Sticky without explicit ask: S-bucket `<10` → NaN, fail-closed SSE, canonical
+  prior-distance settings.
+
+Cursor rule: `.cursor/rules/scope-latest-request.mdc` (always applied).
+
 ### Research journals (`journals/`) — develop only
 
 - Journals are organized **by topic, not by date**: one file per line of investigation (e.g. `journals/s_prior_artifacts_truncation.md`), each holding the goal, the implementation, all dated updates, results, and open questions. `journals/README.md` is the index.

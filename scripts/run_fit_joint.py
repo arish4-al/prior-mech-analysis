@@ -117,13 +117,21 @@ def _find_resume(run_dir: Path):
             if "theta_log" in meta:
                 theta = np.array(meta["theta_log"], float)
                 if theta.size != D_JOINT:
-                    # Active-only DE ckpt: expand with joint bounds length.
-                    try:
-                        # Temporarily use joint bounds via load helper length check —
-                        # reconstruct from groups if possible.
-                        theta = reconstruct_theta_joint_from_json(meta)
-                    except Exception:
-                        continue
+                    # Active-only DE/CMA ckpt: expand via fit_idx + joint freeze fill.
+                    fit_idx = meta.get("fit_idx", meta.get("fit_id", None))
+                    if (
+                        fit_idx is not None
+                        and len(fit_idx) == theta.size
+                        and max(int(i) for i in fit_idx) < D_JOINT
+                    ):
+                        full = fj.freeze_fill_joint()
+                        full[np.asarray(fit_idx, int)] = theta
+                        theta = full
+                    else:
+                        try:
+                            theta = reconstruct_theta_joint_from_json(meta)
+                        except Exception:
+                            continue
             else:
                 theta = reconstruct_theta_joint_from_json(meta)
             if theta.size != D_JOINT or not np.all(np.isfinite(theta)):
