@@ -1,6 +1,7 @@
 """
 Baseline: time retinal loss evals at frozen front-end params (from weights JSON)
-and at the best saved DE2 checkpoint. Does not import fit_retinal.py (unguarded bottom).
+and at the best saved DE2 checkpoint. Avoids importing fit_retinal.py so the bench
+stays independent of the modernized fitter (fit_retinal is now import-safe).
 """
 from __future__ import annotations
 

@@ -11,6 +11,8 @@
 
 **Joint** retinal + `g_s`/`d_s` + weights fitting lives in
 [joint_fitting_pipeline.md](joint_fitting_pipeline.md) (moved out of this journal).
+**Staged retinal→joint** (fit retinal first, then joint with retinal free):
+[retinal_then_joint_fitting.md](retinal_then_joint_fitting.md).
 
 Sources: 2026-07-20 Goal 2 (reframed); baselines 2026-08-03b–c; …; ORCD batch 2026-08-06a.
 

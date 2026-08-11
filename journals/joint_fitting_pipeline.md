@@ -8,10 +8,11 @@ network W/θ under a combined loss
 [simulation_fit_speedups.md](simulation_fit_speedups.md)); prior-distance recovery
 analysis.
 
-**Status:** Cold10 ORCD campaign in (2026-08-10c). Regular 5/10 `FIT_DONE` (best
-reported **1.92**); sensory 1/10. Neither beats separate-fit joint baseline
-(~**1.34** at bps=20 from WEIGHTS_REL + frozen retinal + `g_s=d_s≈0`).
-**Warm-start DE** wired (2026-08-11): `--resume-json` + `de_cma*` seeds Stage-1 DE.
+**Status:** Fair shared-stim compare (2026-08-11b): baseline joint **1.344**; best
+fit warmde regular s101 **2.083**. Cold10 / warmde from cold winners do not reach
+baseline; sensory warmde 0/10 Stage-1 fail. **Main line pivoted** (2026-08-11c) to
+staged retinal→joint — see
+[retinal_then_joint_fitting.md](retinal_then_joint_fitting.md).
 
 **Code:** [`fit_joint.py`](../fit_joint.py);
 hooks in [`fit_weights.fit_weights_two_stage_v2`](../fit_weights.py);
@@ -215,68 +216,65 @@ LOCAL_REFINE_MAX_WALL_S=60,FORCE=1 \
   scripts/run_fit_joint_slurm.sh
 ```
 
-### 2026-08-10c — Cold10 ORCD results vs separate-fit joint baseline
+### 2026-08-11 — Cold10 + warmde vs separate-fit baseline (fair compare)
 
-Local mirror: `~/Downloads/ONE/openalyx.internationalbrainlab.org/models/weights_run_fj_cold10_*`.
+Local: `~/Downloads/ONE/openalyx.internationalbrainlab.org/models/weights_run_fj_{cold10,warmde_*}_*`.
+Seeds for both campaigns: `56 34 78 89 202 12 45 67 101 303`.
 
-**Campaign:** `OUT_TAG=cold10`, cold `de_cma_local`, seeds
-`56 34 78 89 202 12 45 67 101 303`, variants `regular:12|13` and `sensory:6|7|8|9`.
+**Campaigns**
 
-| Variant | FIT_DONE | Best reported loss | Notes |
-|---------|---------:|-------------------:|-------|
-| regular | 5/10 | **1.924** (s12) | Also s56=2.47, s34=3.86, s89=4.57, s303=5.06 |
-| sensory | 1/10 | **4.284** (s101) | Other 9 Stage-1 fail (`1e11` / gate) |
+| Campaign | Variant (freeze) | How started | FIT_DONE |
+|----------|------------------|-------------|---------|
+| `cold10` | regular `12\|13` | cold DE | **5 / 10** |
+| `cold10` | sensory `6\|7\|8\|9` | cold DE | **1 / 10** |
+| `warmde_r12` | regular `12\|13` | warm DE from cold regular s12 | **3 / 10** (s12, s101, s202) |
+| `warmde_s101` | sensory `6\|7\|8\|9` | warm DE from cold sensory s101 | **0 / 10** |
 
-Failed seeds: Stage-1 `stage1_loss_ge_borderline_hi` (flat penalty or loss &gt;10).
-DONE walls were only ~3–8 min — not a long DE exploration in practice.
+Failures: Stage-1 `failed_stage1` / penalty `1e11` (or loss above `L_threshold=10`).
 
-**Separate-fit baseline** (compose WEIGHTS_REL / paper into joint `L_w+L_S`;
-retinal frozen from JSON; `g_s=d_s≈0`; mean over stim seeds 0,1,2,56,89):
+**Comparison protocol (use these numbers only):** build **5 stim bundles once**
+at `bps=20` with WEIGHTS_REL session hyperparams and RNG seeds
+`RandomState(s+100003)` for `s ∈ {0,1,2,56,89}`; score every θ with **mean**
+joint `L_w+L_S` on that fixed set. Do **not** rank by fit `final_loss` (`sample`
+aggregate is seed-/draw-dependent). Same seed alone is not enough if
+`model_params` (e.g. retinal) differ when rebuilding stim.
 
-| Params | bps | total | L_w | L_S |
-|--------|----:|------:|----:|----:|
-| WEIGHTS_REL (`g_i≈190`) + gs0 | 10 | **1.471** | 0.629 | 0.841 |
-| WEIGHTS_REL + gs0 | 20 | **1.344** | 0.561 | 0.783 |
-| Paper `g_i=163` + gs0 | 10 | 1.491 | 0.650 | 0.841 |
-| Paper `g_i=163` + gs0 | 20 | 1.375 | 0.592 | 0.783 |
+**Separate-fit baseline** (WEIGHTS_REL / paper weights + frozen retinal + `g_s=d_s≈0`
+under the joint loss; weights-only recorded **0.404** is `L_w` only):
 
-Recorded weights-only **0.404** ≠ joint total (missing L_S ≈0.78–0.84).
+| Params | Fair total | L_w | L_S |
+|--------|-----------:|----:|----:|
+| WEIGHTS_REL (`g_i≈190`) + gs0 | **1.344** | 0.561 | 0.783 |
+| Paper `g_i=163` + gs0 | 1.375 | 0.592 | 0.783 |
 
-**Re-eval cold winners** on the same bps=20 / 5-seed protocol:
+**Best by variant (fair total vs baseline 1.344)**
 
-| Run | Reported | Re-eval total | L_w | L_S | Δ vs 1.344 |
-|-----|---------:|--------------:|----:|----:|-----------:|
-| regular s12 | 1.924 | 2.165 | 1.359 | 0.807 | +0.82 |
-| regular s56 | 2.467 | 2.501 | 1.785 | 0.717 | +1.16 |
-| regular s34 | 3.864 | 4.014 | 2.868 | 1.145 | +2.67 |
-| sensory s101 | 4.284 | 4.029 | 2.776 | 1.253 | +2.68 |
+| Variant | Best run | Fair | L_w | L_S | Δ vs baseline | Succeeded |
+|---------|----------|-----:|----:|----:|--------------:|-----------|
+| **regular** | warmde_r12 **s101** | **2.083** | 1.159 | 0.924 | +0.74 | cold 5/10 + warmde 3/10 scored |
+| **sensory** | cold10 **s101** | **4.347** | 2.938 | 1.410 | +3.00 | cold 1/10; warmde 0/10 |
 
-**Takeaway:** cold joint search did not recover (or beat) the separate-fit
-composition under the joint objective. Gap is mostly **L_w**; L_S for s12/s56 is
-near baseline. Next likely needs warm start into DE/CMA from WEIGHTS_REL, not
-cold DE alone.
+No joint fit reached the separate-fit baseline. Gap is mostly **L_w**.
 
-Canvas: `joint-cold10-vs-baseline.canvas.tsx`.
+**All scored finals** (fair ascending)
 
-### 2026-08-11 — Warm-start DE
+| Campaign | Variant | Seed | Fair | L_w | L_S | Δ vs 1.344 |
+|----------|---------|-----:|-----:|----:|----:|-----------:|
+| warmde_r12 | regular | 101 | **2.083** | 1.159 | 0.924 | +0.74 |
+| warmde_r12 | regular | 202 | 2.102 | 1.210 | 0.893 | +0.76 |
+| cold10 | regular | 12 | 2.243 | 1.265 | 0.978 | +0.90 |
+| cold10 | regular | 56 | 2.591 | 1.772 | 0.819 | +1.25 |
+| warmde_r12 | regular | 12 | 3.569 | 2.541 | 1.028 | +2.23 |
+| cold10 | regular | 89 | 4.053 | 2.828 | 1.225 | +2.71 |
+| cold10 | sensory | 101 | **4.347** | 2.938 | 1.410 | +3.00 |
+| cold10 | regular | 34 | 4.761 | 3.735 | 1.026 | +3.42 |
+| cold10 | regular | 303 | 5.751 | 2.985 | 2.766 | +4.41 |
 
-Previously `--resume-json` always skipped Stage-1 DE (`resume_from=de2`,
-`de1_maxiter=0`). Now:
+**Warm-DE note:** `--resume-json` + `de_cma*` seeds Stage-1 DE (`theta_log0` + x0
+inject); `cma_only` still skips DE. Warm from cold winners often failed Stage-1;
+next try should warm from WEIGHTS_REL JSON.
 
-| Pipeline | + `--resume-json` |
-|----------|-------------------|
-| `de_cma_local` / `de_cma` | **Warm DE:** `theta_log0` = warm θ, `resume_from=none`, DE init injects jittered x0 then CMA→polish |
-| `cma_only` | Unchanged: skip DE, Stage-2 CMA from warm θ |
-
-In-folder `--resume auto` of an ongoing run still skips completed stages (no
-re-DE). Only `external:…` sources trigger warm DE.
-
-```bash
-WARM=.../weights_2stagelocalrefine_loss0p4044_*.json
-VARIANTS="regular:12|13 sensory:6|7|8|9" SEEDS="56 34 78 89 202" \
-PIPELINE=de_cma_local RESUME_JSON="$WARM" OUT_TAG=warmde \
-  bash scripts/submit_fit_joint_sharded.sh
-```
+Canvas: `joint-fair-compare-bps20.canvas.tsx`.
 
 ---
 
@@ -285,6 +283,9 @@ PIPELINE=de_cma_local RESUME_JSON="$WARM" OUT_TAG=warmde \
 1. **Joint λ (Lw vs LS):** equal-sum v1 — retune if one term dominates on ORCD.
 2. **Loss / data audit:** alignment of Lw targets, LS (`avg_mean_R`), windows,
    regions; whether S should enter prior-distance terms (see 2026-08-06c).
-3. **Regular mask:** `12|13` only vs also freeze `g_m`/`d_m` (`7|9|12|13`)?
-4. ~~Compare joint-regular to 0.404~~ **Answered (2026-08-10c):** compare on joint
-   `L_w+L_S`; WEIGHTS_REL composition ≈**1.34** (bps=20); cold best ≈**2.17** re-eval.
+3. **Regular mask:** `12\|13` only vs also freeze `g_m`/`d_m` (`7\|9\|12\|13`)?
+4. ~~Compare joint to 0.404~~ **Answered:** use joint fair `L_w+L_S`; WEIGHTS_REL
+   baseline **1.344**; best regular **2.083**; best sensory **4.347**.
+5. ~~Primary path = joint-from-scratch?~~ **No (2026-08-11c):** staged
+   retinal→joint with retinal free in Stage B — see
+   [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md).

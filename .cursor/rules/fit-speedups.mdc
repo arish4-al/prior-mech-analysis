@@ -32,6 +32,6 @@ fitted weights from `resolve_weights_json` / `WEIGHTS_REL`.
 ## Environment
 
 Fit benches and `run_model` timing: `conda activate iblenv`, outside sandbox
-(`required_permissions: ["all"]`). `fit_weights.py` bottom is guarded;
-`fit_retinal.py` is still unguarded — do not import it as a module (use
-`scripts/bench_fit_*_baseline.py` helpers instead).
+(`required_permissions: ["all"]`). `fit_weights.py` and `fit_retinal.py` bottoms
+are guarded. Prefer `scripts/run_fit_retinal.py` / `scripts/bench_fit_*_baseline.py`
+over raw module `__main__`.
