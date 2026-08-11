@@ -11,6 +11,8 @@
 #SBATCH -o fit_joint_%x_%j.out
 
 # Joint fit (retinal + g_s/d_s + weights) on ORCD — one variant x seed.
+# RESUME_JSON + PIPELINE=de_cma_local|de_cma → warm-start DE (x0 inject).
+# RESUME_JSON + PIPELINE=cma_only → skip DE, Stage-2 CMA only.
 # Env: MTYPE, FREEZE (e.g. "6|7|8|9"), SEED, PIPELINE, OUT_TAG, RESUME_JSON, FORCE,
 #      DE1_MAXITER, DE2_MAXITER, DE_POPSIZE, POPSIZE, SOBOL_COUNT, PATIENCE,
 #      BEAT_LOSS, L_THRESHOLD, BPS_STAGE1, BPS_STAGE2, STAGE2_N_STIM_SEEDS,

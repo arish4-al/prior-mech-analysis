@@ -8,9 +8,10 @@ network W/θ under a combined loss
 [simulation_fit_speedups.md](simulation_fit_speedups.md)); prior-distance recovery
 analysis.
 
-**Status:** Pipeline code ready (`fit_joint.py` + ORCD drivers). Pre-ORCD code
-review 2026-08-10; next = submit **regular** (no sensory prior) and **sensory**
-(I/M prior frozen) campaigns.
+**Status:** Cold10 ORCD campaign in (2026-08-10c). Regular 5/10 `FIT_DONE` (best
+reported **1.92**); sensory 1/10. Neither beats separate-fit joint baseline
+(~**1.34** at bps=20 from WEIGHTS_REL + frozen retinal + `g_s=d_s≈0`).
+**Warm-start DE** wired (2026-08-11): `--resume-json` + `de_cma*` seeds Stage-1 DE.
 
 **Code:** [`fit_joint.py`](../fit_joint.py);
 hooks in [`fit_weights.fit_weights_two_stage_v2`](../fit_weights.py);
@@ -214,6 +215,69 @@ LOCAL_REFINE_MAX_WALL_S=60,FORCE=1 \
   scripts/run_fit_joint_slurm.sh
 ```
 
+### 2026-08-10c — Cold10 ORCD results vs separate-fit joint baseline
+
+Local mirror: `~/Downloads/ONE/openalyx.internationalbrainlab.org/models/weights_run_fj_cold10_*`.
+
+**Campaign:** `OUT_TAG=cold10`, cold `de_cma_local`, seeds
+`56 34 78 89 202 12 45 67 101 303`, variants `regular:12|13` and `sensory:6|7|8|9`.
+
+| Variant | FIT_DONE | Best reported loss | Notes |
+|---------|---------:|-------------------:|-------|
+| regular | 5/10 | **1.924** (s12) | Also s56=2.47, s34=3.86, s89=4.57, s303=5.06 |
+| sensory | 1/10 | **4.284** (s101) | Other 9 Stage-1 fail (`1e11` / gate) |
+
+Failed seeds: Stage-1 `stage1_loss_ge_borderline_hi` (flat penalty or loss &gt;10).
+DONE walls were only ~3–8 min — not a long DE exploration in practice.
+
+**Separate-fit baseline** (compose WEIGHTS_REL / paper into joint `L_w+L_S`;
+retinal frozen from JSON; `g_s=d_s≈0`; mean over stim seeds 0,1,2,56,89):
+
+| Params | bps | total | L_w | L_S |
+|--------|----:|------:|----:|----:|
+| WEIGHTS_REL (`g_i≈190`) + gs0 | 10 | **1.471** | 0.629 | 0.841 |
+| WEIGHTS_REL + gs0 | 20 | **1.344** | 0.561 | 0.783 |
+| Paper `g_i=163` + gs0 | 10 | 1.491 | 0.650 | 0.841 |
+| Paper `g_i=163` + gs0 | 20 | 1.375 | 0.592 | 0.783 |
+
+Recorded weights-only **0.404** ≠ joint total (missing L_S ≈0.78–0.84).
+
+**Re-eval cold winners** on the same bps=20 / 5-seed protocol:
+
+| Run | Reported | Re-eval total | L_w | L_S | Δ vs 1.344 |
+|-----|---------:|--------------:|----:|----:|-----------:|
+| regular s12 | 1.924 | 2.165 | 1.359 | 0.807 | +0.82 |
+| regular s56 | 2.467 | 2.501 | 1.785 | 0.717 | +1.16 |
+| regular s34 | 3.864 | 4.014 | 2.868 | 1.145 | +2.67 |
+| sensory s101 | 4.284 | 4.029 | 2.776 | 1.253 | +2.68 |
+
+**Takeaway:** cold joint search did not recover (or beat) the separate-fit
+composition under the joint objective. Gap is mostly **L_w**; L_S for s12/s56 is
+near baseline. Next likely needs warm start into DE/CMA from WEIGHTS_REL, not
+cold DE alone.
+
+Canvas: `joint-cold10-vs-baseline.canvas.tsx`.
+
+### 2026-08-11 — Warm-start DE
+
+Previously `--resume-json` always skipped Stage-1 DE (`resume_from=de2`,
+`de1_maxiter=0`). Now:
+
+| Pipeline | + `--resume-json` |
+|----------|-------------------|
+| `de_cma_local` / `de_cma` | **Warm DE:** `theta_log0` = warm θ, `resume_from=none`, DE init injects jittered x0 then CMA→polish |
+| `cma_only` | Unchanged: skip DE, Stage-2 CMA from warm θ |
+
+In-folder `--resume auto` of an ongoing run still skips completed stages (no
+re-DE). Only `external:…` sources trigger warm DE.
+
+```bash
+WARM=.../weights_2stagelocalrefine_loss0p4044_*.json
+VARIANTS="regular:12|13 sensory:6|7|8|9" SEEDS="56 34 78 89 202" \
+PIPELINE=de_cma_local RESUME_JSON="$WARM" OUT_TAG=warmde \
+  bash scripts/submit_fit_joint_sharded.sh
+```
+
 ---
 
 ## Questions to be resolved
@@ -222,5 +286,5 @@ LOCAL_REFINE_MAX_WALL_S=60,FORCE=1 \
 2. **Loss / data audit:** alignment of Lw targets, LS (`avg_mean_R`), windows,
    regions; whether S should enter prior-distance terms (see 2026-08-06c).
 3. **Regular mask:** `12|13` only vs also freeze `g_m`/`d_m` (`7|9|12|13`)?
-4. Compare joint-regular winners to weights-only 0.404 baseline only after
-   separating `L_w` vs `L_S` (different objectives).
+4. ~~Compare joint-regular to 0.404~~ **Answered (2026-08-10c):** compare on joint
+   `L_w+L_S`; WEIGHTS_REL composition ≈**1.34** (bps=20); cold best ≈**2.17** re-eval.
