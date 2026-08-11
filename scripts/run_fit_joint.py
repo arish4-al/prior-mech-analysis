@@ -7,6 +7,12 @@ Default sensory-prior ablation freezes g_i,g_m,d_i,d_m (indices 6–9):
 
   PYTHONPATH=. python scripts/run_fit_joint.py --mtype sensory --freeze 6,7,8,9 --seed 56
 
+Warm-start DE (external JSON + de_cma*): seeds Stage-1 DE init pop from the
+warm θ (jittered x0 inject), then CMA → polish. Unlike cma_only, does not skip DE.
+
+  PYTHONPATH=. python scripts/run_fit_joint.py --mtype regular --freeze 12,13 --seed 56 \\
+      --pipeline de_cma_local --resume-json path/to/weights_*.json
+
 ORCD: scripts/run_fit_joint_slurm.sh + submit_fit_joint_sharded.sh
 """
 from __future__ import annotations
@@ -189,7 +195,9 @@ def build_args(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-jobs", type=int, default=_default_n_jobs())
     ap.add_argument("--pipeline", choices=["de_cma_local", "de_cma", "cma_only"],
-                    default="de_cma_local")
+                    default="de_cma_local",
+                    help="de_cma*: Stage-1 DE→CMA[(→polish)]. With --resume-json, "
+                         "DE is warm-seeded (x0 inject) unless cma_only (skip DE).")
     ap.add_argument("--out-tag", type=str, default="")
     ap.add_argument("--resume", choices=["auto", "off"], default="auto")
     ap.add_argument("--force", action="store_true")
@@ -208,7 +216,9 @@ def build_args(argv=None):
     ap.add_argument("--l-threshold", type=float, default=10.0,
                     help="Stage-1 gate on joint loss (Lw+LS); default 10 "
                          "(joint scale is higher than weights-only 3.5)")
-    ap.add_argument("--resume-json", type=str, default=None)
+    ap.add_argument("--resume-json", type=str, default=None,
+                    help="Warm-start JSON (weights or joint). With de_cma*: seeds "
+                         "Stage-1 DE. With cma_only: skip DE, start Stage-2 CMA.")
     ap.add_argument("--stage2-n-stim-seeds", type=int, default=3)
     ap.add_argument("--stage2-stim-aggregate", choices=["sample", "mean"], default="sample")
     ap.add_argument("--val-seed", type=int, default=None)
@@ -309,7 +319,42 @@ def main(argv=None):
     print(f"run_dir: {run_dir}")
 
     local = args.pipeline in ("de_cma_local", "cma_only")
-    if resume_theta is not None:
+    # External --resume-json + de_cma*: warm-start DE (inject θ into DE init).
+    # In-folder auto-resume of an ongoing run still skips completed stages.
+    # cma_only: skip DE, jump to Stage-2 CMA (unchanged).
+    external_warm = (
+        resume_theta is not None
+        and resume_source is not None
+        and str(resume_source).startswith("external:")
+    )
+    warm_de = (
+        external_warm
+        and args.pipeline in ("de_cma_local", "de_cma")
+    )
+
+    theta_log0 = None
+    resume_theta_for_fit = resume_theta
+    if warm_de:
+        stage1 = "de"
+        de1_maxiter = int(args.de1_maxiter)
+        resume_from = "none"
+        theta_log0 = np.asarray(resume_theta, float)
+        resume_theta_for_fit = None
+        resume_path = None
+        sidecar = run_dir / "resume_start.json"
+        sidecar.write_text(json.dumps({
+            "loss": float(resume_loss if resume_loss is not None else 1.0),
+            "train_mask": train_mask.tolist(),
+            "theta_log": theta_log0.tolist(),
+            "source": resume_source,
+            "kind": "warm_de",
+            "resume_from": "none",
+            "layout": "joint21",
+            "note": "Stage-1 DE seeded from warm θ (x0 inject); not a stage skip",
+        }, indent=2))
+        print(f"[warm-DE] Stage-1 DE from '{resume_source}' "
+              f"(de1_maxiter={de1_maxiter}, x0 inject + random pop)")
+    elif resume_theta is not None:
         stage1 = "cma"
         de1_maxiter = 0
         resume_from = _resume_from_kind(resume_kind)
@@ -348,6 +393,7 @@ def main(argv=None):
         model_type="data",
         random_state=int(args.seed),
         top_k=0,
+        theta_log0=theta_log0,
         global_method_stage1=stage1,
         de_popsize=int(args.de_popsize),
         de1_maxiter=de1_maxiter,
@@ -359,7 +405,7 @@ def main(argv=None):
         de2_maxiter=int(args.de2_maxiter),
         train_mask=train_mask,
         resume_from=resume_from,
-        resume_theta_log=resume_theta,
+        resume_theta_log=resume_theta_for_fit,
         resume_path=resume_path,
         blocks_per_session_stage2=int(args.bps_stage2),
         n_jobs=int(args.n_jobs),
@@ -391,6 +437,8 @@ def main(argv=None):
         "pipeline": args.pipeline,
         "seed": args.seed,
         "layout": "joint21",
+        "warm_de": bool(warm_de),
+        "resume_source": resume_source,
         "val_seed": val_seed,
         "n_jobs": args.n_jobs,
         "backend": args.backend,

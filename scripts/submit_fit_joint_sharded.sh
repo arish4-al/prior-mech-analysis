@@ -7,6 +7,10 @@
 #   bash scripts/submit_fit_joint_sharded.sh
 #   VARIANTS="sensory:6|7|8|9" SEEDS="56 34 78 89 202" bash scripts/submit_fit_joint_sharded.sh
 #   OUT_TAG=20260807 bash scripts/submit_fit_joint_sharded.sh
+#   # Warm-start DE from WEIGHTS_REL (or any JSON):
+#   RESUME_JSON=/path/to/weights_*.json PIPELINE=de_cma_local OUT_TAG=warmde \
+#     VARIANTS="regular:12|13 sensory:6|7|8|9" SEEDS="56 34 78 89 202" \
+#     bash scripts/submit_fit_joint_sharded.sh
 #
 # Env: VARIANTS SEEDS PIPELINE OUT_TAG RESUME_JSON FORCE MEM CPUS TIME
 #      plus fit knobs (DE1_MAXITER, BEAT_LOSS, L_THRESHOLD, …) forwarded via --export=ALL.
