@@ -358,9 +358,9 @@ def main(argv=None):
         "CMA_stds": list(CMA_STDS[train_mask]),
         "CMA_diagonal": False,
     }
-    # Held-out val requires deterministic_stage2; Stage A keeps stim stochastic
-    # so α_w/β_w can move. (Joint Stage B uses seed-restim + val instead.)
-    val_seed = None
+    # Held-out seed: default seed+7777 (same as weights/joint).
+    val_seed = (int(args.val_seed) if args.val_seed is not None
+                else int(args.seed) + 7777)
 
     wall0 = time.perf_counter()
     best = fit_retinal_two_stage(
@@ -386,9 +386,9 @@ def main(argv=None):
         blocks_per_session_stage2=int(args.bps_stage2),
         n_jobs=int(args.n_jobs),
         parallel_backend=args.backend,
-        # α_w/β_w bake into create_stimuli — do not cache Stage-2 bundles.
-        # (Joint Stage B uses deterministic_stage2 + stage2_restim instead.)
-        deterministic_stage2=False,
+        # Seed-restim: fixed stim seeds, rebuild each eval so α_w/β_w can move.
+        deterministic_stage2=True,
+        stage2_restim=True,
         L_threshold=float(args.l_threshold),
         cma_early_stop_patience=int(args.patience),
         cma_early_stop_beat_loss=(None if args.beat_loss < 0 else float(args.beat_loss)),
@@ -403,7 +403,7 @@ def main(argv=None):
         ),
         stage2_n_stim_seeds=int(args.stage2_n_stim_seeds),
         stage2_stim_aggregate=args.stage2_stim_aggregate,
-        val_stim_seed=None,  # held-out needs deterministic_stage2
+        val_stim_seed=val_seed,
     )
     wall = time.perf_counter() - wall0
 

@@ -156,15 +156,15 @@ claim — wiring only. Frozen front-end reference remains ~0.78–0.82.
 
 ### 2026-08-11e — Stim / defaults audit fixes
 
-1. **Stage A:** `deterministic_stage2=False` in `run_fit_retinal` (α_w/β_w bake
-   into `create_stimuli`; cached bundles froze those dims in CMA/polish).
-2. **Stage B (joint):** `stage2_restim=True` default in `fit_joint_two_stage` —
-   fixed seeds, rebuild stim each eval under current model_params (keeps
-   sample-K + held-out; α_w/β_w free-safe). Weights-only unchanged (cached bundles).
-3. **Non-retinal init:** confirmed identical to original script
+1. **Stage A / B:** both use `deterministic_stage2` + `stage2_restim=True` —
+   fixed seeds, rebuild stim each eval (α_w/β_w free-safe; sample-K + held-out).
+   Weights-only still caches bundles (`stage2_restim=False`).
+2. **Non-retinal init:** confirmed identical to original script
    (`W_pp=0.45`, …, all g/d=0, θ=0.78/0.54) via `STAGE_A_NETWORK` / `STAGE_A_THETA`.
-4. **P2:** reconstruct defaults → Stage-A retinal anchors; no more
+3. **P2:** reconstruct defaults → Stage-A retinal anchors; no more
    `|θ[1]|≤0.25` native guess — require `layout`/`beta_w_coord` markers.
+4. **Retinal tracked loss:** no opportunistic `retinal_v2_*` dumps on
+   `loss < SAVE_THRESH` / every 1000 steps — only stage rolling / DE-CMA ckpts / finals.
 
 ```bash
 # ORCD smoke

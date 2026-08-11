@@ -20,7 +20,6 @@ from model_functions import (
     mean_by_condition,
     loss_plot_diff_by_condition_with_data,
     loss_prior_effect,
-    pth_res,
     int_regs,
     move_regs,
     trials_per_block_param,
@@ -35,6 +34,9 @@ from model_functions import (
 REMOTE = Path.home() / (
     "Downloads/ONE/openalyx.internationalbrainlab.org/models/remote"
 )
+# Canonical fit-diagnostic data used by paper-brain-wide-map/model_test.ipynb
+# (nested mean_traj stim/choice; prior curves match notebook overlays).
+PAPER_DATA_DIR = Path("/Users/ariliu/int-brain-lab/paper-brain-wide-map")
 
 # Best-of ORCD batch (journals/simulation_fit_speedups.md 2026-08-06a)
 DEFAULT_MODELS = [
@@ -47,13 +49,38 @@ DEFAULT_MODELS = [
 ]
 
 
-def ensure_prior_data_links():
-    figs = Path(pth_res).parent / "figs"
+def ensure_fit_data_links(data_dir: Path = PAPER_DATA_DIR):
+    """
+    loss_prior_effect loads cwd-relative data_{timeframe}.npy.
+    Prefer the paper notebook copies over manifold/figs (different curves).
+    """
     for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src = figs / name
+        src = (data_dir / name).resolve()
+        if not src.is_file():
+            raise FileNotFoundError(src)
         dst = Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
+        if dst.is_symlink() or dst.exists():
+            if dst.resolve() == src:
+                continue
+            dst.unlink()
+        dst.symlink_to(src)
+
+
+def load_mean_data_results(data_dir: Path = PAPER_DATA_DIR):
+    """Load nested stim/choice mean_data_results (paper notebook format)."""
+    mean_path = data_dir / "mean_data_results.npy"
+    if not mean_path.is_file():
+        raise FileNotFoundError(mean_path)
+    mean_data = np.load(mean_path, allow_pickle=True).flat[0]
+    for vn in ("I", "M"):
+        mt = mean_data[vn]["mean_traj"]
+        if not (isinstance(mt, dict) and "stim" in mt and "choice" in mt):
+            raise ValueError(
+                f"{mean_path}: {vn}.mean_traj must be nested {{'stim','choice'}}; "
+                f"got keys={list(mt)[:12] if isinstance(mt, dict) else type(mt)}. "
+                "Flat manifold/res copies drop the other window and omit data curves."
+            )
+    return mean_path, mean_data
 
 
 def make_shared_stimuli(mp_ref, bps: int, seed: int):
@@ -109,9 +136,8 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         backend="numba",
         **mp,
     )
-    sim_out = mean_by_condition(
-        results, steps_before_obs, T=72, var_names=("I", "P", "M")
-    )
+    # Match paper-brain-wide-map/model_test.ipynb diagnostic cell.
+    sim_out = mean_by_condition(results, steps_before_obs)
 
     loss_traj = loss_plot_diff_by_condition_with_data(
         sim_out,
@@ -127,15 +153,21 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         model_params=mp,
         steps_before_obs=steps_before_obs,
         T=72,
+        model_metric="l2",
         timeframes=("act_block_duringstim", "act_block_duringchoice"),
-        alpha=0.05,
         ptype="p_mean_c",
+        plot_window=80,
+        reload=False,
         label_A="integrator",
         label_B="move",
         do_plot=True,
-        save_dir=str(out_dir),
+        plot_shifted=False,
+        ylim=None,
         scale_factors=[1, 1, 1],
         include_all_trials=True,
+        save_dir=str(out_dir),
+        plot_stim=False,
+        lump_all=False,
     )
     total = float(loss_traj["total"] + loss_prior["total"])
     summary = {
@@ -171,13 +203,22 @@ def main():
         default=None,
         help="override default best finals",
     )
+    ap.add_argument(
+        "--data-dir",
+        type=Path,
+        default=PAPER_DATA_DIR,
+        help="dir with mean_data_results.npy + data_act_block_*.npy (paper notebook)",
+    )
     args = ap.parse_args()
 
-    ensure_prior_data_links()
-    mean_path = Path(pth_res) / "mean_data_results.npy"
-    if not mean_path.is_file():
-        mean_path = Path("mean_data_results.npy")
-    mean_data = np.load(mean_path, allow_pickle=True).flat[0]
+    ensure_fit_data_links(args.data_dir)
+    mean_path, mean_data = load_mean_data_results(args.data_dir)
+    print(f"mean_data_results: {mean_path}")
+    print(
+        "prior data cwd links:",
+        Path("data_act_block_duringstim.npy").resolve(),
+        Path("data_act_block_duringchoice.npy").resolve(),
+    )
     prior_regions = {
         "int_regs_choice": int_regs,
         "int_regs_stim": int_regs,
