@@ -273,8 +273,9 @@ def build_stage_b_hybrid_payload(
     Stage A→B handoff: WEIGHTS_REL (or weights JSON) W/g/d/θ ∪ Stage-A retinal.
 
     Returns a joint21 payload loadable by ``reconstruct_theta_joint_from_json`` /
-    ``--resume-json``. Retinal dims stay free under regular/sensory freeze masks
-    (do not add 14–20 to ``--freeze``). ``g_s``/``d_s`` default near zero; regular
+    ``--resume-json``. Variant freeze masks do **not** include retinal 14–20.
+    Stage B DE holds those dims at this Stage-A retinal (``--stage1-hold-retinal``);
+    Stage-2 CMA / polish unfreeze them. ``g_s``/``d_s`` default near zero; regular
     freezes them, sensory trains them from this warm start.
     """
     W = weights_meta["W"]

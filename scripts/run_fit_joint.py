@@ -7,11 +7,12 @@ Default sensory-prior ablation freezes g_i,g_m,d_i,d_m (indices 6–9):
 
   PYTHONPATH=. python scripts/run_fit_joint.py --mtype sensory --freeze 6,7,8,9 --seed 56
 
-Warm-start DE (external JSON + de_cma*): seeds Stage-1 DE init pop from the
-warm θ (jittered x0 inject), then CMA → polish. Unlike cma_only, does not skip DE.
+Warm-start DE (external JSON + de_cma*): Stage-1 DE holds Stage-A retinal
+(dims 14–20) at the loaded values and searches the rest; Stage-2 CMA and
+polish unfreeze retinal. Pass --no-stage1-hold-retinal to search retinal in DE.
 
   PYTHONPATH=. python scripts/run_fit_joint.py --mtype regular --freeze 12,13 --seed 56 \\
-      --pipeline de_cma_local --resume-json path/to/weights_*.json
+      --pipeline de_cma_local --resume-json path/to/weights_*.json --stage1-hold-retinal
 
 ORCD: scripts/run_fit_joint_slurm.sh + submit_fit_joint_sharded.sh
 """
@@ -59,6 +60,7 @@ from fit_joint import (
     D_JOINT,
     PARAM_NAMES,
     CMA_STDS,
+    DEFAULT_REFINE_IDX,
     SENSORY_REFINE_IDX,
     RETINAL_REFINE_IDX,
     fit_joint_two_stage,
@@ -117,7 +119,18 @@ def _find_resume(run_dir: Path):
                         and len(fit_idx) == theta.size
                         and max(int(i) for i in fit_idx) < D_JOINT
                     ):
+                        # Prefer the warm-start full vector so Stage-1-held retinal
+                        # (not in fit_idx) is not zero-filled.
                         full = fj.freeze_fill_joint()
+                        start = run_dir / "resume_start.json"
+                        if start.is_file():
+                            try:
+                                st = json.loads(start.read_text())
+                                tl = st.get("theta_log")
+                                if tl is not None and len(tl) == D_JOINT:
+                                    full = np.asarray(tl, float)
+                            except Exception:
+                                pass
                         full[np.asarray(fit_idx, int)] = theta
                         theta = full
                     else:
@@ -210,6 +223,11 @@ def build_args(argv=None):
     ap.add_argument("--resume-json", type=str, default=None,
                     help="Warm-start JSON (weights or joint). With de_cma*: seeds "
                          "Stage-1 DE. With cma_only: skip DE, start Stage-2 CMA.")
+    ap.add_argument("--stage1-hold-retinal", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="Stage-1 DE holds retinal dims 14–20 at the loaded "
+                         "theta_log0 (Stage-A values); Stage-2 CMA and polish "
+                         "unfreeze them. Default off; Stage B submit turns it on.")
     ap.add_argument("--stage2-n-stim-seeds", type=int, default=3)
     ap.add_argument("--stage2-stim-aggregate", choices=["sample", "mean"], default="sample")
     ap.add_argument("--val-seed", type=int, default=None)
@@ -305,6 +323,13 @@ def main(argv=None):
             raise SystemExit(f"--freeze index {i} out of range 0..{D_JOINT-1}")
         train_mask[i] = False
     frozen = [PARAM_NAMES[i] for i in freeze_idx]
+    train_mask_stage1 = None
+    if args.stage1_hold_retinal:
+        train_mask_stage1 = train_mask.copy()
+        train_mask_stage1[14:21] = False
+        held = [PARAM_NAMES[i] for i in range(14, 21) if train_mask[i]]
+        print(f"[stage1-hold-retinal] DE holds {held or 'none (already frozen)'}; "
+              f"CMA/polish unfreeze retinal")
     print(f"variant mtype={args.mtype} mask={slug} ({frozen or 'none'}) "
           f"pipeline={args.pipeline} seed={args.seed} n_jobs={args.n_jobs} "
           f"backend={args.backend} D={D_JOINT}")
@@ -344,7 +369,7 @@ def main(argv=None):
             "kind": "warm_de",
             "resume_from": "none",
             "layout": "joint21",
-            "note": "Stage-1 DE seeded from warm θ (x0 inject); not a stage skip",
+            "note": "Stage-1 DE seeded from warm θ (x0 inject); retinal held if --stage1-hold-retinal",
         }, indent=2))
         print(f"[warm-DE] Stage-1 DE from '{resume_source}' "
               f"(de1_maxiter={de1_maxiter}, x0 inject + random pop)")
@@ -381,6 +406,12 @@ def main(argv=None):
     val_seed = (int(args.val_seed) if args.val_seed is not None
                 else int(args.seed) + 7777)
 
+    refine_idx = _parse_local_refine_idx(args.local_refine_idx)
+    if args.stage1_hold_retinal:
+        if refine_idx is None:
+            refine_idx = list(DEFAULT_REFINE_IDX)
+        refine_idx = sorted(set(int(i) for i in refine_idx) | set(RETINAL_REFINE_IDX))
+
     wall0 = time.perf_counter()
     best = fit_joint_two_stage(
         mean_data_results, prior_regions, behavior, avg_data_R,
@@ -398,6 +429,7 @@ def main(argv=None):
         cma_opts_stage2=cma_opts_stage2,
         de2_maxiter=int(args.de2_maxiter),
         train_mask=train_mask,
+        train_mask_stage1=train_mask_stage1,
         resume_from=resume_from,
         resume_theta_log=resume_theta_for_fit,
         resume_path=resume_path,
@@ -409,7 +441,7 @@ def main(argv=None):
         cma_early_stop_patience=int(args.patience),
         cma_early_stop_beat_loss=(None if args.beat_loss < 0 else float(args.beat_loss)),
         local_refine_after_cma=local,
-        local_refine_idx=_parse_local_refine_idx(args.local_refine_idx),
+        local_refine_idx=refine_idx,
         local_refine_method=args.local_refine_method,
         local_refine_patience=8,
         local_refine_max_wall_s=(
@@ -432,6 +464,7 @@ def main(argv=None):
         "seed": args.seed,
         "layout": "joint21",
         "warm_de": bool(warm_de),
+        "stage1_hold_retinal": bool(args.stage1_hold_retinal),
         "resume_source": resume_source,
         "val_seed": val_seed,
         "n_jobs": args.n_jobs,
