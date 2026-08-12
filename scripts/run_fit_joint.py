@@ -31,6 +31,19 @@ try:
 except ImportError:
     from scripts import _one_bypass  # noqa: F401
 
+try:
+    from _fit_data import (
+        ensure_fit_data_links,
+        load_validated_mean_data,
+        load_avg_mean_r,
+    )
+except ImportError:
+    from scripts._fit_data import (
+        ensure_fit_data_links,
+        load_validated_mean_data,
+        load_avg_mean_r,
+    )
+
 from model_functions import (
     pth_res,
     int_regs,
@@ -52,32 +65,6 @@ from fit_joint import (
     reconstruct_theta_joint_from_json,
     _save_params_joint,
 )
-
-
-def _ensure_data_links():
-    """Symlink mean_data_results, act_block, and avg_mean_R into cwd."""
-    mean_src = Path(pth_res) / "mean_data_results.npy"
-    mean_dst = Path.cwd() / "mean_data_results.npy"
-    if mean_src.is_file() and not mean_dst.exists():
-        mean_dst.symlink_to(mean_src)
-    figs = Path(pth_res).parent / "figs"
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src, dst = figs / name, Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
-    # S target: paper-brain-wide-map or ONE figs / cwd
-    avg_dst = Path.cwd() / "avg_mean_R.npy"
-    if not avg_dst.exists():
-        candidates = [
-            Path(__file__).resolve().parents[2] / "paper-brain-wide-map" / "avg_mean_R.npy",
-            Path.home() / "int-brain-lab" / "paper-brain-wide-map" / "avg_mean_R.npy",
-            figs / "avg_mean_R.npy",
-            Path(pth_res) / "avg_mean_R.npy",
-        ]
-        for src in candidates:
-            if src.is_file():
-                avg_dst.symlink_to(src)
-                break
 
 
 def _default_n_jobs():
@@ -142,7 +129,11 @@ def _find_resume(run_dir: Path):
                 theta = reconstruct_theta_joint_from_json(meta)
             if theta.size != D_JOINT or not np.all(np.isfinite(theta)):
                 continue
-            loss = float(meta.get("loss", 1.0))
+            raw_loss = meta.get("loss", 1.0)
+            try:
+                loss = float(1.0 if raw_loss is None else raw_loss)
+            except (TypeError, ValueError):
+                loss = 1.0
             # Skip penalty dumps unless nothing else exists (caller may FORCE+external).
             name = c.name
             sel = meta.get("selection")
@@ -242,18 +233,15 @@ def main(argv=None):
         print(f"[skip] {run_dir.name} already complete (FIT_DONE). Use --force to redo.")
         return {"skipped": True, "run_dir": str(run_dir)}
 
-    _ensure_data_links()
-    if not Path("avg_mean_R.npy").is_file():
-        raise SystemExit(
-            "avg_mean_R.npy not found (tried paper-brain-wide-map/, ONE figs/, cwd). "
-            "Copy or symlink it into the repo cwd before fitting."
-        )
+    ensure_fit_data_links(pth_res=pth_res, require_avg_mean_r=True)
     disable_realtime_plot()
     loss_history.clear()
     _eval_counter["n"] = 0
 
-    mean_data_results = np.load("mean_data_results.npy", allow_pickle=True).flat[0]
-    avg_data_R = np.load("avg_mean_R.npy", allow_pickle=True).flat[0]
+    mean_path, mean_data_results = load_validated_mean_data()
+    print(f"[fit-data] mean_data_results={mean_path}")
+    avg_path, avg_data_R = load_avg_mean_r()
+    print(f"[fit-data] avg_mean_R={avg_path}")
     behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
     prior_regions = {
         "int_regs_choice": int_regs, "int_regs_stim": int_regs,
@@ -282,7 +270,13 @@ def main(argv=None):
     if resume_theta is None and args.resume_json:
         meta = json.loads(Path(args.resume_json).read_text())
         resume_theta = reconstruct_theta_joint_from_json(meta)
-        resume_loss = float(meta.get("loss", 1.0))
+        raw_loss = meta.get("loss", 1.0)
+        try:
+            resume_loss = float(1.0 if raw_loss is None else raw_loss)
+        except (TypeError, ValueError):
+            resume_loss = 1.0
+        if not np.isfinite(resume_loss):
+            resume_loss = 1.0
         resume_meta_mp = meta.get("model_params", {})
         resume_source = f"external:{Path(args.resume_json).name}"
         resume_kind = "stage2"

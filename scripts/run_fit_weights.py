@@ -48,6 +48,11 @@ try:
 except ImportError:
     from scripts import _one_bypass  # noqa: F401
 
+try:
+    from _fit_data import ensure_fit_data_links, load_validated_mean_data
+except ImportError:
+    from scripts._fit_data import ensure_fit_data_links, load_validated_mean_data
+
 from model_functions import (
     pth_res,
     int_regs,
@@ -72,19 +77,6 @@ PARAM_NAMES = [
     "W_ii", "W_pp", "W_mm", "W_is", "W_pi", "W_mi",
     "g_i", "g_m", "d_i", "d_m", "theta_c", "theta_d",
 ]
-
-
-def _ensure_data_links():
-    """Symlink the data files fit_weights loads from cwd (mean_data_results, act_block)."""
-    mean_src = Path(pth_res) / "mean_data_results.npy"
-    mean_dst = Path.cwd() / "mean_data_results.npy"
-    if mean_src.is_file() and not mean_dst.exists():
-        mean_dst.symlink_to(mean_src)
-    figs = Path(pth_res).parent / "figs"
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src, dst = figs / name, Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
 
 
 def _default_n_jobs():
@@ -278,13 +270,14 @@ def main(argv=None):
         print(f"[skip] {run_dir.name} already complete (FIT_DONE). Use --force to redo.")
         return {"skipped": True, "run_dir": str(run_dir)}
 
-    _ensure_data_links()
+    ensure_fit_data_links(pth_res=pth_res, require_avg_mean_r=False)
     disable_realtime_plot()
     loss_history.clear()
     _eval_counter["n"] = 0
 
     # --- data / regions ---
-    mean_data_results = np.load("mean_data_results.npy", allow_pickle=True).flat[0]
+    mean_path, mean_data_results = load_validated_mean_data()
+    print(f"[fit-data] mean_data_results={mean_path}")
     behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
     prior_regions = {
         "int_regs_choice": int_regs, "int_regs_stim": int_regs,
