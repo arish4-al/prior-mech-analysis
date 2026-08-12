@@ -260,6 +260,136 @@ def reconstruct_theta_joint_from_json(meta):
     return pack_joint(init)
 
 
+def build_stage_b_hybrid_payload(
+    weights_meta,
+    retinal_meta,
+    *,
+    g_s=1e-12,
+    d_s=1e-12,
+    source_weights=None,
+    source_retinal=None,
+):
+    """
+    Stage A→B handoff: WEIGHTS_REL (or weights JSON) W/g/d/θ ∪ Stage-A retinal.
+
+    Returns a joint21 payload loadable by ``reconstruct_theta_joint_from_json`` /
+    ``--resume-json``. Retinal dims stay free under regular/sensory freeze masks
+    (do not add 14–20 to ``--freeze``). ``g_s``/``d_s`` default near zero; regular
+    freezes them, sensory trains them from this warm start.
+    """
+    W = weights_meta["W"]
+    g = weights_meta.get("g") or {}
+    d = weights_meta.get("d") or {}
+    th = weights_meta.get("theta") or {}
+    ret = retinal_meta.get("retinal") or {}
+    if not ret and "theta_log" in retinal_meta:
+        # Stage-A retinal7 JSON without nested retinal (rare).
+        import fit_retinal as fr
+        ret = fr.unpack_retinal(fr.reconstruct_theta_retinal_from_json(retinal_meta))
+    if not ret:
+        raise ValueError("retinal_meta missing 'retinal' (Stage-A final required)")
+
+    def _pos(x, floor=1e-12):
+        return max(float(x), floor)
+
+    init = {
+        "W_ii": float(W["W_ii"]), "W_pp": float(W["W_pp"]), "W_mm": float(W["W_mm"]),
+        "W_is": float(W["W_is"]), "W_pi": float(W["W_pi"]), "W_mi": float(W["W_mi"]),
+        "g_i": _pos(g.get("g_i", 1e-12)),
+        "g_m": _pos(g.get("g_m", 1e-12)),
+        "d_i": _pos(d.get("d_i", 1e-12)),
+        "d_m": _pos(d.get("d_m", 1e-12)),
+        "theta_c": float(th.get("theta_c", 0.78)),
+        "theta_d": float(th.get("theta_d", 0.54)),
+        "g_s": _pos(g_s),
+        "d_s": _pos(d_s),
+        "alpha_w": float(ret["alpha_w"]),
+        "beta_w": float(ret["beta_w"]),
+        "alpha_d": float(ret["alpha_d"]),
+        "beta_d": float(ret["beta_d"]),
+        "tau_a": float(ret["tau_a"]),
+        "W_as": float(ret["W_as"]),
+        "W_ss": _pos(ret["W_ss"], floor=1e-12),
+    }
+    lo_b, hi_b = BETA_W_NATIVE
+    init["beta_w"] = float(np.clip(init["beta_w"], lo_b, hi_b))
+    # Keep W_ss inside native bounds for packing.
+    lo_ss, hi_ss = NATIVE_BOUNDS["W_ss"]
+    init["W_ss"] = float(np.clip(init["W_ss"], lo_ss, hi_ss))
+
+    theta = pack_joint(init)
+    u = unpack_joint(theta)
+    mp = dict(weights_meta.get("model_params") or {})
+    mp.update({k: u[k] for k in (
+        "W_ii", "W_pp", "W_mm", "W_is", "W_pi", "W_mi",
+        "g_i", "g_m", "d_i", "d_m", "g_s", "d_s",
+        "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss",
+    )})
+    mp["action_thresholds"] = {
+        "concordant": {str(c): u["theta_c"] for c in [1.0, 0.25, 0.125, 0.0625, 0.0]},
+        "discordant": {str(c): u["theta_d"] for c in [1.0, 0.25, 0.125, 0.0625, 0.0]},
+    }
+    # Placeholder only — not a measured L_w+L_S. Must be a finite float so
+    # run_fit_joint's float(meta["loss"]) does not raise on JSON null.
+    w_loss = weights_meta.get("loss")
+    r_loss = retinal_meta.get("loss")
+    try:
+        placeholder_loss = float(w_loss) + float(r_loss)
+    except (TypeError, ValueError):
+        placeholder_loss = 1.0
+    if not np.isfinite(placeholder_loss):
+        placeholder_loss = 1.0
+    return {
+        "ts": _now_iso(),
+        "loss": float(placeholder_loss),
+        "layout": "joint21",
+        "beta_w_coord": "asinh",
+        "handoff": "stageA_retinal_plus_WEIGHTS_REL",
+        "source_weights": source_weights,
+        "source_retinal": source_retinal,
+        "recorded_weights_loss": w_loss,
+        "recorded_retinal_loss": r_loss,
+        "train_mask": [True] * D_JOINT,
+        "frozen_idx": [],
+        "theta_log": np.asarray(theta, float).tolist(),
+        "W": {k: u[k] for k in ("W_ii", "W_pp", "W_mm", "W_is", "W_pi", "W_mi")},
+        "g": {"g_i": u["g_i"], "g_m": u["g_m"], "g_s": u["g_s"]},
+        "d": {"d_i": u["d_i"], "d_m": u["d_m"], "d_s": u["d_s"]},
+        "theta": {"theta_c": u["theta_c"], "theta_d": u["theta_d"]},
+        "g_s": u["g_s"],
+        "d_s": u["d_s"],
+        "retinal": {k: u[k] for k in (
+            "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss")},
+        "model_params": {
+            k: float(v) if isinstance(v, (int, float, np.floating)) else v
+            for k, v in mp.items()
+        },
+        "note": (
+            "Warm-start for Stage B joint: retinal free under regular:12|13 / "
+            "sensory:6|7|8|9 (do not freeze 14–20). "
+            "'loss' is a placeholder (Lw_rec + LS_rec), not joint eval."
+        ),
+    }
+
+
+def write_stage_b_hybrid_json(weights_json, retinal_json, out_json):
+    """Load WEIGHTS + Stage-A retinal JSONs, write hybrid joint21 JSON."""
+    weights_path = Path(weights_json)
+    retinal_path = Path(retinal_json)
+    out_path = Path(out_json)
+    weights_meta = json.loads(weights_path.read_text())
+    retinal_meta = json.loads(retinal_path.read_text())
+    payload = build_stage_b_hybrid_payload(
+        weights_meta, retinal_meta,
+        source_weights=str(weights_path),
+        source_retinal=str(retinal_path),
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2))
+    np.save(out_path.with_suffix(".npy"), np.asarray(payload["theta_log"], float))
+    return out_path, payload
+
+
 def _payload_joint(theta, loss, train_mask=None, random_state=None, **extra):
     u = unpack_joint(theta)
     theta_arr = np.asarray(theta, float)
