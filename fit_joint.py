@@ -468,8 +468,11 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
     avg_data_R required (passed explicitly or via loss_extra_kwargs).
     """
     try:
+        # Use fw.blocks_per_session (live), not the import-time snapshot.
+        # `from fit_weights import blocks_per_session` stays at 5 even after
+        # run_fit_joint sets fw.blocks_per_session = --bps-stage1 (ORCD 2026-08-12f).
         bps = (blocks_per_session_override
-               if blocks_per_session_override is not None else blocks_per_session)
+               if blocks_per_session_override is not None else fw.blocks_per_session)
         try:
             apply_joint_to_model_params(theta)
         except Exception:

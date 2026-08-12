@@ -16,8 +16,9 @@ I/M `{stim,choice}` (I-pre / M-post solid data on plots). `cma_only` from hybrid
 finished; DE Stage-1 at `bps=10` hit S-bucket `<10` → 1e12 because DE jittered
 retinal away from Stage A (exact hybrid was never in the pop). **2026-08-12e:**
 Stage-1 DE now **holds** Stage-A retinal; CMA/polish unfreeze it
-(`--stage1-hold-retinal`, Stage B default on). Next: ORCD smoke both masks, then
-production; fair compare vs **1.344**.
+(`--stage1-hold-retinal`, Stage B default on). **2026-08-12f:** ORCD hold-smoke
+both masks still 1e12 — `--bps-stage1` never reached joint DE (stale import-time
+bps=5). Fix in `loss_joint_core` / DE context; resubmit after it is on `main`.
 
 **Code:** [`fit_retinal.py`](../fit_retinal.py) (hooks into
 `fit_weights_two_stage_v2`); drivers
@@ -429,6 +430,43 @@ DE held `[14–20]`, active 12, pop 48; Stage-1 loss **3.503** (not 1e12). Unfro
 19-d for CMA; polish ∪ retinal. Recorded **1.534**, wall 193s. Random DE members
 still print S-bucket `<10`; the held hybrid is enough for a finite best. ORCD
 smoke can proceed (`STAGE1_HOLD_RETINAL=1` is the Stage B default).
+
+---
+
+### 2026-08-12f — ORCD hold-smoke both masks 1e12 (bps-stage1 never reached joint DE)
+
+ORCD jobs `20307629` (regular) and `20307630` (sensory), `OUT_TAG=stageB_hold_smoke`,
+seed 999: Stage 1 `loss=1e12`, `wall≈20s`, skip Stage 2. Same S-bucket `<10` prints
+as the local no-hold DE failure.
+
+**Cause:** `--bps-stage1` did not change joint Stage-1 session length. `loss_joint_core`
+used `from fit_weights import blocks_per_session` (import-time **5**).
+`run_fit_joint.py` set `fw.blocks_per_session = 20` but that does not update the
+imported name. DE workers also passed `blocks_per_session_override=None`. Stage B’s
+`BPS_STAGE1=20` default was a no-op; DE ran at **bps=5**. At that length, empty
+S-buckets are common (16-way fork, unseeded `stim_rng=None`). Scipy then sees a
+flat 1e12 landscape (`de1_inf_restarts=2` → three 1-gen attempts ≈ 20s) and
+gates out.
+
+Local hold-smoke succeeded at the same effective bps=5 because a single-machine
+4-worker stream happened to draw a stim with enough trials (Stage-1 loss 3.503).
+Not a hold-retinal regression.
+
+**Fix:** `loss_joint_core` uses live `fw.blocks_per_session`; DE context passes
+that as `blocks_per_session_override`; driver also sets `fj.blocks_per_session`.
+Slurm echo now prints `BPS_STAGE1` / `STAGE1_HOLD_RETINAL`.
+
+Resubmit after this is on ORCD `main` (`FORCE=1`, new tag or same):
+
+```bash
+SEEDS="999" OUT_TAG=stageB_hold_smoke TIME=1:00:00 \
+  DE1_MAXITER=2 DE2_MAXITER=3 POPSIZE=8 SOBOL_COUNT=4 \
+  PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 \
+  bash scripts/submit_fit_stage_b_sharded.sh
+```
+
+Log must show `BPS_STAGE1=20`, `hold_retinal=True`, `[Stage1] holding 7 dims`,
+and a **finite** Stage-1 loss (not 1e12).
 
 ---
 

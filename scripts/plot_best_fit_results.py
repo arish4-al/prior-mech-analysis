@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 
 from simulate_recovery import load_fitted_model
@@ -18,6 +19,9 @@ from model_functions import (
     create_stimuli,
     run_model,
     mean_by_condition,
+    mean_S_by_contrast,
+    plot_S_diff_by_contrast_side_with_data,
+    compute_sse_stim_right,
     loss_plot_diff_by_condition_with_data,
     loss_prior_effect,
     int_regs,
@@ -35,6 +39,7 @@ try:
     from _fit_data import (
         ensure_fit_data_links,
         load_validated_mean_data,
+        load_avg_mean_r,
         resolve_fit_targets_dir,
         FIT_TARGETS_DIR,
     )
@@ -42,6 +47,7 @@ except ImportError:
     from scripts._fit_data import (
         ensure_fit_data_links,
         load_validated_mean_data,
+        load_avg_mean_r,
         resolve_fit_targets_dir,
         FIT_TARGETS_DIR,
     )
@@ -128,7 +134,8 @@ def load_plot_model(json_path: Path):
     return mp, meta
 
 
-def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path):
+def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path,
+             avg_mean_R=None):
     mp, meta = load_plot_model(json_path)
     (
         stimuli,
@@ -187,12 +194,31 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         lump_all=False,
     )
     total = float(loss_traj["total"] + loss_prior["total"])
+    L_S = None
+    if avg_mean_R is not None:
+        plt.close("all")
+        S_avg = mean_S_by_contrast(results, steps_before_obs)
+        sse = compute_sse_stim_right(S_avg, avg_mean_R, baseline_R=0)
+        raw_ls = sse["total_loss"]
+        L_S = float(raw_ls) if np.isfinite(raw_ls) else None
+        plot_S_diff_by_contrast_side_with_data(
+            S_avg, {}, avg_mean_R, baseline=0,
+            save_dir=str(out_dir), ylim=[-0.14, 0.75], yticks=None,
+        )
+        for n in list(plt.get_fignums()):
+            fig = plt.figure(n)
+            fig.savefig(
+                out_dir / "S_fit.png",
+                dpi=150, bbox_inches="tight", transparent=False,
+            )
+        plt.close("all")
     summary = {
         "json": str(json_path),
         "recorded_loss": float(meta.get("loss", np.nan)),
         "eval_total": total,
         "traj": float(loss_traj["total"]),
         "prior": float(loss_prior["total"]),
+        "L_S": L_S,
         "g_i": float(mp["g_i"]),
         "d_i": float(mp["d_i"]),
         "g_m": float(mp["g_m"]),
@@ -231,6 +257,8 @@ def main():
     ensure_fit_data_links_paper(args.data_dir)
     mean_path, mean_data = load_mean_data_results(args.data_dir)
     print(f"mean_data_results: {mean_path}")
+    avg_path, avg_mean_R = load_avg_mean_r()
+    print(f"avg_mean_R: {avg_path}")
     print(
         "prior data cwd links:",
         Path("data_act_block_duringstim.npy").resolve(),
@@ -262,11 +290,14 @@ def main():
         tag = jp.parent.name
         out_dir = args.out_root / tag
         print(f"\n=== {tag} ===")
-        s = plot_one(jp, stim_bundle, mean_data, prior_regions, out_dir)
+        s = plot_one(jp, stim_bundle, mean_data, prior_regions, out_dir,
+                     avg_mean_R=avg_mean_R)
+        ls = s.get("L_S")
+        ls_txt = f" L_S={ls:.4f}" if ls is not None else ""
         print(
             f"recorded={s['recorded_loss']:.4f}  "
             f"eval={s['eval_total']:.4f} "
-            f"(traj={s['traj']:.4f}+prior={s['prior']:.4f})  "
+            f"(traj={s['traj']:.4f}+prior={s['prior']:.4f}{ls_txt})  "
             f"g_i={s['g_i']:.3g} d_i={s['d_i']:.3g}  "
             f"plots -> {s['out_dir']}"
         )
