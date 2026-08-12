@@ -30,6 +30,11 @@ try:
 except ImportError:
     from scripts import _one_bypass  # noqa: F401
 
+try:
+    from _fit_data import ensure_fit_data_links, load_avg_mean_r
+except ImportError:
+    from scripts._fit_data import ensure_fit_data_links, load_avg_mean_r
+
 from model_functions import (
     pth_res,
     model_params,
@@ -49,24 +54,6 @@ from fit_retinal import (
     apply_retinal_stage_a_defaults,
     freeze_fill_retinal,
 )
-
-
-def _ensure_data_links():
-    """Symlink avg_mean_R into cwd (S target)."""
-    avg_dst = Path.cwd() / "avg_mean_R.npy"
-    if avg_dst.exists():
-        return
-    figs = Path(pth_res).parent / "figs"
-    candidates = [
-        Path(__file__).resolve().parents[2] / "paper-brain-wide-map" / "avg_mean_R.npy",
-        Path.home() / "int-brain-lab" / "paper-brain-wide-map" / "avg_mean_R.npy",
-        figs / "avg_mean_R.npy",
-        Path(pth_res) / "avg_mean_R.npy",
-    ]
-    for src in candidates:
-        if src.is_file():
-            avg_dst.symlink_to(src)
-            break
 
 
 def _default_n_jobs():
@@ -224,17 +211,16 @@ def main(argv=None):
         print(f"[skip] {run_dir.name} already complete (FIT_DONE). Use --force to redo.")
         return {"skipped": True, "run_dir": str(run_dir)}
 
-    _ensure_data_links()
-    if not Path("avg_mean_R.npy").is_file():
-        raise SystemExit(
-            "avg_mean_R.npy not found (tried paper-brain-wide-map/, ONE figs/, cwd). "
-            "Copy or symlink it before fitting."
-        )
+    # Retinal Stage A only needs avg_mean_R from repo fit_targets/.
+    ensure_fit_data_links(
+        pth_res=pth_res, require_avg_mean_r=True, mean_and_prior=False,
+    )
+    avg_path, avg_data_R = load_avg_mean_r()
+    print(f"[fit-data] avg_mean_R={avg_path}")
     disable_realtime_plot()
     loss_history.clear()
     _eval_counter["n"] = 0
 
-    avg_data_R = np.load("avg_mean_R.npy", allow_pickle=True).flat[0]
     # Placeholders for the shared fitter API (unused by L_S loss).
     mean_data_results = None
     prior_regions = None

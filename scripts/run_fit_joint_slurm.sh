@@ -62,15 +62,12 @@ module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-# Ensure avg_mean_R is available (paper-brain-wide-map sibling or ONE figs).
-if [[ ! -f avg_mean_R.npy ]]; then
-  for cand in \
-    "$HOME/int-brain-lab/paper-brain-wide-map/avg_mean_R.npy" \
-    "$ONE_CACHE_DIR/manifold/figs/avg_mean_R.npy" \
-    "$ONE_CACHE_DIR/manifold/res/avg_mean_R.npy"; do
-    if [[ -f "$cand" ]]; then
-      ln -sfn "$cand" avg_mean_R.npy
-      break
+# Ensure fit targets from repo fit_targets/ (Python drivers also refresh these).
+if [[ -d "$REPO_DIR/fit_targets" ]]; then
+  for name in avg_mean_R.npy mean_data_results.npy \
+              data_act_block_duringstim.npy data_act_block_duringchoice.npy; do
+    if [[ -f "$REPO_DIR/fit_targets/$name" ]]; then
+      ln -sfn "$REPO_DIR/fit_targets/$name" "$name"
     fi
   done
 fi

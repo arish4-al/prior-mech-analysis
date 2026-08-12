@@ -251,10 +251,12 @@ def main():
         print(f"  {backend}: {time.perf_counter() - t0:.3f}s")
 
     # --- B. full loss eval breakdown ---
-    mean_path = Path(pth_res) / "mean_data_results.npy"
-    if not mean_path.is_file():
-        mean_path = Path("mean_data_results.npy")
-    mean_data = np.load(mean_path, allow_pickle=True).flat[0]
+    try:
+        from _fit_data import ensure_fit_data_links, load_validated_mean_data
+    except ImportError:
+        from scripts._fit_data import ensure_fit_data_links, load_validated_mean_data
+    ensure_fit_data_links(require_avg_mean_r=False, mean_and_prior=True)
+    mean_path, mean_data = load_validated_mean_data()
     behavior_path = Path(pth_res) / "behavior.npy"
     _ = np.load(behavior_path, allow_pickle=True).flat[0]  # ensure present
     prior_regions = {
@@ -266,14 +268,6 @@ def main():
     }
     theta_log = reconstruct_theta_log(meta)
     mp = mp_from_theta(theta_log)
-
-    # loss_prior_effect loads cwd-relative data_{timeframe}.npy (fit convention).
-    figs = Path(pth_res).parent / "figs"
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src = figs / name
-        dst = Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
 
     # warmup
     section_time_loss(mp, mean_data, prior_regions, bps=5, seed=0)

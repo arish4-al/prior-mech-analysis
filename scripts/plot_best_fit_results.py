@@ -31,12 +31,26 @@ from model_functions import (
     max_trials_per_block,
 )
 
+try:
+    from _fit_data import (
+        ensure_fit_data_links,
+        load_validated_mean_data,
+        resolve_fit_targets_dir,
+        FIT_TARGETS_DIR,
+    )
+except ImportError:
+    from scripts._fit_data import (
+        ensure_fit_data_links,
+        load_validated_mean_data,
+        resolve_fit_targets_dir,
+        FIT_TARGETS_DIR,
+    )
+
 REMOTE = Path.home() / (
     "Downloads/ONE/openalyx.internationalbrainlab.org/models/remote"
 )
-# Canonical fit-diagnostic data used by paper-brain-wide-map/model_test.ipynb
-# (nested mean_traj stim/choice; prior curves match notebook overlays).
-PAPER_DATA_DIR = Path("/Users/ariliu/int-brain-lab/paper-brain-wide-map")
+# Canonical fit targets: repo fit_targets/ (notebook nested mean_data + prior).
+FIT_DATA_DIR = resolve_fit_targets_dir()
 
 # Best-of ORCD batch (journals/simulation_fit_speedups.md 2026-08-06a)
 DEFAULT_MODELS = [
@@ -49,38 +63,19 @@ DEFAULT_MODELS = [
 ]
 
 
-def ensure_fit_data_links(data_dir: Path = PAPER_DATA_DIR):
-    """
-    loss_prior_effect loads cwd-relative data_{timeframe}.npy.
-    Prefer the paper notebook copies over manifold/figs (different curves).
-    """
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src = (data_dir / name).resolve()
-        if not src.is_file():
-            raise FileNotFoundError(src)
-        dst = Path.cwd() / name
-        if dst.is_symlink() or dst.exists():
-            if dst.resolve() == src:
-                continue
-            dst.unlink()
-        dst.symlink_to(src)
+def ensure_fit_data_links_paper(data_dir: Path | None = None):
+    """Refresh cwd links from repo fit_targets/ (2026-08-12c)."""
+    targets = Path(data_dir) if data_dir is not None else FIT_DATA_DIR
+    return ensure_fit_data_links(
+        fit_targets_dir=targets, require_avg_mean_r=False, mean_and_prior=True,
+    )
 
 
-def load_mean_data_results(data_dir: Path = PAPER_DATA_DIR):
-    """Load nested stim/choice mean_data_results (paper notebook format)."""
-    mean_path = data_dir / "mean_data_results.npy"
-    if not mean_path.is_file():
-        raise FileNotFoundError(mean_path)
-    mean_data = np.load(mean_path, allow_pickle=True).flat[0]
-    for vn in ("I", "M"):
-        mt = mean_data[vn]["mean_traj"]
-        if not (isinstance(mt, dict) and "stim" in mt and "choice" in mt):
-            raise ValueError(
-                f"{mean_path}: {vn}.mean_traj must be nested {{'stim','choice'}}; "
-                f"got keys={list(mt)[:12] if isinstance(mt, dict) else type(mt)}. "
-                "Flat manifold/res copies drop the other window and omit data curves."
-            )
-    return mean_path, mean_data
+def load_mean_data_results(data_dir: Path | None = None):
+    """Load nested stim/choice mean_data_results from repo fit_targets/."""
+    targets = Path(data_dir) if data_dir is not None else FIT_DATA_DIR
+    ensure_fit_data_links_paper(targets)
+    return load_validated_mean_data(targets / "mean_data_results.npy")
 
 
 def make_shared_stimuli(mp_ref, bps: int, seed: int):
@@ -206,12 +201,12 @@ def main():
     ap.add_argument(
         "--data-dir",
         type=Path,
-        default=PAPER_DATA_DIR,
-        help="dir with mean_data_results.npy + data_act_block_*.npy (paper notebook)",
+        default=FIT_DATA_DIR,
+        help="dir with mean_data_results.npy + data_act_block_*.npy (default: repo fit_targets/)",
     )
     args = ap.parse_args()
 
-    ensure_fit_data_links(args.data_dir)
+    ensure_fit_data_links_paper(args.data_dir)
     mean_path, mean_data = load_mean_data_results(args.data_dir)
     print(f"mean_data_results: {mean_path}")
     print(

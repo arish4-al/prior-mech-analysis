@@ -3286,7 +3286,13 @@ def fit_weights_local_refine(mean_data_results, prior_regions, behavior,
 
 # --------- USAGE (guarded — importing this module must not start a fit) -----------
 if __name__ == '__main__':
-    mean_data_results = np.load('mean_data_results.npy', allow_pickle=True).flat[0]
+    try:
+        from _fit_data import ensure_fit_data_links, load_validated_mean_data
+    except ImportError:
+        from scripts._fit_data import ensure_fit_data_links, load_validated_mean_data
+    ensure_fit_data_links(pth_res=pth_res, require_avg_mean_r=False)
+    _mean_path, mean_data_results = load_validated_mean_data()
+    print(f"[fit-data] mean_data_results={_mean_path}")
     behavior = np.load(Path(pth_res, 'behavior.npy'), allow_pickle=True).flat[0]
     prior_regions = {'int_regs_choice': int_regs, 'int_regs_stim': int_regs,
             'move_regs_choice': move_regs, 'move_regs_stim': move_regs}

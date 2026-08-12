@@ -48,6 +48,11 @@ try:
 except ImportError:
     from scripts import _one_bypass  # noqa: F401
 
+try:
+    from _fit_data import ensure_fit_data_links, load_validated_mean_data
+except ImportError:
+    from scripts._fit_data import ensure_fit_data_links, load_validated_mean_data
+
 from model_functions import (
     pth_res,
     int_regs,
@@ -72,19 +77,6 @@ PARAM_NAMES = [
     "W_ii", "W_pp", "W_mm", "W_is", "W_pi", "W_mi",
     "g_i", "g_m", "d_i", "d_m", "theta_c", "theta_d",
 ]
-
-
-def _ensure_data_links():
-    """Symlink the data files fit_weights loads from cwd (mean_data_results, act_block)."""
-    mean_src = Path(pth_res) / "mean_data_results.npy"
-    mean_dst = Path.cwd() / "mean_data_results.npy"
-    if mean_src.is_file() and not mean_dst.exists():
-        mean_dst.symlink_to(mean_src)
-    figs = Path(pth_res).parent / "figs"
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src, dst = figs / name, Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
 
 
 def _default_n_jobs():
@@ -278,13 +270,14 @@ def main(argv=None):
         print(f"[skip] {run_dir.name} already complete (FIT_DONE). Use --force to redo.")
         return {"skipped": True, "run_dir": str(run_dir)}
 
-    _ensure_data_links()
+    ensure_fit_data_links(pth_res=pth_res, require_avg_mean_r=False)
     disable_realtime_plot()
     loss_history.clear()
     _eval_counter["n"] = 0
 
     # --- data / regions ---
-    mean_data_results = np.load("mean_data_results.npy", allow_pickle=True).flat[0]
+    mean_path, mean_data_results = load_validated_mean_data()
+    print(f"[fit-data] mean_data_results={mean_path}")
     behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
     prior_regions = {
         "int_regs_choice": int_regs, "int_regs_stim": int_regs,
@@ -292,18 +285,29 @@ def main(argv=None):
         "stim_regs": ["VISpm", "FRP", "VISal"],
     }
 
-    # --- decide resume source: in-folder checkpoint (restart) > external warm start ---
+    # --- decide resume source ---
+    # Prefer a *good* in-folder checkpoint for kill/restart. Skip penalty dumps
+    # (loss>=1e10) so a failed smoke cannot block a later --resume-json warm start.
+    # With --force and an explicit --resume-json, always use the external JSON
+    # (ignores in-folder junk from prior runs in the same run dir).
     resume_meta_mp = {}
     resume_theta = None
     resume_loss = None
     resume_source = None
     resume_kind = None
-    if args.resume == "auto" and run_dir.exists():
+    prefer_external = bool(args.force and args.resume_json)
+    if args.resume == "auto" and run_dir.exists() and not prefer_external:
         found = _find_resume(run_dir)
         if found is not None:
-            resume_theta, resume_loss, resume_meta_mp, resume_source, resume_kind = found
-            print(f"[resume] latest checkpoint '{resume_source}' "
-                  f"(kind={resume_kind}) loss={resume_loss:.6f}")
+            th, loss, mp, src, kind = found
+            if np.isfinite(loss) and float(loss) < 1e10:
+                resume_theta, resume_loss, resume_meta_mp = th, loss, mp
+                resume_source, resume_kind = src, kind
+                print(f"[resume] latest checkpoint '{resume_source}' "
+                      f"(kind={resume_kind}) loss={resume_loss:.6f}")
+            else:
+                print(f"[resume] ignoring in-folder '{src}' (loss={loss:.6g} looks "
+                      f"like a penalty dump); will try --resume-json / cold start")
 
     if resume_theta is None and args.resume_json:
         meta = json.loads(Path(args.resume_json).read_text())
@@ -316,7 +320,9 @@ def main(argv=None):
         resume_meta_mp = meta.get("model_params", {})
         resume_source = f"external:{Path(args.resume_json).name}"
         resume_kind = "stage2"
-        print(f"[resume] external warm start '{resume_source}' loss={resume_loss:.6f}")
+        why = " (--force prefers external)" if prefer_external else ""
+        print(f"[resume] external warm start '{resume_source}' "
+              f"loss={resume_loss:.6f}{why}")
 
     if args.pipeline == "cma_only" and resume_theta is None:
         raise SystemExit("--pipeline cma_only needs a warm start (--resume-json) or an "

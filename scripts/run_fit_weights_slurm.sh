@@ -70,6 +70,16 @@ module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
+# Ensure fit targets from repo fit_targets/ (Python drivers also refresh these).
+if [[ -d "$REPO_DIR/fit_targets" ]]; then
+  for name in avg_mean_R.npy mean_data_results.npy \
+              data_act_block_duringstim.npy data_act_block_duringchoice.npy; do
+    if [[ -f "$REPO_DIR/fit_targets/$name" ]]; then
+      ln -sfn "$REPO_DIR/fit_targets/$name" "$name"
+    fi
+  done
+fi
+
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline 2>/dev/null || true
 echo "MTYPE=$MTYPE FREEZE='${FREEZE}' SEED=$SEED PIPELINE=$PIPELINE OUT_TAG=${OUT_TAG:-none}"

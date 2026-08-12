@@ -58,15 +58,11 @@ BPS = 20
 
 
 def _ensure_data_links():
-    mean_src = Path(pth_res) / "mean_data_results.npy"
-    mean_dst = Path.cwd() / "mean_data_results.npy"
-    if mean_src.is_file() and not mean_dst.exists():
-        mean_dst.symlink_to(mean_src)
-    figs = Path(pth_res).parent / "figs"
-    for name in ("data_act_block_duringstim.npy", "data_act_block_duringchoice.npy"):
-        src, dst = figs / name, Path.cwd() / name
-        if src.is_file() and not dst.exists():
-            dst.symlink_to(src)
+    try:
+        from _fit_data import ensure_fit_data_links
+    except ImportError:
+        from scripts._fit_data import ensure_fit_data_links
+    ensure_fit_data_links(require_avg_mean_r=False, mean_and_prior=True)
 
 
 def load_ckpt_params(weights: Path):
@@ -264,7 +260,11 @@ def main():
     landmarks = {PAPER["g_i"], ckpt["g_i"]}
     g_grid = np.unique(np.sort(np.concatenate([g_grid, list(landmarks)])))
 
-    mean_data = np.load("mean_data_results.npy", allow_pickle=True).flat[0]
+    try:
+        from _fit_data import load_validated_mean_data
+    except ImportError:
+        from scripts._fit_data import load_validated_mean_data
+    _, mean_data = load_validated_mean_data()
     prior_regions = {
         "int_regs_choice": int_regs,
         "int_regs_stim": int_regs,

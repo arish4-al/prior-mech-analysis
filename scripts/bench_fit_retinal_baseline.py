@@ -32,10 +32,16 @@ FIT_RUN_DE2 = Path(
     "/Users/ariliu/Downloads/ONE/openalyx.internationalbrainlab.org/models/"
     "fit_run_20251013_212918/ckpts/de2_ckpt_2025-10-13T23-22-07.npz"
 )
-AVG_MEAN_R_CANDIDATES = [
-    Path("avg_mean_R.npy"),
-    Path("/Users/ariliu/int-brain-lab/paper-brain-wide-map/avg_mean_R.npy"),
-]
+
+try:
+    from _fit_data import load_avg_mean_r as _load_avg_mean_r
+except ImportError:
+    from scripts._fit_data import load_avg_mean_r as _load_avg_mean_r
+
+
+def load_avg_mean_R():
+    path, data = _load_avg_mean_r()
+    return data, path
 
 
 def unpack_mixed(theta: np.ndarray):
@@ -151,13 +157,6 @@ def section_time(mp, avg_data_R, bps: int, seed: int, baseline=0):
         "t_sse": t_sse,
         "t_sum": t_stim + t_sim + t_avg + t_sse,
     }
-
-
-def load_avg_mean_R():
-    for p in AVG_MEAN_R_CANDIDATES:
-        if p.is_file():
-            return np.load(p, allow_pickle=True).flat[0], p
-    raise FileNotFoundError(f"avg_mean_R.npy not found in {AVG_MEAN_R_CANDIDATES}")
 
 
 def main():
