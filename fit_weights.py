@@ -1080,7 +1080,8 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                              freeze_fill=None,
                              loss_extra_kwargs=None,
                              default_refine_idx=None,
-                             de1_inf_restarts=2):
+                             de1_inf_restarts=2,
+                             train_mask_stage1=None):
     """
     Two-stage optimizer with configurable global search (DE or CMA-ES) + local polish.
     Supports freezing a subset of parameters via `train_mask` (bool array or index list).
@@ -1096,6 +1097,10 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         de1_inf_restarts: If Stage-1 DE ends at penalty loss (>=1e11; often NaN S
                           buckets / invalid sims), re-run DE this many times with a
                           fresh uniform population (basin jump). Default 2; 0 disables.
+        train_mask_stage1: Optional narrower mask for Stage-1 DE only. Dims free in
+                          `train_mask` but frozen here are **held at theta_log0**
+                          (not zero-filled), then unfrozen for Stage-2 CMA / polish.
+                          Joint Stage B uses this to keep Stage-A retinal fixed in DE.
         global_method_stage1: 'de' (default) or 'cma'/'cmaes' to select Stage 1 global optimizer.
         global_method_stage2: Override for Stage 2; defaults to `global_method_stage1`.
         cma_sigma_scale: Fraction of (hi-lo) span used as default sigma for CMA-ES Stage 1.
@@ -1301,12 +1306,19 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         merged = {**_loss_extra, **kw}
         return _tracked(th, *a, **merged)
 
+    hold_mask = None  # dims held at theta_log0 in Stage 1; set below
+
     def _apply_frozen(th, mask):
         th = np.asarray(th, float).copy()
+        frozen = ~np.asarray(mask, bool)
+        if hold_mask is not None:
+            frozen = frozen & ~hold_mask
+        if not np.any(frozen):
+            return th
         if _freeze_fill is not None:
-            th[~mask] = _freeze_fill[~mask]
+            th[frozen] = _freeze_fill[frozen]
         else:
-            th[~mask] = LOG_ZERO
+            th[frozen] = LOG_ZERO
         return th
 
     def _unpack_result(th):
@@ -1431,6 +1443,53 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
     Lb_act = np.array([L for (L, U) in bnds_act], float)
     Ub_act = np.array([U for (L, U) in bnds_act], float)
 
+    # Optional Stage-1-only hold: keep theta_log0 on extra frozen dims (e.g. retinal),
+    # then unfreeze them for Stage-2 CMA / polish. Ablation freezes in `train_mask`
+    # stay zero-filled for both stages.
+    mask_s2 = train_mask.copy()
+    idx_s2 = idx.copy()
+    bnds_act_s2 = list(bnds_act)
+    _use_s1_hold = False
+    if train_mask_stage1 is not None and method_stage1 == "de" and str(resume_from).lower() not in {"de2", "local"}:
+        tm1 = np.asarray(train_mask_stage1)
+        if tm1.dtype == bool or tm1.dtype == np.bool_:
+            if tm1.shape[0] != D_full:
+                raise ValueError(
+                    f"train_mask_stage1 has length {tm1.shape[0]} but expected {D_full}.")
+            mask_s1 = tm1.astype(bool)
+        elif np.issubdtype(tm1.dtype, np.integer):
+            mask_s1 = np.zeros(D_full, dtype=bool)
+            mask_s1[np.asarray(tm1, int)] = True
+        else:
+            mask_s1 = np.asarray(train_mask_stage1, bool)
+            if mask_s1.shape[0] != D_full:
+                raise ValueError(
+                    f"train_mask_stage1 has length {mask_s1.shape[0]} but expected {D_full}.")
+        if np.any(mask_s1 & ~mask_s2):
+            raise ValueError("train_mask_stage1 cannot unfreeze dims that train_mask freezes")
+        hold_mask = mask_s2 & ~mask_s1
+        if hold_mask.any():
+            _use_s1_hold = True
+            train_mask = mask_s1
+            idx = np.where(train_mask)[0]
+            bnds_act = [full_bounds[i] for i in idx]
+            Lb_act = np.array([L for (L, U) in bnds_act], float)
+            Ub_act = np.array([U for (L, U) in bnds_act], float)
+            print(
+                f"[Stage1] holding {int(hold_mask.sum())} dims at theta_log0 "
+                f"(unfreeze for Stage 2): {np.where(hold_mask)[0].tolist()}"
+            )
+
+    def _de_context_freeze_fill():
+        """Ablation fill, with Stage-1 hold dims taken from current theta_log0."""
+        if _freeze_fill is None and not _use_s1_hold:
+            return None
+        fill = (_freeze_fill.copy() if _freeze_fill is not None
+                else np.full(D_full, LOG_ZERO, dtype=float))
+        if _use_s1_hold and hold_mask is not None:
+            fill[hold_mask] = np.asarray(theta_log0, float)[hold_mask]
+        return fill
+
     def full_from_active(x_act):
         th = theta_log0.copy()
         th[idx] = x_act
@@ -1538,6 +1597,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
             k = min(len(bounds)*4, n//2)
             inj = np.clip(x0 + rng.normal(scale=jitter, size=(k, len(bounds))), L, U)
             pop[:k, :] = inj
+            pop[0] = np.clip(np.asarray(x0, float), L, U)
         return pop
 
     def _shrink_bounds(elites, bounds, pad=0.20):
@@ -2199,7 +2259,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "random_state": random_state,
                 "blocks_per_session_override": None,
                 "safe_loss_fn": _safe,
-                "freeze_fill": _freeze_fill,
+                "freeze_fill": _de_context_freeze_fill(),
                 "loss_extra_kwargs": _loss_extra,
             }
             # Flat all-penalty landscape (NaN S buckets → 1e11) makes scipy DE
@@ -2407,7 +2467,7 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
                 "random_state": random_state,
                 "blocks_per_session_override": None,
                 "safe_loss_fn": _safe,
-                "freeze_fill": _freeze_fill,
+                "freeze_fill": _de_context_freeze_fill(),
                 "loss_extra_kwargs": _loss_extra,
             }
             init_pop_ext = _make_init_population(bnds_act, de_popsize, rng, de1_x, jitter_scale)
@@ -2468,6 +2528,24 @@ def fit_weights_two_stage_v2(mean_data_results, prior_regions, behavior,
         return _failed_stage1_return("stage1_loss_ge_borderline_hi")
     elif stage1_loss >= L_threshold:
         return _failed_stage1_return("stage1_loss_ge_L_threshold_after_extend")
+
+    # Unfreeze Stage-1 hold dims (e.g. retinal) before CMA / polish.
+    if _use_s1_hold:
+        th_s1 = full_from_active(de1_x)
+        train_mask = mask_s2
+        idx = idx_s2
+        bnds_act = bnds_act_s2
+        Lb_act = np.array([L for (L, U) in bnds_act], float)
+        Ub_act = np.array([U for (L, U) in bnds_act], float)
+        hold_mask = None
+        _use_s1_hold = False
+        theta_log0 = np.asarray(th_s1, float)
+        de1_x = theta_log0[idx]
+        x0_act = theta_log0[idx]
+        elite = [de1_x]
+        bnds_shrunk = _box_around(de1_x, bnds_act, pad=0.10)
+        bnds_local = bnds_shrunk
+        print(f"[Stage2] unfroze held dims; active={int(idx.size)} {idx.tolist()}")
 
     # At this point, stage1_loss < L_threshold → proceed with Stage 2 as before
     # Skip Stage 2 entirely if de2_maxiter <= 0

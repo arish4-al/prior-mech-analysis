@@ -13,8 +13,11 @@ prior-distance recovery; re-running failed joint-cold campaigns as the main line
 
 **Status:** Local Stage B smoke (2026-08-12d) used repo `fit_targets/` nested
 I/M `{stim,choice}` (I-pre / M-post solid data on plots). `cma_only` from hybrid
-finished; DE Stage-1 at `bps=10` hit S-bucket `<10` → 1e12. Next: ORCD smoke
-both masks at `bps=20`, then production; fair compare vs **1.344**.
+finished; DE Stage-1 at `bps=10` hit S-bucket `<10` → 1e12 because DE jittered
+retinal away from Stage A (exact hybrid was never in the pop). **2026-08-12e:**
+Stage-1 DE now **holds** Stage-A retinal; CMA/polish unfreeze it
+(`--stage1-hold-retinal`, Stage B default on). Next: ORCD smoke both masks, then
+production; fair compare vs **1.344**.
 
 **Code:** [`fit_retinal.py`](../fit_retinal.py) (hooks into
 `fit_weights_two_stage_v2`); drivers
@@ -393,10 +396,47 @@ Plots: `…/models/stageB_smoke_plots/` and
 
 ---
 
+### 2026-08-12e — Stage-1 DE holds Stage-A retinal; CMA unfreezes
+
+The failed `stageB_smoke` DE (`nit=1`, `nfev=304`, loss `1e12`) never evaluated
+the loaded hybrid. `_make_init_population` injected **jittered** copies of x0
+(`N(0, 0.05)` on all free dims, including retinal 14–20) and did not keep the
+exact Stage-A vector. Restarts dropped x0 entirely. Scipy DE then “converged”
+on a flat 1e12 plateau after one generation — more `maxiter` cannot help.
+
+**Change (optimizer only; loss / bucket rules unchanged):**
+
+1. `--stage1-hold-retinal` → `train_mask_stage1` freezes 14–20 in Stage-1 DE
+   **at `theta_log0`** (Stage-A values), not `freeze_fill` / LOG_ZERO.
+2. After Stage 1 passes `L_threshold`, those dims are unfrozen for Stage-2 CMA
+   and polish (refine set ∪ retinal).
+3. DE init pop now includes the **exact** x0 as member 0 (plus jittered copies).
+4. Stage B submit defaults `STAGE1_HOLD_RETINAL=1`.
+
+Regular DE active set: W + I/M gains + θ (12-d) with retinal locked. Sensory:
+W + θ + `g_s`/`d_s` (10-d). Ablation freezes (`12|13` / `6|7|8|9`) unchanged.
+
+```bash
+SEEDS="999" OUT_TAG=stageB_hold_smoke \
+  DE1_MAXITER=2 DE2_MAXITER=3 POPSIZE=8 SOBOL_COUNT=4 \
+  PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 \
+  bash scripts/submit_fit_stage_b_sharded.sh
+```
+
+**Local smoke (2026-08-12e, same day):** regular `12|13`, seed 999, `--stage1-hold-retinal`,
+`bps=10`, tiny budget (`de1=1`, `de-popsize=4`, `de2=1`, polish 30s cap). **FIT_DONE.**
+DE held `[14–20]`, active 12, pop 48; Stage-1 loss **3.503** (not 1e12). Unfroze to
+19-d for CMA; polish ∪ retinal. Recorded **1.534**, wall 193s. Random DE members
+still print S-bucket `<10`; the held hybrid is enough for a finite best. ORCD
+smoke can proceed (`STAGE1_HOLD_RETINAL=1` is the Stage B default).
+
+---
+
 ## Questions to be resolved
 
 1. Stage A W/θ anchor (script defaults vs WEIGHTS_REL with zero gains).
-2. Stage B polish: include retinal dims or not.
+2. ~~Stage B polish: include retinal dims or not.~~ with `--stage1-hold-retinal`,
+   polish ∪ retinal (CMA already searches retinal after DE).
 3. ~~Retinal `L_threshold` / `beat_loss`~~ provisional: **2.0 / 0.85** (tune on ORCD).
 4. Whether equal-sum `L_w+L_S` still needs retuning once Stage A gives a better S init.
 5. ~~Sync nested `mean_data` + paper prior `.npy` to ORCD~~ → vendored in

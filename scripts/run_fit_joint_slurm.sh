@@ -18,7 +18,7 @@
 #      BEAT_LOSS, L_THRESHOLD, BPS_STAGE1, BPS_STAGE2, STAGE2_N_STIM_SEEDS,
 #      STAGE2_STIM_AGGREGATE, BACKEND, VAL_SEED,
 #      LOCAL_REFINE_IDX (prior|sensory|retinal|active), LOCAL_REFINE_METHOD,
-#      LOCAL_REFINE_MAX_WALL_S.
+#      LOCAL_REFINE_MAX_WALL_S, STAGE1_HOLD_RETINAL (1 → --stage1-hold-retinal).
 
 set -euo pipefail
 
@@ -57,6 +57,7 @@ BACKEND="${BACKEND:-loky}"
 LOCAL_REFINE_IDX="${LOCAL_REFINE_IDX:-prior}"
 LOCAL_REFINE_METHOD="${LOCAL_REFINE_METHOD:-powell}"
 LOCAL_REFINE_MAX_WALL_S="${LOCAL_REFINE_MAX_WALL_S:-1800}"
+STAGE1_HOLD_RETINAL="${STAGE1_HOLD_RETINAL:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -93,6 +94,7 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$OUT_TAG" ]] && ARGS+=(--out-tag "$OUT_TAG")
 [[ -n "$RESUME_JSON" ]] && ARGS+=(--resume-json "$RESUME_JSON")
 [[ "$FORCE" == "1" ]] && ARGS+=(--force)
+[[ "$STAGE1_HOLD_RETINAL" == "1" ]] && ARGS+=(--stage1-hold-retinal)
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"

@@ -2,7 +2,9 @@
 # Stage B campaign: warm joint from Stage-A retinal ∪ WEIGHTS_REL hybrid.
 #
 # Builds (or reuses) the hybrid JSON, then submits regular + sensory variants
-# with retinal dims free (freeze masks do NOT include 14–20).
+# with retinal held at Stage-A values during Stage-1 DE, then unfrozen for
+# Stage-2 CMA / polish (--stage1-hold-retinal). Variant freeze masks still do
+# NOT include 14–20.
 #
 # Usage:
 #   # Smoke both masks (tiny budget):
@@ -20,8 +22,9 @@
 #   WEIGHTS_JSON  WEIGHTS_REL (default: openalyx 0p4044)
 #   HYBRID_JSON   output / resume path (default: models/stage_b_hybrid_*.json)
 #   VARIANTS      default "regular:12|13 sensory:6|7|8|9"
-#   LOCAL_REFINE_IDX  default prior → ∩ mask = regular [6,8,10,11] /
-#                     sensory [10,11,12,13] (retinal polish opt-in: retinal|active)
+#   LOCAL_REFINE_IDX  default prior → ∩ mask ∪ retinal when STAGE1_HOLD_RETINAL=1
+#   STAGE1_HOLD_RETINAL  default 1 (DE holds Stage-A retinal; CMA unfreezes)
+#   BPS_STAGE1        default 20 (DE); BPS_STAGE2 default 20 (CMA)
 #   plus all submit_fit_joint_sharded.sh knobs (SEEDS PIPELINE OUT_TAG FORCE …)
 
 set -euo pipefail
@@ -49,6 +52,10 @@ PIPELINE="${PIPELINE:-de_cma_local}"
 OUT_TAG="${OUT_TAG:-stageB_s89}"
 LOCAL_REFINE_IDX="${LOCAL_REFINE_IDX:-prior}"
 FORCE="${FORCE:-0}"
+STAGE1_HOLD_RETINAL="${STAGE1_HOLD_RETINAL:-1}"
+# Stage-1 DE at bps=10 hits S-bucket <10 → NaN → 1e12. Default both stages to 20.
+BPS_STAGE1="${BPS_STAGE1:-20}"
+BPS_STAGE2="${BPS_STAGE2:-20}"
 
 module load miniforge 2>/dev/null || true
 # Prefer ORCD ibl env if present; else whatever python3 is on PATH.
@@ -86,9 +93,10 @@ fi
 
 export RESUME_JSON="$HYBRID_JSON"
 export VARIANTS SEEDS PIPELINE OUT_TAG LOCAL_REFINE_IDX FORCE REPO_DIR
+export BPS_STAGE1 BPS_STAGE2 STAGE1_HOLD_RETINAL
 # Forward optional fit knobs only if set (set -u safe).
 for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
-          BEAT_LOSS L_THRESHOLD BPS_STAGE1 BPS_STAGE2 \
+          BEAT_LOSS L_THRESHOLD BPS_STAGE1 BPS_STAGE2 STAGE1_HOLD_RETINAL \
           STAGE2_N_STIM_SEEDS STAGE2_STIM_AGGREGATE VAL_SEED \
           LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME; do
   if [[ -n "${!_k:-}" ]]; then
@@ -96,8 +104,10 @@ for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
   fi
 done
 
-echo "Submitting Stage-B joint (retinal free under masks):"
+echo "Submitting Stage-B joint (retinal held in DE, free in CMA/polish):"
 echo "  VARIANTS=$VARIANTS"
 echo "  SEEDS=$SEEDS  OUT_TAG=$OUT_TAG  PIPELINE=$PIPELINE"
+echo "  BPS_STAGE1=$BPS_STAGE1  BPS_STAGE2=$BPS_STAGE2"
 echo "  RESUME_JSON=$RESUME_JSON  LOCAL_REFINE_IDX=$LOCAL_REFINE_IDX"
+echo "  STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 bash scripts/submit_fit_joint_sharded.sh
