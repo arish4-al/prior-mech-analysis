@@ -315,6 +315,7 @@ def main(argv=None):
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
         fw.blocks_per_session = int(args.bps_stage1)
+    fj.blocks_per_session = int(args.bps_stage1)
     fw._STIMULI_BUNDLE_CACHE = None
 
     train_mask = np.ones(D_JOINT, dtype=bool)
@@ -332,7 +333,9 @@ def main(argv=None):
               f"CMA/polish unfreeze retinal")
     print(f"variant mtype={args.mtype} mask={slug} ({frozen or 'none'}) "
           f"pipeline={args.pipeline} seed={args.seed} n_jobs={args.n_jobs} "
-          f"backend={args.backend} D={D_JOINT}")
+          f"backend={args.backend} D={D_JOINT} "
+          f"bps1={args.bps_stage1} bps2={args.bps_stage2} "
+          f"hold_retinal={bool(args.stage1_hold_retinal)}")
 
     fw._ensure_run_dirs(run_dir=run_dir)
     print(f"run_dir: {run_dir}")
