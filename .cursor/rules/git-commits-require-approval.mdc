@@ -1,12 +1,47 @@
 ---
-description: Never commit or push without explicit user approval
+description: Never git merge; commit/push only if the latest message says commit or push
 alwaysApply: true
 ---
 
-# Git commits and pushes — approval required
+# Git — no merges; commit/push need an explicit verb
 
-- **Never** create a git commit unless the user explicitly asks to commit in that message (or a standing user rule they reaffirm).
-- **Never** `git push` (or force-push) unless the user explicitly asks to push.
-- Drafting a commit message or staging for review is fine when asked; do **not** run `git commit` or `git push` proactively after finishing a task.
-- If unclear whether to commit, ask first.
-- This overrides any impulse to “finish” work by committing onto `main` / `develop` without approval.
+## Merges — never
+
+**Never** run `git merge`, `git pull` (it merges), `gh pr merge`, or any
+merge commit. Not to sync `main`/`develop`, not to “add the same files to
+both branches,” not if the user says merge.
+
+Copy files with `git checkout <branch> -- <paths>` when asked. Stop and
+tell the user to merge themselves if a merge is the only option.
+
+**Incident (2026-08-12):** user said “do not merge anything, only add those
+files to both main and develop.” Agent ran `git merge main` into `develop`.
+Wrong.
+
+## Commits / pushes — explicit verb required
+
+Run `git commit` / `git push` **only** if the **latest user message** contains
+**commit**, **git commit**, **push**, or **git push**.
+
+If that verb is missing, **stop**. Do not commit to “finish” a task, to put
+files on `main`/`develop`, or because an earlier turn said “before we commit.”
+
+## These are NOT approval to commit
+
+`add`, `git add`, `stage`, `sync to main`, `put on main`, `port to main`,
+`add those files to main/develop`, `checkout those files`, `copy onto both
+branches`, `prepare a commit`, `draft a message`, “we should commit later.”
+
+**Incident (2026-08-12):** “only add those files to both main and develop”
+after “give me the command with files to add.” Agent ran `git commit` on
+both branches. Wrong. `add` = copy/`git add` only.
+
+## Allowed without “commit”
+
+- `git add` / show the add list / draft a message **when asked**
+- `git checkout <branch> -- <paths>` to copy files between branches **when asked**
+- Leave changes unstaged/uncommitted
+
+## If unclear
+
+Ask. Do not guess. This overrides “the work is done so commit/merge it.”

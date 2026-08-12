@@ -106,8 +106,30 @@ def make_shared_stimuli(mp_ref, bps: int, seed: int):
     )
 
 
-def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path):
+def load_plot_model(json_path: Path):
+    """Load weights or joint JSON for diagnostics.
+
+    Re-apply retinal after ``_update_model_params_for_dt`` (that helper
+    hard-resets ``tau_a``). Use JSON ``g_s``/``d_s`` when present (joint).
+    """
     mp, meta = load_fitted_model(g_s=0.0, d_s=0.0, json_path=json_path)
+    ret = meta.get("retinal") or {}
+    for k in (
+        "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss",
+    ):
+        if k in ret:
+            mp[k] = float(ret[k])
+    g = meta.get("g") or {}
+    d = meta.get("d") or {}
+    if "g_s" in meta or "g_s" in g:
+        mp["g_s"] = float(meta.get("g_s", g.get("g_s", 0.0)))
+    if "d_s" in meta or "d_s" in d:
+        mp["d_s"] = float(meta.get("d_s", d.get("d_s", 0.0)))
+    return mp, meta
+
+
+def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path):
+    mp, meta = load_plot_model(json_path)
     (
         stimuli,
         trial_strengths,
@@ -228,7 +250,7 @@ def main():
         if not p.is_file():
             raise FileNotFoundError(p)
 
-    mp0, _ = load_fitted_model(g_s=0.0, d_s=0.0, json_path=jsons[0])
+    mp0, _ = load_plot_model(jsons[0])
     stim_bundle = make_shared_stimuli(mp0, bps=args.bps, seed=args.seed)
     print(
         f"shared stim: bps={args.bps} seed={args.seed} "

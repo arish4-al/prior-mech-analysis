@@ -80,8 +80,13 @@ Cursor rule: `.cursor/rules/scope-latest-request.mdc` (always applied).
   `blocks_per_session`, or reuse stim batches across optimizer generations for speed.
   Numba must stay parity-checked vs numpy.
 
-### Git — no commits/pushes without approval
+### Git — no merges; no commits/pushes without approval
 
-- **Do not** `git commit` or `git push` unless the user explicitly asks in that turn.
+- **Never** `git merge` / `git pull` / `gh pr merge`. Copy files with
+  `git checkout <branch> -- <paths>` when asked.
+- **Do not** `git commit` or `git push` unless the **latest message** says
+  **commit** or **push**. `add` / `sync to main` / `put on both branches` is
+  **not** a commit.
 - Cursor rule: `.cursor/rules/git-commits-require-approval.mdc` (always applied).
-- When porting code to `main` for ORCD, prepare the change and wait for approval before committing.
+- When porting code to `main` for ORCD, copy/`git add` as asked; wait for
+  “commit” before running `git commit`.

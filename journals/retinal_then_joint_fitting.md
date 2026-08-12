@@ -11,14 +11,21 @@
 **Not in scope:** weights-only ORCD batch ([simulation_fit_speedups.md](simulation_fit_speedups.md));
 prior-distance recovery; re-running failed joint-cold campaigns as the main line.
 
-**Status:** Stage A modernized (2026-08-11d). Joint-direct fair best regular **2.083** vs
-WEIGHTS_REL baseline **1.344** — pivot to staged retinal→joint. Next: Stage B
-hand-off + regular/sensory campaigns.
+**Status:** Local Stage B smoke (2026-08-12d) used repo `fit_targets/` nested
+I/M `{stim,choice}` (I-pre / M-post solid data on plots). `cma_only` from hybrid
+finished; DE Stage-1 at `bps=10` hit S-bucket `<10` → 1e12. Next: ORCD smoke
+both masks at `bps=20`, then production; fair compare vs **1.344**.
 
 **Code:** [`fit_retinal.py`](../fit_retinal.py) (hooks into
 `fit_weights_two_stage_v2`); drivers
 [`scripts/run_fit_retinal.py`](../scripts/run_fit_retinal.py),
-`run_fit_retinal_slurm.sh`, `submit_fit_retinal_sharded.sh`.
+`run_fit_retinal_slurm.sh`, `submit_fit_retinal_sharded.sh`. Stage B:
+[`scripts/build_stage_b_hybrid.py`](../scripts/build_stage_b_hybrid.py),
+[`scripts/submit_fit_stage_b_sharded.sh`](../scripts/submit_fit_stage_b_sharded.sh)
+(+ existing `run_fit_joint*` / `fit_joint.py`). Diagnostics:
+[`scripts/plot_retinal_fit_s.py`](../scripts/plot_retinal_fit_s.py) (Stage A `L_S`);
+[`scripts/plot_best_fit_results.py`](../scripts/plot_best_fit_results.py)
+(weights/joint `L_w` traj + prior overlays, notebook data).
 
 ---
 
@@ -83,23 +90,22 @@ Fair compare must reuse the joint protocol (fixed stim bundles, report
 
 **Done (2026-08-11d).** `fit_retinal` now hooks `fit_weights_two_stage_v2` with
 `layout: retinal7`, asinh `β_w`, CLI/ORCD drivers, `FIT_DONE`, held-out CMA, etc.
-See dated entry below. Remaining: ORCD multi-seed quality campaign vs frozen ~0.80.
+See dated entry below. ORCD multi-seed + shared-stim ranking: 2026-08-12.
 
 ### 2. Wire Stage A → Stage B handoff
 
-- Save Stage A JSON with retinal native params (+ mixed θ) loadable by
-  `reconstruct_theta_joint_from_json` / joint resume.
-- Stage B default: `--pipeline de_cma_local` or warm `cma_only` from
-  retinal+WEIGHTS_REL hybrid JSON; **retinal dims free** under the variant mask
-  (do not add 14–20 to `--freeze`).
-- Keep fair-compare harness (fixed bundles) as the ranking metric — not raw
-  `final_loss` from a single fit seed.
+**Done (2026-08-12b).** `fit_joint.build_stage_b_hybrid_payload` /
+`scripts/build_stage_b_hybrid.py` writes joint21 JSON (WEIGHTS_REL W/g/d/θ ∪
+Stage-A retinal, `g_s`/`d_s`≈0). Load with `reconstruct_theta_joint_from_json`
+/ `--resume-json`. Default hybrid uses shared-stim best Stage-A **s89**.
 
 ### 3. Implement regular + sensory campaigns
 
-Same variant table as joint_fitting_pipeline; submit shape analogous to
-`submit_fit_joint_sharded.sh`, but each seed is **retinal-fit → joint-fit** (or
-joint resume from staged JSON). Smoke both masks before a 2×N seed batch.
+**Done (2026-08-12b).** `scripts/submit_fit_stage_b_sharded.sh` builds/refreshes
+the hybrid then calls `submit_fit_joint_sharded.sh` with
+`VARIANTS="regular:12|13 sensory:6|7|8|9"` (retinal 14–20 **not** frozen).
+`LOCAL_REFINE_IDX=prior` ∩ mask → regular `[6,8,10,11]`, sensory `[10,11,12,13]`.
+Smoke both masks before a 2×N production batch.
 
 ---
 
@@ -181,9 +187,218 @@ SEEDS="56 34 78 89 202" bash scripts/submit_fit_retinal_sharded.sh
 
 ---
 
+### 2026-08-12 — Stage A multi-seed ORCD results + shared-stim eval
+
+**Runs** (local openalyx mirror): `retinal_run_fr_retinal_masknone_s{56,34,78,89,202}/`
+(`de_cma_local`, default budgets, `bps1=10` / `bps2=20`, seed-restim Stage 2).
+
+| seed | recorded fit `L_S` | notes |
+|-----:|-------------------:|-------|
+| 202 | **0.370** | lowest recorded |
+| 89 | 0.371 | |
+| 78 | 0.748 | |
+| 34 | 1.200 | |
+| 56 | 1.925 | highest recorded |
+
+**Fair re-eval** (same protocol as notebook / Stage-A restim): `bps=20`, stim seed
+**12345**, rebuild under each mp’s α_w/β_w; loss =
+`compute_sse_stim_right(mean_S_by_contrast(…), avg_mean_R)`.
+Script: [`scripts/plot_retinal_fit_s.py`](../scripts/plot_retinal_fit_s.py).
+Plots + `summary.json`:
+`~/Downloads/ONE/openalyx…/models/retinal_s_fit_plots_bps20_seed12345/`.
+
+| seed | recorded | shared `L_S` | R² |
+|-----:|---------:|-------------:|---:|
+| **89** | 0.371 | **0.559** | 0.668 |
+| 202 | 0.370 | 0.614 | 0.564 |
+| 78 | 0.748 | 0.618 | 0.610 |
+| 34 | 1.200 | 0.657 | 0.649 |
+| 56 | 1.925 | 0.704 | 0.635 |
+
+**Takeaways**
+
+1. Ranking by recorded fit loss ≠ shared-stim ranking: **s89** wins fair `L_S`;
+   s202 (best recorded) is 2nd–3rd on the held-out batch.
+2. All five shared `L_S` ∈ **0.56–0.70**, beating the frozen-JSON front-end
+   reference (~**0.78–0.82**). Stage A quality is usable for Stage B handoff.
+3. Prefer **s89** (then s202 / s78) as Stage-A retinal init(s) for joint warm-start;
+   do not pick solely by `retinal_final_loss*`.
+
+**Eval note:** do not call `_update_model_params_for_dt` after applying fitted
+retinal — it hard-resets `tau_a→222.68`.
+
+**Next:** Stage B hybrid JSON (Stage-A retinal ∪ WEIGHTS_REL) → joint with retinal
+free; start with s89.
+
+---
+
+### 2026-08-12b — Stage B handoff + campaign submit
+
+**Hybrid builder** (`fit_joint.build_stage_b_hybrid_payload` /
+[`scripts/build_stage_b_hybrid.py`](../scripts/build_stage_b_hybrid.py)):
+
+| Field | Source |
+|-------|--------|
+| W, g_i/g_m, d_i/d_m, θ | WEIGHTS_REL (`loss0p4044`) |
+| retinal 7-d | Stage-A final (default **s89**) |
+| `g_s`,`d_s` | ≈0 (regular freezes; sensory trains from ~0) |
+| `layout` | `joint21` + `theta_log` (asinh `β_w`) |
+
+Local artifact:
+`~/Downloads/ONE/…/models/stage_b_hybrid_WEIGHTS_REL_retinal_s89.json`
+
+**Campaign driver** [`scripts/submit_fit_stage_b_sharded.sh`](../scripts/submit_fit_stage_b_sharded.sh):
+refresh hybrid → `RESUME_JSON` → `submit_fit_joint_sharded.sh`.
+
+```bash
+# Smoke both masks
+SEEDS="999" OUT_TAG=stageB_smoke \
+  DE1_MAXITER=2 DE2_MAXITER=3 POPSIZE=8 SOBOL_COUNT=4 \
+  PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 \
+  bash scripts/submit_fit_stage_b_sharded.sh
+
+# Production (2 variants × N seeds); retinal free under both masks
+SEEDS="56 34 78 89 202" OUT_TAG=stageB_s89 \
+  bash scripts/submit_fit_stage_b_sharded.sh
+```
+
+Run dirs: `weights_run_fj_stageB_s89_<mtype>_mask<slug>_s<seed>/`.
+Polish: `LOCAL_REFINE_IDX=prior` ∩ mask (retinal polish opt-in via `retinal|active`).
+
+**Still open:** ORCD smoke → production; fair `bps=20` `L_w+L_S` vs baseline **1.344**.
+Also: sync nested `mean_data` / paper prior `.npy` to ORCD (2026-08-12c) before
+comparing Stage B losses to notebook / **1.344**.
+
+---
+
+### 2026-08-12c — Flat `mean_data_results` understated `L_w` (fit vs notebook)
+
+**Symptom** (plotting best weights-only ORCD finals with
+`loss_plot_diff_by_condition_with_data` / `loss_prior_effect`, matching
+`paper-brain-wide-map/model_test.ipynb`): IM post/pre missing solid data curves;
+prior data overlays looked wrong vs the notebook.
+
+**Root cause — not the loss functions.** `loss_weights_core_v2` /
+`loss_plot_diff_by_condition_with_data` / `loss_prior_effect` are fine. Drivers
+wired the wrong files:
+
+| File | Wrong (ORCD / `run_fit_weights` default) | Correct (notebook) |
+|------|------------------------------------------|--------------------|
+| `mean_data_results.npy` | `manifold/res` **flat**: I = stim keys only, M = choice keys only | `paper-brain-wide-map` **nested** `{stim, choice}` for both I and M |
+| `data_act_block_during{stim,choice}.npy` | `manifold/figs` (different curves) | paper-brain-wide-map copies |
+
+`_data_mean_and_baseline` always needs the **stim** window for baseline. With the
+flat file: I-post scores; I-pre / M-post / M-pre all drop (`gof` NaN). Traj loss ≈
+**I-post + P penalties** only. `run_fit_*._ensure_data_links` only creates cwd
+symlinks if missing — never refreshes a bad existing link/file.
+
+**Re-score** (shared `bps=20` seed `12345`; gain finals from speedups ORCD batch):
+
+| Model | Recorded (ORCD) | Flat + manif prior | Nested + paper prior |
+|-------|----------------:|-------------------:|---------------------:|
+| gain s89 | 0.217 | **0.345** | **3.54** |
+| gain s78 | 0.249 | **0.303** | **0.77** |
+
+So the “beat 0.404” weights-only winners were optimized under the incomplete
+target. They are **not** notebook-comparable `L_w`. Stage B / joint fair compare
+vs **1.344** must use nested paper targets (same as `model_test.ipynb`).
+
+**Local fix**
+
+1. Replaced ONE `manifold/res/mean_data_results.npy` and
+   `manifold/figs/data_act_block_*.npy` with paper copies (backups:
+   `*.flat_bak.npy`, `*.manif_bak.npy`).
+2. Fail-closed nested `{stim,choice}` check after load in
+   [`scripts/run_fit_weights.py`](../scripts/run_fit_weights.py),
+   [`scripts/run_fit_joint.py`](../scripts/run_fit_joint.py),
+   [`fit_weights.py`](../fit_weights.py) `__main__`.
+3. Plot driver [`scripts/plot_best_fit_results.py`](../scripts/plot_best_fit_results.py)
+   — notebook-matching traj + prior overlays for weight/joint finals (see below).
+4. **Script fix (same day):** shared [`scripts/_fit_data.py`](../scripts/_fit_data.py)
+   + repo [`fit_targets/`](../fit_targets/) (copied notebook nested mean_data, paper
+   prior curves, `avg_mean_R`). Drivers load **only** from `fit_targets/` and
+   refresh cwd symlinks — no ONE / sibling-paper fallback for these files.
+
+**Plotting script** ([`scripts/plot_best_fit_results.py`](../scripts/plot_best_fit_results.py)):
+
+- Runs `mean_by_condition` → `loss_plot_diff_by_condition_with_data` +
+  `loss_prior_effect` (same call pattern as `model_test.ipynb`).
+- Shared stim session (`--bps 20`, `--seed 12345` default) across models.
+- Defaults to ORCD gain finals s89 / s78; override with `--weights-json`.
+- Loads nested mean_data + prior curves from paper / `fit_targets` (not flat
+  `manifold/res`).
+- Writes SVG (+ PNG) under
+  `…/models/remote/fit_result_plots_bps20/<run>/` and
+  `figs/fit_result_plots_bps20/`.
+
+```bash
+PRIOR_MECH_NO_ONE=1 PYTHONPATH=. python scripts/plot_best_fit_results.py \
+  --bps 20 --seed 12345
+```
+
+**ORCD:** pull `main` (includes `fit_targets/`). No separate ONE file swap needed
+for these four targets; `behavior.npy` still comes from ONE `manifold/res`.
+
+Cross-ref: weights-only campaign context in
+[simulation_fit_speedups.md](simulation_fit_speedups.md); joint baseline **1.344**
+in [joint_fitting_pipeline.md](joint_fitting_pipeline.md).
+
+---
+
+### 2026-08-12d — Local Stage B smoke + nested-target plot check
+
+**Data files (confirmed):** drivers and
+[`scripts/plot_best_fit_results.py`](../scripts/plot_best_fit_results.py) load
+**only** repo [`fit_targets/`](../fit_targets/):
+
+- `mean_data_results.npy` — I/M `mean_traj` nested `{stim, choice}` (stim 96-bin,
+  choice 72-bin). Fail-closed if flat.
+- cwd prior links → `fit_targets/data_act_block_during{stim,choice}.npy`
+- `avg_mean_R.npy` for `L_S`
+
+Not ONE `manifold/res` (flat incomplete).
+
+**Stage B smokes** (regular freeze `12,13` = `g_s`/`d_s`, seed 999, hybrid resume,
+`--force`):
+
+| Run | Pipeline | Result |
+|-----|----------|--------|
+| `stageB_smoke` | `de_cma_local`, `bps=10` Stage 1 | **failed** `loss=1e12` (S buckets `<10` → NaN → fail-closed) |
+| `stageB_cma` | `cma_only` 3 iters + 60s Powell | **ok** recorded **1.241**; `g_s`/`d_s` stayed ≈0 |
+
+Run dir: `…/models/weights_run_fj_stageB_cma_regular_mask12-13_s999`
+
+**Shared-stim plots** (`plot_best_fit_results.py`, `bps=20`, seed `12345`):
+
+| Model | Recorded | eval traj+prior |
+|-------|---------:|----------------:|
+| hybrid (WEIGHTS_REL ∪ s89 retinal) | 0.776 | **0.533** (0.417+0.116) |
+| WEIGHTS_REL | 0.404 | **0.581** (0.435+0.147) |
+| Stage B CMA smoke | 1.241 | **0.542** (0.403+0.139) |
+
+WEIGHTS_REL recorded 0.404 is the **flat-target** ORCD number; nested re-score
+is 0.581 traj+prior (no `L_S`). CMA 1.241 includes `L_S` on a tiny search — not
+a fair vs **1.344**.
+
+**Visual check:** I-pre and IM-post have **solid data curves** (I-pre rises to
+~0.8 at t=0; post has early bump + late rise). Prior-effect panels have noisy
+solid data in both 0–80 and −80–0. That is the nested-target signature; the
+flat file dropped I-pre / M-post.
+
+Plots: `…/models/stageB_smoke_plots/` and
+`figs/fit_result_plots_bps20/weights_run_fj_stageB_cma_regular_mask12-13_s999/`.
+
+**Do not** use `de_cma_local` Stage 1 at `bps=10` for Stage B smoke. Use
+`cma_only` from hybrid, or Stage 1 at `bps=20`.
+
+---
+
 ## Questions to be resolved
 
 1. Stage A W/θ anchor (script defaults vs WEIGHTS_REL with zero gains).
 2. Stage B polish: include retinal dims or not.
 3. ~~Retinal `L_threshold` / `beat_loss`~~ provisional: **2.0 / 0.85** (tune on ORCD).
 4. Whether equal-sum `L_w+L_S` still needs retuning once Stage A gives a better S init.
+5. ~~Sync nested `mean_data` + paper prior `.npy` to ORCD~~ → vendored in
+   `fit_targets/` on `main`; re-baseline WEIGHTS_REL / Stage B fair `L_w` on the
+   notebook target (flat-scale losses obsolete).
