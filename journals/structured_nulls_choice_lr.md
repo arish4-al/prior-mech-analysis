@@ -4,7 +4,7 @@
 
 **Status:** four valid arms exist and have been compared at α=0.01 over the full BWM. Liberality order: **Harris (unique) ≈ Harris (with replacement) < label shuffle < AK stratified pseudo (×3) < AK fixed-stim**. Harris is the only structured null **stricter** than shuffle; `_harris_unique` is the preferred file going forward. Two earlier arms (calendar-indexed Harris, unconstrained BWM pseudo-session) are **invalid** and must not be interpreted.
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13, 07-13b, 07-18, 07-20, 07-20b, 07-21, 07-21b, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–c.
+Sources: dated entries 2026-07-12 (Goal 2), 07-13, 07-13b, 07-18, 07-20, 07-20b, 07-21, 07-21b, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d.
 
 ---
 
@@ -448,6 +448,7 @@ The prior-type routing fix that this exposed (`act_block_*` was silently falling
 **Presets** (`run_goal2_splits.py`):
 
 - `act_block_harris_all` — **9** splits: 4 duringstim choice×f + 4 duringchoice + `act_block_only` (no stim/choice stratum). **Not** the unconditioned `act_block_duringstim_{l,r}` (those are `act_block_harris_unsplit`; see **2026-08-14c**).
+- `act_block_only` — ITI only (`PRESET=act_block_only`; does not CLEAR the other 8)
 - `act_block_duringstim` / `act_block_duringchoice`
 - `act_block_harris_unsplit` / `act_block_unsplit_duringstim` / `act_block_unsplit_duringchoice`
 - also `goal3_duringstim_act` / `goal3_duringchoice_act` with `--session-shuffle-null`
@@ -506,7 +507,7 @@ Plots / CSV: `meta/table_choice_harris_unique_vs_min5shuffle_{,duringchoice_}p_m
 
 ### act_block prior L–R: Harris unique vs shuffle
 
-8 of 9 `act_block_harris_all` splits are in `res/new` as `*_harris_unique`. **`act_block_only` Harris unique is missing** (not plotted). Shuffle: duringstim = alyx min5 (07-14); duringchoice = openalyx pre-min5 (no alyx counterpart; same caveat as 07-27b).
+8 of 9 `act_block_harris_all` splits are in `res/new` as `*_harris_unique`. **`act_block_only` Harris unique is still missing.** Shuffle `act_block_only` arrived 2026-08-14d (plain `{split}.npy`, n_null=2000). Shuffle for the 8: duringstim = alyx min5 (07-14); duringchoice = openalyx pre-min5 (no alyx counterpart; same caveat as 07-27b).
 
 **f2 Harris skip** (error-trial / short-stratum donors), analogous to the simulation split collapse:
 
@@ -530,7 +531,7 @@ Uncorrected: Harris duringstim 2 regions at `p_mean≤0.01` (RN, FOTU) and 3 at 
 
 Plots / CSV: `meta/table_act_block_harris_unique_vs_shuffle_{,duringchoice_}p_mean_c_0.01.png`; `meta/table_act_block_harris_unique_vs_shuffle_p_mean_c_0.01.csv`.
 
-**Interpretation:** for prior L–R, Harris unique is far stricter than shuffle — it removes the entire FDR map. That is a larger correction than for choice L–R (21/58 still survive). Caveats: f2 insertions are thinned by donor-stratum length; duringchoice shuffle is still pre-min5 openalyx; `act_block_only` was not in this copy.
+**Interpretation:** for prior L–R, Harris unique is far stricter than shuffle — it removes the entire FDR map. That is a larger correction than for choice L–R (21/58 still survive). Caveats: f2 insertions are thinned by donor-stratum length; duringchoice shuffle is still pre-min5 openalyx; `act_block_only` Harris unique was not in this copy (shuffle only: **2026-08-14d**).
 
 **2026-08-14b — 0 FDR is not the f2-stratum skip.** Recombine in memory: f1-only / f2-only / all-4, same product-MC + BH@0.01.
 
@@ -624,15 +625,18 @@ duringchoice splits has a matching `get_d_vars` branch. Combine is 2-split
 **ORCD**
 
 ```bash
-bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
+bash scripts/submit_act_block_unsplit_orcd.sh
+# Harris only: bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
 # PRESET=act_block_unsplit_duringstim …
 # PRESET=act_block_unsplit_duringchoice …
 python scripts/smoke_act_block_harris_null.py
 ```
 
-Outputs: `$ONE_CACHE_DIR/manifold/res/{split}_harris_unique.npy`. Default
-`NRAND=2000`, `SESSION_SHUFFLE_NULL=1`, rebuild donors, `CLEAR_STREAM` only
-`*_harris_unique` for these four. Wrapper job prefix `g2ahu`.
+Outputs: `$ONE_CACHE_DIR/manifold/res/{split}_harris_unique.npy`. The ORCD
+wrapper `submit_act_block_unsplit_orcd.sh` exports `NRAND=1000`. The sharded
+script default remains 2000 if called directly without `NRAND`.
+`SESSION_SHUFFLE_NULL=1`, rebuild donors, `CLEAR_STREAM` only `*_harris_unique`
+for these four. Wrapper job prefix `g2ahu`.
 
 Duringstim unsplit **shuffle** (`act_block_duringstim_{l,r}.npy`) already
 exists on alyx `res/new` (Jul 14). Duringchoice unsplit shuffle does **not**.
@@ -657,10 +661,28 @@ Not added: true-block / bayes `duringchoice_l/r`.
 
 ---
 
+## 2026-08-14d — `act_block_only` shuffle in local `res/new`
+
+Copied into alyx `manifold/res/new/` (mtime 2026-08-14 16:23):
+
+- `act_block_only.npy` / `act_block_only_regde.npy` — **label shuffle** (plain names; `n_null=2000` every region; 208 regions)
+- still **no** `act_block_only_harris_unique.npy`
+
+ITI window `[0.4, −0.1]`, act prior, no stim/choice stratum. Not part of the 4-split duringstim / duringchoice combine.
+
+| metric | uncorr ≤0.01 | uncorr ≤0.05 | BH-FDR @0.01 | BH-FDR @0.05 | median p |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `p_mean` (from regde) | 9 | 13 | **0** | 5 (VISa, AIp, SSp-n, LSr, CLA) | 0.689 |
+| `p_euc` | 11 | 25 | **0** | 10 | 0.571 |
+
+`amp_euc` median 0.172. Even unrestricted shuffle is already null at α=0.01 FDR on this ITI split — unlike the 42-hit four-split during-trial shuffle. Harris unique for `act_block_only` still needed if we want the structured-null comparison on this window.
+
+---
+
 ## Open questions
 
 1. **Primary null choice for choice L–R claims** — Harris (empirical sticky structure within stratum) vs AK stratified pseudo (BWM-like new world with matched bias context). Min5 shuffle (08-14) is more liberal than openalyx, which widens the Harris–shuffle gap but does not change Harris FDR counts.
 2. **Why strat null amplitudes stay below Harris** at matched coverage.
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
-5. **act_block Harris unique is a near-total null** (0 FDR @0.01/0.05). 08-14b: **not** the f2 donor-stratum skip — f1-only Harris (99 % cells, large U) is also 0 FDR; shuffle prior hits live in f1. Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? `act_block_only` Harris unique still missing from local `res/new`.
+5. **act_block Harris unique is a near-total null** (0 FDR @0.01/0.05). 08-14b: **not** the f2 donor-stratum skip — f1-only Harris (99 % cells, large U) is also 0 FDR; shuffle prior hits live in f1. Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? `act_block_only` **shuffle** is now in `res/new` (08-14d; already 0 FDR @0.01); **Harris unique** for that split is still missing.

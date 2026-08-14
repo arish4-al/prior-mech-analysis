@@ -169,6 +169,7 @@ PRESETS = {
         + list(RUN_ALIGN['firstMovement_times'])
         + ['act_block_only']
     ),
+    'act_block_only': ['act_block_only'],
     # Unsplit prior L–R (model analog): stim-side only at stimOn; choice-side
     # only at firstMovement. No f1/f2. Harris unique-null via
     # --session-shuffle-null.

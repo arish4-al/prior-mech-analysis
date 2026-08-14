@@ -40,7 +40,7 @@ Evidence already in hand before the experiment:
 
 | Mode | Splits | Meaning |
 |------|--------|---------|
-| `stim_side` (default) | `stim_l_unsplit` + `stim_r_unsplit` | No f1/f2; stim side preserved |
+| `stim_side` (default) | S/I: `stim_l`+`stim_r` unsplit; M: `choice_l`+`choice_r` unsplit (since 2026-08-14e) | No f1/f2; stim side for stim-aligned, choice side for move-aligned |
 | `fully` | `act_block_duringstim_fully_unsplit` | All duringstim trials, L+R mixed (**diagnostic only**) |
 
 Canonical fill-next + S=80 ms / I/M=150 ms throughout.
@@ -185,10 +185,25 @@ regular **0.0003, p=0.63** vs sensory **0.072, p=0**. Split-conditioned regular 
 (0.195, p=0) remains the composition artefact. Future Harris / long-session runs
 → **ORCD**; local `session_cache/` wiped after this campaign.
 
+### 2026-08-14e — move-aligned unsplit uses choice strata
+
+Default unsplit no longer analyses M on stim-aligned stim_l/r. **S/I** keep
+stim strata at stimOn; **M** uses choice strata at firstMovement. Real-data
+`act_block_duringchoice_{l,r}` already did this; the sim `--unsplit-prior`
+path now matches. Submit on ORCD (`nrand=1000`, **S curves 0–150 ms**):
+`bash scripts/submit_simulate_unsplit_harris_orcd.sh`.
+
+**Do not compare this run’s unsplit M to 2026-08-13c/d / 2026-08-14 unsplit M**
+(those were stim-aligned at stimOn; this M is choice strata at movement).
+
 ---
 
 ## Open / follow-up items
 
+- **S p-values at 150 ms and 80 ms** from the saved 150 ms unsplit Harris
+  curves (canonical 80 ms slice still to-do).
+- **Do not compare new unsplit M (choice / movement) to old unsplit M
+  (stim-aligned).** Different analysis, not a bug.
 - Unsplit S-only canonical (`g_s=g_i_fitted`, `g_i=0`) — not run.
 - Unsplit I-sig diagnostic (`g_s=10, d_s=d_i`) — not run.
 - **Experiment B — concordance-grouped trajectories:** plot S (and I) trajectories grouped by (1) P-block-L vs P-block-R over all trials and (2) trial-level concordance `(S[0]−S[1])·(P[0]−P[1])` at stim onset, which matches the `g_s` boost logic. This addresses the persistent visual failure of `p_block_s_trajectory` under split conditioning. Not run.

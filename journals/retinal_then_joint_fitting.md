@@ -957,6 +957,25 @@ bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
 
 Details: [structured nulls](structured_nulls_choice_lr.md) 2026-08-14c.
 
+### 2026-08-14e — unsplit M uses choice strata; ORCD submit
+
+Default `--unsplit-prior` / `stim_side` now matches the real-data analog:
+**S and I** stay stim-aligned on `stim_l`+`stim_r`; **M** is move-aligned on
+`choice_l`+`choice_r` (`act_block_duringchoice_choice_{l,r}_unsplit`). Fully
+unsplit is unchanged (diagnostic). Summary JSON records `unsplit_strata`.
+
+Run on **ORCD** (not the laptop). Defaults: 40 sessions × 40 blocks, nrand=1000,
+80 extra donors. **S curves are 0–150 ms** (`--s-window-ms 150`), same as I;
+canonical 80 ms S p-values are sliced from those curves later (to-do below).
+
+```bash
+# simulation Harris unique-null (regular s101 + sensory s23)
+bash scripts/submit_simulate_unsplit_harris_orcd.sh
+
+# real-data Harris unique-null (4 splits) + duringchoice shuffle baseline
+bash scripts/submit_act_block_unsplit_orcd.sh
+```
+
 ---
 
 ## To-do
@@ -970,7 +989,18 @@ Details: [structured nulls](structured_nulls_choice_lr.md) 2026-08-14c.
 
 3. ~~**Harris unique-null on S/I/M prior distance.**~~ Done 2026-08-13d
    (nrand=100 / 6-block) and 2026-08-14 (nrand=2000 / 40-block). Unsplit agrees
-   with 13c at both resolutions. Further Harris / long-session runs → **ORCD**.
+   with 13c at both resolutions. **M unsplit now uses choice strata** (2026-08-14e);
+   re-run on **ORCD** (`submit_simulate_unsplit_harris_orcd.sh`).
+
+4. **S p-values at both 150 ms and 80 ms.** This ORCD unsplit Harris run stores
+   full 0–150 ms S distance curves (not the canonical 80 ms cap). After the
+   run, compute p-values on the full curve **and** on the t≤80 ms slice.
+   Canonical default for other experiments remains 80 ms.
+
+5. **Do not compare this run’s unsplit M to 2026-08-13c/d / 2026-08-14
+   unsplit M.** Those M numbers were stim-aligned (`stim_l`+`stim_r` at
+   stimOn). This run’s M is move-aligned choice strata
+   (`choice_l`+`choice_r` at firstMovement). Not a bug — different analysis.
 
 ---
 

@@ -473,12 +473,20 @@ SC_TIMES = [
 
 TIMING_SPLITS = ["act_block_duringstim", "act_block_duringchoice"]
 S_PRIOR_TIMEFRAME = "act_block_duringstim"
-# Unsplit = no choice×feedback (f1/f2) conditioning; still split by stim side (L/R).
+# Unsplit = no choice×feedback (f1/f2) conditioning.
+# Stim-aligned (S, I): stim_l + stim_r. Move-aligned (M): choice_l + choice_r.
 UNSPLIT_PRIOR_TIMEFRAME = "act_block_duringstim_unsplit"
 UNSPLIT_PRIOR_SPLITS = (
     "act_block_duringstim_stim_l_unsplit",
     "act_block_duringstim_stim_r_unsplit",
 )
+UNSPLIT_CHOICE_PRIOR_TIMEFRAME = "act_block_duringchoice_unsplit"
+UNSPLIT_CHOICE_PRIOR_SPLITS = (
+    "act_block_duringchoice_choice_l_unsplit",
+    "act_block_duringchoice_choice_r_unsplit",
+)
+UNSPLIT_STIM_POPS = ("S", "I")
+UNSPLIT_MOVE_POPS = ("M",)
 # Fully unsplit: all duringstim trials in one pool (L+R stim; S channel misalignment risk).
 FULLY_UNSPLIT_PRIOR_SPLIT = "act_block_duringstim_fully_unsplit"
 FULLY_UNSPLIT_PRIOR_TIMEFRAME = FULLY_UNSPLIT_PRIOR_SPLIT
@@ -487,6 +495,14 @@ FULLY_UNSPLIT_PRIOR_TIMEFRAME = FULLY_UNSPLIT_PRIOR_SPLIT
 # I/M use the full 150ms window defined in PRE_POST.
 S_DURINGSTIM_WINDOW_S = 0.08
 IM_DURINGSTIM_WINDOW_S = 0.15
+
+
+def set_s_analysis_window_s(win_s):
+    """Override the S prior-distance post-stim cap (seconds). Canonical default 0.08."""
+    global S_DURINGSTIM_WINDOW_S
+    S_DURINGSTIM_WINDOW_S = float(win_s)
+
+
 # Decorrelation *_short splits (d^stim,se): 80 ms for all populations — matches
 # BWM short manifold segments / analysis_functions short duringstim timeframes.
 SHORT_DURINGSTIM_WINDOW_S = S_DURINGSTIM_WINDOW_S
@@ -511,14 +527,19 @@ CANONICAL_PRIOR_DISTANCE_ANALYSIS = {
 
 
 def log_canonical_analysis_banner():
-    """Print canonical analysis settings at the start of each analysis run."""
+    """Print analysis window settings at the start of each run (live S cap)."""
     c = CANONICAL_PRIOR_DISTANCE_ANALYSIS
     print(
         "Canonical prior-distance analysis: "
-        f"S={c['s_window_s']*1000:.0f}ms, I/M={c['im_window_s']*1000:.0f}ms, "
+        f"S={S_DURINGSTIM_WINDOW_S*1000:.0f}ms, I/M={c['im_window_s']*1000:.0f}ms, "
         f"truncation={c['truncation']}, "
         f"null={'contrast-matched' if c['contrast_matched_null'] else 'label-shuffle'}"
     )
+    if abs(S_DURINGSTIM_WINDOW_S - c["s_window_s"]) > 1e-9:
+        print(
+            f"  S window override (canonical {c['s_window_s']*1000:.0f} ms): "
+            "saved curves use the longer window; 80 ms p-values can be sliced later."
+        )
 
 FOCUSED_TIMEFRAMES = SC_TIMES + TIMING_SPLITS + [
     "stim_duringstim1_act",
@@ -624,8 +645,12 @@ ALIGN, PRE_POST = build_align_pre_post()
 for _unsplit in (*UNSPLIT_PRIOR_SPLITS, FULLY_UNSPLIT_PRIOR_SPLIT):
     ALIGN[_unsplit] = "stimOn_times"
     PRE_POST[_unsplit] = [0, IM_DURINGSTIM_WINDOW_S]
+for _unsplit in UNSPLIT_CHOICE_PRIOR_SPLITS:
+    ALIGN[_unsplit] = "firstMovement_times"
+    PRE_POST[_unsplit] = [IM_DURINGSTIM_WINDOW_S, 0]
 SIM_TIMEFRAME_SPLITS = {
     UNSPLIT_PRIOR_TIMEFRAME: list(UNSPLIT_PRIOR_SPLITS),
+    UNSPLIT_CHOICE_PRIOR_TIMEFRAME: list(UNSPLIT_CHOICE_PRIOR_SPLITS),
     FULLY_UNSPLIT_PRIOR_TIMEFRAME: [FULLY_UNSPLIT_PRIOR_SPLIT],
 }
 
@@ -991,7 +1016,15 @@ def split_fixed_condition_mask(df, split):
         cr = df["contrastRight"].values
         m &= ~np.isnan(cl) | ~np.isnan(cr)
     elif "unsplit" in split:
-        if "stim_l" in split:
+        if "duringchoice" in split:
+            cl = df["contrastLeft"].values
+            cr = df["contrastRight"].values
+            m &= ~np.isnan(cl) | ~np.isnan(cr)
+            if "choice_l" in split:
+                m &= df["choice"].values == 1
+            elif "choice_r" in split:
+                m &= df["choice"].values == -1
+        elif "stim_l" in split:
             m &= ~np.isnan(df["contrastLeft"].values)
         elif "stim_r" in split:
             m &= ~np.isnan(df["contrastRight"].values)
@@ -2175,14 +2208,21 @@ def _unpack_regde_curves(curves):
     return np.asarray(real, dtype=float), nulls
 
 
+def _per_split_regde_files(res_dir):
+    """Yield (split, path) for per-split ``*_regde.npy`` (skip combined stacks)."""
+    res_dir = Path(res_dir)
+    for path in sorted(res_dir.glob("*_regde.npy")):
+        if path.name.startswith("combined_"):
+            continue
+        split = path.name[: -len("_regde.npy")]
+        yield split, path
+
+
 def per_split_population_prior_metrics(res_dir, populations):
     """Per-split true vs shuffle prior-distance metrics for each population."""
     populations = tuple(populations)
     rows = []
-    for split in s_prior_splits():
-        regde_path = Path(res_dir) / f"{split}_regde.npy"
-        if not regde_path.exists():
-            continue
+    for split, regde_path in _per_split_regde_files(res_dir):
         regde = np.load(regde_path, allow_pickle=True).item()
         for pop in populations:
             if pop not in regde:
@@ -2381,6 +2421,10 @@ def _write_population_prior_outputs(
         "null_scheme": null_scheme,
         "output_dir": str(out_dir),
         "res_dir": str(res_dir),
+        "s_window_s": float(S_DURINGSTIM_WINDOW_S),
+        "s_window_canonical_s": float(
+            CANONICAL_PRIOR_DISTANCE_ANALYSIS["s_window_s"]
+        ),
         "combined": summary_rows,
         "by_split": split_df.to_dict(orient="records"),
     }
@@ -2714,7 +2758,8 @@ def run_unsplit_prior_distance_analysis(
     Experiment A: prior distance without f1/f2 choice×feedback splits.
 
     unsplit_mode:
-      - ``stim_side`` (default): stim_l + stim_r unsplit splits, stacked.
+      - ``stim_side`` (default): S/I on stim-aligned stim_l+stim_r; M on
+        move-aligned choice_l+choice_r. No f1/f2.
       - ``fully``: single pool of all duringstim trials (L+R mixed; S artefact risk).
 
     case:
@@ -2834,14 +2879,7 @@ def run_unsplit_prior_distance_analysis(
     out_dir = out_root / "figs"
     res_dir = out_root / "res"
     file_prefix = out_name
-    if fully:
-        splits = s_prior_splits_fully_unsplit()
-        timeframe = FULLY_UNSPLIT_PRIOR_TIMEFRAME
-    else:
-        splits = s_prior_splits_unsplit()
-        timeframe = UNSPLIT_PRIOR_TIMEFRAME
-
-    priors_by_pop, res_dir = _population_prior_from_sessions(
+    priors_by_pop, res_dir, splits, jobs = _unsplit_priors_from_sessions(
         session_dfs,
         steps_before_obs,
         nrand,
@@ -2851,8 +2889,7 @@ def run_unsplit_prior_distance_analysis(
         n_jobs=n_jobs,
         contrast_matched_null=contrast_matched_null,
         res_dir=res_dir,
-        splits=splits,
-        timeframe=timeframe,
+        fully=fully,
         harris_unique_null=harris_unique_null,
         extra_donor_dfs=extra_donor_dfs,
     )
@@ -2890,8 +2927,17 @@ def run_unsplit_prior_distance_analysis(
     )
     summary["unsplit"] = True
     summary["unsplit_mode"] = unsplit_mode
+    summary["unsplit_strata"] = (
+        {"S": "fully", "I": "fully", "M": "fully"}
+        if fully
+        else {"S": "stim_side", "I": "stim_side", "M": "choice_side"}
+    )
     summary["case"] = case
     summary["splits"] = list(splits)
+    summary["jobs"] = [
+        {"populations": list(pops), "splits": list(sp), "timeframe": tf}
+        for pops, sp, tf in jobs
+    ]
     summary["canonical_analysis"] = CANONICAL_PRIOR_DISTANCE_ANALYSIS
     summary["by_split_contrast"] = contrast_df.to_dict(orient="records")
     summary["harris_n_extra_donors"] = (
@@ -2919,7 +2965,8 @@ def run_presence_unsplit_plots(
     unsplit_mode="stim_side",
 ):
     """
-    Full plot suite for presence (fitted I/M) at one (g_s, d_s), stim-side unsplit.
+    Full plot suite for presence (fitted I/M) at one (g_s, d_s), default unsplit
+    (S/I stim-aligned stim strata; M move-aligned choice strata).
 
     Reuses session cache from the Goal-4 sweep when (mp, seed, n_sessions) match.
     """
@@ -2966,14 +3013,7 @@ def run_presence_unsplit_plots(
         rng_seed,
     )
 
-    if fully:
-        splits = s_prior_splits_fully_unsplit()
-        timeframe = FULLY_UNSPLIT_PRIOR_TIMEFRAME
-    else:
-        splits = s_prior_splits_unsplit()
-        timeframe = UNSPLIT_PRIOR_TIMEFRAME
-
-    priors_by_pop, res_dir = _population_prior_from_sessions(
+    priors_by_pop, res_dir, splits, jobs = _unsplit_priors_from_sessions(
         session_dfs,
         steps_before_obs,
         nrand,
@@ -2983,8 +3023,7 @@ def run_presence_unsplit_plots(
         n_jobs=n_jobs,
         contrast_matched_null=contrast_matched_null,
         res_dir=res_dir,
-        splits=splits,
-        timeframe=timeframe,
+        fully=fully,
     )
 
     write_multi_population_split_contrast_diagnostics(
@@ -3027,16 +3066,17 @@ def run_presence_unsplit_plots(
         condition_name=condition,
         rng_seed=rng_seed,
     )
-    for pop in SIM_POPULATIONS:
-        plot_p_block_s_trajectories(
-            session_dfs,
-            steps_before_obs,
-            bc_dir,
-            splits=splits,
-            condition_name=condition,
-            rng_seed=rng_seed,
-            population=pop,
-        )
+    for pops, job_splits, _tf in jobs:
+        for pop in pops:
+            plot_p_block_s_trajectories(
+                session_dfs,
+                steps_before_obs,
+                bc_dir,
+                splits=job_splits,
+                condition_name=condition,
+                rng_seed=rng_seed,
+                population=pop,
+            )
 
     summary = _write_population_prior_outputs(
         condition,
@@ -3611,7 +3651,8 @@ def run_presence_unsplit_sweep(
     unsplit_mode="stim_side",
 ):
     """
-    Goal 4: grid over g_s/d_s with fitted I/M prior modulation, stim-side unsplit.
+    Goal 4: grid over g_s/d_s with fitted I/M prior modulation, default unsplit
+    (S/I stim-aligned stim strata; M move-aligned choice strata).
 
     Reports S/I/M block-prior significance per (g_s, d_s) pair.
     """
@@ -3631,12 +3672,6 @@ def run_presence_unsplit_sweep(
     if unsplit_mode not in ("stim_side", "fully"):
         raise ValueError(f"Unknown unsplit_mode: {unsplit_mode!r}")
     fully = unsplit_mode == "fully"
-    if fully:
-        splits = s_prior_splits_fully_unsplit()
-        timeframe = FULLY_UNSPLIT_PRIOR_TIMEFRAME
-    else:
-        splits = s_prior_splits_unsplit()
-        timeframe = UNSPLIT_PRIOR_TIMEFRAME
     populations = SIM_POPULATIONS
 
     out_csv = base_dir / "presence_unsplit_sweep.csv"
@@ -3671,7 +3706,7 @@ def run_presence_unsplit_sweep(
                 max_obs_per_trial,
                 rng_seed,
             )
-            priors_by_pop, _ = _population_prior_from_sessions(
+            priors_by_pop, _, _, _ = _unsplit_priors_from_sessions(
                 session_dfs,
                 steps_before_obs,
                 nrand,
@@ -3680,8 +3715,7 @@ def run_presence_unsplit_sweep(
                 populations=populations,
                 n_jobs=n_jobs,
                 contrast_matched_null=contrast_matched_null,
-                splits=splits,
-                timeframe=timeframe,
+                fully=fully,
             )
             row = _prior_tune_row(
                 g_s, d_s, priors_by_pop, alpha=alpha, populations=populations
@@ -4192,7 +4226,7 @@ def _ys_from_stratum_labels(labels, mask, n_elig, rng):
 
 
 def _donor_stratum_prior_labels(df, split):
-    """Full-session prior-high labels and stim×choice (or stim-side) mask."""
+    """Full-session prior-high labels and stratum mask (stim×choice, stim-side, or choice-side)."""
     pcol = prior_column_for_split(split)
     labels = np.asarray(df[pcol].values >= 0.5, dtype=bool)
     mask = np.asarray(split_fixed_condition_mask(df, split), dtype=bool)
@@ -4543,9 +4577,77 @@ def s_prior_splits_unsplit():
     return list(UNSPLIT_PRIOR_SPLITS)
 
 
+def m_prior_splits_unsplit():
+    """Duringchoice trials pooled per choice side (no stim / f1/f2 splits)."""
+    return list(UNSPLIT_CHOICE_PRIOR_SPLITS)
+
+
 def s_prior_splits_fully_unsplit():
     """All duringstim trials in one pool (no stim side or choice×feedback splits)."""
     return [FULLY_UNSPLIT_PRIOR_SPLIT]
+
+
+def _unsplit_analysis_jobs(fully, populations):
+    """(pops, splits, timeframe) jobs: S/I stim-aligned; M move-aligned choice strata."""
+    populations = tuple(populations)
+    if fully:
+        return [
+            (populations, s_prior_splits_fully_unsplit(), FULLY_UNSPLIT_PRIOR_TIMEFRAME)
+        ]
+    stim_set = set(UNSPLIT_STIM_POPS)
+    move_set = set(UNSPLIT_MOVE_POPS)
+    stim_pops = tuple(p for p in populations if p in stim_set)
+    move_pops = tuple(p for p in populations if p in move_set)
+    other = tuple(p for p in populations if p not in stim_set and p not in move_set)
+    if other:
+        stim_pops = stim_pops + other
+    jobs = []
+    if stim_pops:
+        jobs.append((stim_pops, s_prior_splits_unsplit(), UNSPLIT_PRIOR_TIMEFRAME))
+    if move_pops:
+        jobs.append(
+            (move_pops, m_prior_splits_unsplit(), UNSPLIT_CHOICE_PRIOR_TIMEFRAME)
+        )
+    return jobs
+
+
+def _unsplit_priors_from_sessions(
+    session_dfs,
+    steps_before_obs,
+    nrand,
+    rng_seed,
+    prior_column,
+    populations,
+    n_jobs=1,
+    contrast_matched_null=True,
+    res_dir=None,
+    fully=False,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
+):
+    """S/I on stim-aligned stim strata; M on move-aligned choice strata (unless fully)."""
+    priors = {}
+    all_splits = []
+    jobs = _unsplit_analysis_jobs(fully, populations)
+    for pops, splits, timeframe in jobs:
+        all_splits.extend(splits)
+        part, res_dir = _population_prior_from_sessions(
+            session_dfs,
+            steps_before_obs,
+            nrand,
+            rng_seed,
+            prior_column,
+            pops,
+            n_jobs=n_jobs,
+            contrast_matched_null=contrast_matched_null,
+            res_dir=res_dir,
+            splits=splits,
+            timeframe=timeframe,
+            harris_unique_null=harris_unique_null,
+            extra_donor_dfs=extra_donor_dfs,
+        )
+        priors.update(part)
+    return priors, res_dir, all_splits, jobs
 
 
 def _splits_for_timeframe(timeframe):
@@ -7305,7 +7407,8 @@ def main():
         help=(
             "Harris unique-null for S/I/M prior distance (act_block analog): "
             "freeze each session's neural trials and transplant other-session "
-            "prior labels from the same stim×choice / stim-side stratum. "
+            "prior labels from the same stim×choice / stim-side / choice-side "
+            "stratum. "
             "Writes separate hu_sprior / *_harris_unique outputs; does not "
             "overwrite contrast-matched results. Incompatible with "
             "--label-shuffle-null and --full-analysis. Long sessions / "
@@ -7418,8 +7521,9 @@ def main():
         choices=["stim_side", "fully"],
         default="stim_side",
         help=(
-            "Unsplit trial pooling: stim_side (default; stim_l + stim_r stacked) or "
-            "fully (all duringstim trials, L+R mixed — S artefact risk)"
+            "Unsplit trial pooling: stim_side (default; S/I stim-aligned stim "
+            "strata, M move-aligned choice strata) or fully (all duringstim "
+            "trials, L+R mixed — S artefact risk)"
         ),
     )
     parser.add_argument(
@@ -7586,8 +7690,17 @@ def main():
         help=(
             "Override the post-stim PRE_POST window (ms) for duringstim splits "
             f"(default: {IM_DURINGSTIM_WINDOW_S*1000:.0f} ms for I/M). "
-            f"S population always uses {S_DURINGSTIM_WINDOW_S*1000:.0f} ms via "
-            "S_DURINGSTIM_WINDOW_S in build_population_b_for_split."
+            "S still uses --s-window-ms (canonical 80) unless that is also set."
+        ),
+    )
+    parser.add_argument(
+        "--s-window-ms",
+        type=float,
+        default=None,
+        help=(
+            "Post-stim analysis window for S (ms). Default: canonical "
+            f"{S_DURINGSTIM_WINDOW_S*1000:.0f}. Pass 150 to save full duringstim "
+            "curves; 80 ms p-values can be sliced from those curves later."
         ),
     )
     parser.add_argument(
@@ -7611,6 +7724,8 @@ def main():
         for key in list(PRE_POST.keys()):
             if "duringstim" in key:
                 PRE_POST[key] = [0, win_s]
+    if args.s_window_ms is not None:
+        set_s_analysis_window_s(args.s_window_ms / 1000.0)
 
     base_dir = resolve_output_dir(args.output_dir, allow_repo_output=args.allow_repo_output)
     base_dir.mkdir(parents=True, exist_ok=True)

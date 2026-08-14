@@ -43,7 +43,9 @@ If S is significant with large curve_mean, the analysis path is wrong (likely ze
 
 ## Unsplit experiments
 
-`--unsplit-prior` = no f1/f2 splits, but **still stim_l + stim_r** (see `UNSPLIT_PRIOR_SPLITS`). Do not use a single pool of all trials for S distance.
+`--unsplit-prior` = no f1/f2 splits. Default `stim_side`: **S/I** stim-aligned
+`stim_l`+`stim_r`; **M** move-aligned **choice** `choice_l`+`choice_r`. Do not
+use a single pool of all trials for S distance.
 
 `--unsplit-mode fully` = diagnostic only (L+R mixed); reproduces spurious S signal even under Phase 4b.
 

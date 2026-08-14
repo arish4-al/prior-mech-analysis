@@ -54,7 +54,10 @@ Source: [canonical_analysis_conventions.md](journals/canonical_analysis_conventi
 ### Common pitfalls
 
 1. **Do not pool left- and right-stim trials in one S distance** without stim-side splits — creates spurious S signal even with g/d=0.
-2. **Unsplit** (`--unsplit-prior`) means no f1/f2 choice×feedback splits; it still uses **stim_l + stim_r** unsplit splits, stacked.
+2. **Unsplit** (`--unsplit-prior`) means no f1/f2 choice×feedback splits. Default
+   `stim_side`: **S/I** stay stim-aligned (`stim_l`+`stim_r`); **M** is
+   move-aligned with **choice** strata (`choice_l`+`choice_r`). Still never pool
+   L+R stim into one S distance.
 3. **Old results** using zero-padding or 150 ms S window are invalid for significance claims.
 4. Trajectory plots must use the same 80 ms S cap as distance analysis (`trial_s_binned_signed`).
 

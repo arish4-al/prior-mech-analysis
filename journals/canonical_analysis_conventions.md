@@ -49,7 +49,7 @@ If S comes out significant with a large `curve_mean`, the analysis path is wrong
 
 ## Unsplit experiments
 
-- `--unsplit-prior` = no f1/f2 choice×feedback splits, but **still stim_l + stim_r** (see `UNSPLIT_PRIOR_SPLITS`). Do not use a single pool of all trials for the S distance.
+- `--unsplit-prior` = no f1/f2 choice×feedback splits. Default `stim_side`: **S/I** on stim-aligned `stim_l`+`stim_r`; **M** on move-aligned **choice** `choice_l`+`choice_r`. Do not use a single pool of all trials for the S distance.
 - `--unsplit-mode fully` = diagnostic only (L+R mixed). It reproduces a spurious S signal even under Phase 4b and must never be used for inference. See [split conditioning vs unsplit](split_conditioning_vs_unsplit.md).
 
 ---
@@ -57,7 +57,7 @@ If S comes out significant with a large `curve_mean`, the analysis path is wrong
 ## Common pitfalls
 
 1. **Do not pool left- and right-stim trials in one S distance** without stim-side splits — activity lives on different channels and this creates spurious S signal even with `g=d=0`.
-2. **Unsplit** means no f1/f2 conditioning; it still uses stim_l + stim_r stacked.
+2. **Unsplit** means no f1/f2 conditioning; S/I still use stim_l + stim_r (stim-aligned); M uses choice_l + choice_r (move-aligned).
 3. **Old results** using zero-padding or a 150 ms S window are invalid for significance claims.
 4. `summary.json` **does not record the null scheme** — infer it from CLI defaults or re-run with `--label-shuffle-null` to compare.
 5. When re-running a variant into a shared output directory, tag the output by null scheme. In the original Goal-1 matrix `ls_unsplit` silently overwrote `cm_unsplit` (see [simulation infrastructure](simulation_infrastructure.md)).
@@ -103,5 +103,7 @@ for the default 6-block / `nrand=100` / contrast-matched path. See
 | 2026-07-06 | Session cache added; conventions unchanged (see [simulation infrastructure](simulation_infrastructure.md)) |
 | 2026-07-12c | Real-data pipeline: `min_trials_per_side = 5` (both sides of a split need ≥5 trials) |
 | 2026-08-14 | Harris unique-null long-session / nrand=2000 / extra-donor runs → ORCD; laptop `session_cache/` wiped |
+| 2026-08-14e | Default unsplit: S/I stim-aligned stim strata; M move-aligned choice strata |
+| 2026-08-14e | Unsplit Harris ORCD run stores **S curves at 150 ms** (`--s-window-ms 150`) so 80 ms p-values can be sliced later. Canonical default for other experiments remains **80 ms S**. Do not compare this run’s unsplit M (choice / movement) to earlier stim-aligned unsplit M. |
 
 Sources: dated entries 2026-06-18, 2026-06-19, 2026-06-19b, 2026-06-20, 2026-06-29, 2026-07-06.
