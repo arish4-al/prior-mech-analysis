@@ -90,3 +90,17 @@ Rebuilt via `run_goal1_cm_full_rebuild.sh` (phase4, s1800, s2025; absence alread
 **Interpretation:** the classifier works as designed. Perfect recovery requires absence-like fitted I/M prior modulation to sculpt distinct stim/choice/movement decorrelation. Phase4 and the s_presence experiments (zero I/M prior mod) are negative controls for recovery — only the I integrator label is stable across them.
 
 **Plots** (all under `goal1/<exp>/cm_full/figs/`): `sim_duringstim_stim_choice_d_euc_SIM.png`, `bwm_classification.csv`, `classification_confusion.png`, `prior_distance_by_group.png`.
+
+---
+
+### 2026-08-13b — Stage B fitted θ (not WEIGHTS_REL)
+
+Full write-up: [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md) 2026-08-13b.
+`--full-analysis` on Stage B shared-stim winners (seed 123, nrand 100, canonical windows).
+
+| θ | acc | S | I | M |
+|---|-----|---|---|---|
+| regular s101 (fitted I/M, `g_s=d_s=0`, `g_m≈0.20`, Stage-A retinal) | **3/3** | S→S (Σ=0.993) | I→I | M→M (mono=1) |
+| sensory s23 (P→S only, `g_s≈38`, `d_s≈33`, Stage-A retinal) | **2/3** | S→S (Σ=0.801) | I→I | M→**I** (mono=0) |
+
+Regular matches canonical absence. Sensory is **not** the 1/3 s1800/s2025 pattern: S just clears σ=0.8. M still fails without I/M prior mod. S/I/M prior distance significant in both (sensory S amp 0.065 vs regular 1.076).

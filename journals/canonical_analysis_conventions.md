@@ -73,6 +73,13 @@ Anything that touches ONE caches (`~/Downloads/ONE/...`), large `manifold/res/*.
 
 Do not retry the same ONE command under the default sandbox hoping it will finish.
 
+**Harris unique-null / long sessions (since 2026-08-14):** `--harris-unique-null`
+with `--blocks-per-session` ≫ 6, `nrand=2000`, or large `--harris-n-extra-donors`
+belongs on **ORCD**, not the laptop. Those draws refill `session_cache/`
+(40-block × 80-donor ≈ 12 GB; whole cache hit 42 GB and was wiped). Laptop is
+for the default 6-block / `nrand=100` / contrast-matched path. See
+[simulation infrastructure](simulation_infrastructure.md).
+
 ---
 
 ## Where these conventions live
@@ -95,5 +102,6 @@ Do not retry the same ONE command under the default sandbox hoping it will finis
 | 2026-06-20 | Canonical output root `<ONE cache>/manifold_sim/` enforced via `resolve_output_dir()` |
 | 2026-07-06 | Session cache added; conventions unchanged (see [simulation infrastructure](simulation_infrastructure.md)) |
 | 2026-07-12c | Real-data pipeline: `min_trials_per_side = 5` (both sides of a split need ≥5 trials) |
+| 2026-08-14 | Harris unique-null long-session / nrand=2000 / extra-donor runs → ORCD; laptop `session_cache/` wiped |
 
 Sources: dated entries 2026-06-18, 2026-06-19, 2026-06-19b, 2026-06-20, 2026-06-29, 2026-07-06.

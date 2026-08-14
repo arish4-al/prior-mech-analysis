@@ -4,7 +4,7 @@
 
 **Status:** four valid arms exist and have been compared at α=0.01 over the full BWM. Liberality order: **Harris (unique) ≈ Harris (with replacement) < label shuffle < AK stratified pseudo (×3) < AK fixed-stim**. Harris is the only structured null **stricter** than shuffle; `_harris_unique` is the preferred file going forward. Two earlier arms (calendar-indexed Harris, unconstrained BWM pseudo-session) are **invalid** and must not be interpreted.
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13, 07-13b, 07-18, 07-20, 07-20b, 07-21, 07-21b, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e.
+Sources: dated entries 2026-07-12 (Goal 2), 07-13, 07-13b, 07-18, 07-20, 07-20b, 07-21, 07-21b, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–c.
 
 ---
 
@@ -208,10 +208,17 @@ FDR@0.05 among 205 regions present in both caches:
 
 | epoch | shuffle | excl | lost (sig→ns) | gained (ns→sig) | kept |
 |-------|--------:|-----:|--------------:|----------------:|-----:|
-| duringstim | 71 | 95 | 9 | 33 | — |
+| duringstim | 71 | 95 | 9 | 33 | 62 |
 | duringchoice | 106 | 123 | 16 | 33 | 90 |
 
-Exclusion does **not** shrink the significant set (net +17 during-choice). The regional pattern is largely preserved (90/106 shuffle hits kept).
+FDR@0.01 among the same 205 regions (2026-08-13; existing `p_mean_c` CSV, BH-FDR threshold only):
+
+| epoch | shuffle | excl | lost (sig→ns) | gained (ns→sig) | kept |
+|-------|--------:|-----:|--------------:|----------------:|-----:|
+| duringstim | 46 | 69 | 8 | 31 | 38 |
+| duringchoice | 84 | 100 | 13 | 29 | 71 |
+
+Exclusion does **not** shrink the significant set (net +17 during-choice at 0.05; net +16 at 0.01). The regional pattern is largely preserved (90/106 shuffle hits kept at 0.05; 71/84 at 0.01).
 
 Plots (alyx `meta/`) have **no column headers**; left→right order:
 
@@ -420,7 +427,7 @@ Congruent example (`choice_duringstim_l_block_l_act`): strat 200 regions / 53.7 
 
 Alyx also has post-min5 files **not** on openalyx (e.g. `act_block_duringstim_{l,r}`, contrast `act_block_*_0.*`, bayes variants, `block_duringstim_choice_*_0.0`) — those are alyx-only, not openalyx gaps.
 
-**2026-07-27c — plain label-shuffle re-run for the 8 choice L–R act splits:** `bash scripts/submit_goal2_choice_shuffle_sharded.sh` → `$ONE_CACHE_DIR/manifold/res/{split}.npy` (plain names, min5). This removes the caveat that those 8 splits were compared against a pre-min5 openalyx baseline.
+**2026-07-27c — plain label-shuffle re-run for the 8 choice L–R act splits:** `bash scripts/submit_goal2_choice_shuffle_sharded.sh` → `$ONE_CACHE_DIR/manifold/res/{split}.npy` (plain names, min5). This removes the caveat that those 8 splits were compared against a pre-min5 openalyx baseline. Local copy is alyx `manifold/res/new/` (mtime 2026-08-14); analysis in **2026-08-14** below.
 
 ---
 
@@ -440,8 +447,9 @@ The prior-type routing fix that this exposed (`act_block_*` was silently falling
 
 **Presets** (`run_goal2_splits.py`):
 
-- `act_block_harris_all` — **9** splits: 4 duringstim choice×f + 4 duringchoice + `act_block_only` (no stim/choice stratum). **Not** the unconditioned `act_block_duringstim_{l,r}`.
+- `act_block_harris_all` — **9** splits: 4 duringstim choice×f + 4 duringchoice + `act_block_only` (no stim/choice stratum). **Not** the unconditioned `act_block_duringstim_{l,r}` (those are `act_block_harris_unsplit`; see **2026-08-14c**).
 - `act_block_duringstim` / `act_block_duringchoice`
+- `act_block_harris_unsplit` / `act_block_unsplit_duringstim` / `act_block_unsplit_duringchoice`
 - also `goal3_duringstim_act` / `goal3_duringchoice_act` with `--session-shuffle-null`
 
 Disk names: `{split}_harris_unique.npy`; plain shuffle `{split}.npy` is untouched.
@@ -454,6 +462,89 @@ python scripts/smoke_act_block_harris_null.py
 ```
 
 `act_block_only` smoke: ITI window `[0.4, −0.1]`, act prior, no stim/choice stratum, parity OK.
+
+---
+
+## 2026-08-14 — min5 shuffle + act_block Harris unique (local `res/new`)
+
+Same combine / BH-FDR / amp×sig tables as 07-27 (`plot_choice_null_comparison_table.py`, α=0.01, `p_mean`). Data: alyx `manifold/res/new/`. Script now takes `--family act_block` and `--force-combine-shuffle`.
+
+```bash
+python scripts/plot_choice_null_comparison_table.py \
+  --openalyx-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag harris_unique --force-combine-shuffle --alpha 0.01 \
+  --out-prefix table_choice_harris_unique_vs_min5shuffle
+
+python scripts/plot_choice_null_comparison_table.py --family act_block \
+  --openalyx-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --shuffle-res-duringchoice ~/Downloads/ONE/openalyx.internationalbrainlab.org/manifold/res \
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \
+  --arm-tag harris_unique --force-combine --alpha 0.01
+```
+
+### Choice L–R: Harris unique vs min5 shuffle
+
+8 act splits present (plain `{split}.npy` + `{split}_harris_unique.npy`). Shuffle coverage ~198–200 regions / 49–55 k cells, `n_null=2000`. Harris unique coverage matches (~197–200 regions / 49–55 k cells); per-split unique pools still ragged (incongruent medians ~700–800, congruent ~1300–1520).
+
+| arm | duringstim | duringchoice | median p (stim / choice) |
+| --- | ---------- | ------------ | ------------------------ |
+| shuffle (openalyx, pre-min5; 07-27) | 46 | 84 | 0.071 / 0.019 |
+| **shuffle (alyx min5)** | **88** | **122** | **0.011 / 0.0015** |
+| harris unique (`_harris_unique`) | **21** | **58** | **0.263 / 0.092** |
+
+Versus min5 shuffle (lost / gained / kept; n=207 regions present in both):
+
+| epoch | shuffle | harris | lost | gained | kept |
+| ----- | ------: | -----: | ---: | -----: | ---: |
+| duringstim | 88 | **21** | 67 | 0 | 21 |
+| duringchoice | 122 | **58** | 65 | 1 | 57 |
+
+Harris unique FDR counts are **unchanged** vs 07-27 (21 / 58). The min5 shuffle baseline is **more liberal** than the old openalyx shuffle (88 / 122 vs 46 / 84), so Harris looks even stricter relative to shuffle. All 21 duringstim Harris hits were already shuffle hits (gained=0).
+
+Plots / CSV: `meta/table_choice_harris_unique_vs_min5shuffle_{,duringchoice_}p_mean_c_0.01.png`; `meta/table_choice_harris_unique_vs_min5shuffle_p_mean_c_0.01.csv`. Does not overwrite the 07-27 openalyx-baseline table.
+
+### act_block prior L–R: Harris unique vs shuffle
+
+8 of 9 `act_block_harris_all` splits are in `res/new` as `*_harris_unique`. **`act_block_only` Harris unique is missing** (not plotted). Shuffle: duringstim = alyx min5 (07-14); duringchoice = openalyx pre-min5 (no alyx counterpart; same caveat as 07-27b).
+
+**f2 Harris skip** (error-trial / short-stratum donors), analogous to the simulation split collapse:
+
+| split | shuffle nreg / cells | Harris nreg / cells | cells kept |
+| ----- | -------------------: | ------------------: | ---------: |
+| duringstim f1 (`*_choice_*_f1`) | 207–208 / 62.5–62.6 k | 207–208 / 62.0–62.3 k | ~99 % |
+| duringstim f2 (`*_choice_*_f2`) | 200–201 / 55.2–56.0 k | 181–188 / 37.4–42.3 k | 68–75 % |
+| duringchoice f1 | 207–208 / 62.5–62.7 k | 207–208 / 62.1–62.4 k | ~99 % |
+| duringchoice f2 | 200–202 / 55.5–56.3 k | 180–188 / 37.7–42.5 k | 68–76 % |
+
+f2 unique pools: min 9, median ~425 (f1 median ~1800–1910). Combined product-MC still has `n_null≈2000`.
+
+| arm | duringstim | duringchoice | median uncorr p (stim / choice) |
+| --- | ---------- | ------------ | ------------------------------- |
+| shuffle | **42** | **42** | 0.119 / 0.089 (`p_mean_c` med 0.236 / 0.176) |
+| **harris unique** | **0** | **0** | **0.725 / 0.695** |
+
+Versus shuffle (n=208 regions in both): duringstim 42→0 (lost 42, gained 0, kept 0); duringchoice 42→0 (lost 42, gained 0, kept 0). Shuffle duringstim 42 matches the 07-14b alyx all-contrast table.
+
+Uncorrected: Harris duringstim 2 regions at `p_mean≤0.01` (RN, FOTU) and 3 at ≤0.05; duringchoice 1 at ≤0.01 (FOTU) and 5 at ≤0.05. Not enough for BH at α=0.01 **or** 0.05 (need ~30 at the p-floor). Observed amps are not gone (harris/shuffle `amp_euc` median ratio 0.71; e.g. GRN 2.28 vs 3.10) — the Harris null is wider, so the same curves are no longer significant.
+
+Plots / CSV: `meta/table_act_block_harris_unique_vs_shuffle_{,duringchoice_}p_mean_c_0.01.png`; `meta/table_act_block_harris_unique_vs_shuffle_p_mean_c_0.01.csv`.
+
+**Interpretation:** for prior L–R, Harris unique is far stricter than shuffle — it removes the entire FDR map. That is a larger correction than for choice L–R (21/58 still survive). Caveats: f2 insertions are thinned by donor-stratum length; duringchoice shuffle is still pre-min5 openalyx; `act_block_only` was not in this copy.
+
+**2026-08-14b — 0 FDR is not the f2-stratum skip.** Recombine in memory: f1-only / f2-only / all-4, same product-MC + BH@0.01.
+
+Shuffle prior signal is almost entirely **f1** (correct choice). f2 shuffle alone is already null (0 FDR; 13 / 4 uncorr duringstim / duringchoice). Including f2 in the four-split **lowers** shuffle FDR (duringstim 89 → 42; duringchoice 112 → 42) — f2 dilutes, it does not carry the hits.
+
+| combine | duringstim shuffle FDR | duringstim Harris FDR | duringchoice shuffle FDR | duringchoice Harris FDR |
+| --- | ---: | ---: | ---: | ---: |
+| f1 only (2 splits) | **89** | **0** (4 uncorr) | **112** | **0** (4 uncorr) |
+| f2 only | 0 | 0 | 0 | 0 |
+| all 4 | 42 | 0 (2 uncorr) | 42 | 0 (1 uncorr) |
+
+On f1, Harris coverage is ~99 % and unique pools are large (median U ~1800–1910). Observed `amp_euc` matches shuffle (median ratio **1.00**); Harris null amplitudes are only modestly wider (ratio ~1.18–1.19). That SNR drop (stim 0.41 → 0.20; choice 0.36 → 0.14) is enough for 0 FDR. Among the 42 four-split shuffle hits, 35/42 still have all four Harris splits — whole-region f2 dropout is rare; 2–3/42 have Harris f1 uncorr p ≤ 0.01.
+
+So the blank Harris map is the **structured prior null on f1**, not missing error-trial insertions. f2 skip is real (68–75 % cells) and further shrinks four-split observed amps (ratio ~0.75), but dropping f2 does not restore significance.
 
 ---
 
@@ -483,9 +574,93 @@ Output: `alyx.../meta/table_stimchoice_act_regtype_harris_unique_p_mean_c_0.01.p
 
 ---
 
+## Simulation analog (Stage B prior distance, 2026-08-13d)
+
+`simulate_recovery.py --harris-unique-null` is the act_block Harris unique-null
+for **model** S/I/M prior distance: recipient neural `b` frozen per simulated
+session; null labels are other-session subjective priors in the same
+stim×choice (split) or stim-side (unsplit) stratum; unique patterns only;
+40 extra donor sessions at `seed+10007`. Details and numbers:
+[retinal then joint](retinal_then_joint_fitting.md) 2026-08-13d.
+
+Unsplit (U=100): regular S stays null; sensory S stays significant. Split
+f1/f2 unique pool collapses on incongruent f2 cells — same short-stratum
+failure mode as real-data Harris skip.
+
+**2026-08-14 — longer sessions fix f2.** Same analog at `--blocks-per-session 40`,
+`--nrand 2000`, `--harris-n-extra-donors 80`. All splits unique=2000, 40/40 kept
+(including f2). Combined p is now at real-data null resolution; the unsplit
+conclusion is unchanged (regular S p=0.63, sensory S p=0). Numbers:
+[retinal then joint](retinal_then_joint_fitting.md) 2026-08-14.
+
+**Do not re-run this on the laptop.** The 40-block × 80-donor session cache was
+~12 GB; the whole `session_cache/` hit 42 GB and was wiped after the campaign.
+Future Harris unique-null / long-session / nrand=2000 / extra-donor jobs go on
+**ORCD**. See [simulation infrastructure](simulation_infrastructure.md) 2026-08-14.
+
+---
+
+## 2026-08-14c — Harris unique unsplit prior tests (real data)
+
+Real-data analog of the model `--unsplit-prior` tests in
+[retinal then joint](retinal_then_joint_fitting.md) 2026-08-13c/d: **no f1/f2**.
+Stim-aligned prior L–R is stratified by **stim side only**; movement-aligned
+prior L–R is stratified by **choice side only**.
+
+| split | align | window | stratum | distance |
+| ----- | ----- | ------ | ------- | -------- |
+| `act_block_duringstim_l` / `_r` | `stimOn_times` | `[0, 0.15]` | stim L or R | prior L vs R |
+| `act_block_duringchoice_l` / `_r` | `firstMovement_times` | `[0.15, 0]` | choice +1 or −1 | prior L vs R |
+
+Harris path (`_get_d_vars_block_harris`) uses `_act_block_conditioning_spec`
+(explicit name cases **before** the `'choice_l' in name` substring parse —
+`'choice_l'` is a substring of `duringchoice_l`). Shuffle of the new
+duringchoice splits has a matching `get_d_vars` branch. Combine is 2-split
+(`--family act_block_unsplit`).
+
+**Presets** (`run_goal2_splits.py`): `act_block_harris_unsplit` (4),
+`act_block_unsplit_duringstim` (2), `act_block_unsplit_duringchoice` (2).
+
+**ORCD**
+
+```bash
+bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
+# PRESET=act_block_unsplit_duringstim …
+# PRESET=act_block_unsplit_duringchoice …
+python scripts/smoke_act_block_harris_null.py
+```
+
+Outputs: `$ONE_CACHE_DIR/manifold/res/{split}_harris_unique.npy`. Default
+`NRAND=2000`, `SESSION_SHUFFLE_NULL=1`, rebuild donors, `CLEAR_STREAM` only
+`*_harris_unique` for these four. Wrapper job prefix `g2ahu`.
+
+Duringstim unsplit **shuffle** (`act_block_duringstim_{l,r}.npy`) already
+exists on alyx `res/new` (Jul 14). Duringchoice unsplit shuffle does **not**.
+If a Harris-vs-shuffle table is needed, submit **only** the new pair (do not
+`CLEAR_STREAM` the existing duringstim shuffle):
+
+```bash
+PRESET=act_block_unsplit_duringchoice bash scripts/submit_goal2_choice_shuffle_sharded.sh
+```
+
+Plot after both arms exist:
+
+```bash
+python scripts/plot_choice_null_comparison_table.py --family act_block_unsplit \
+  --openalyx-res $ONE_CACHE_DIR/manifold/res/new \
+  --shuffle-res-duringchoice $ONE_CACHE_DIR/manifold/res \
+  --arm-res $ONE_CACHE_DIR/manifold/res \
+  --arm-tag harris_unique --force-combine --alpha 0.01
+```
+
+Not added: true-block / bayes `duringchoice_l/r`.
+
+---
+
 ## Open questions
 
-1. **Primary null choice for choice L–R claims** — Harris (empirical sticky structure within stratum) vs AK stratified pseudo (BWM-like new world with matched bias context).
+1. **Primary null choice for choice L–R claims** — Harris (empirical sticky structure within stratum) vs AK stratified pseudo (BWM-like new world with matched bias context). Min5 shuffle (08-14) is more liberal than openalyx, which widens the Harris–shuffle gap but does not change Harris FDR counts.
 2. **Why strat null amplitudes stay below Harris** at matched coverage.
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
+5. **act_block Harris unique is a near-total null** (0 FDR @0.01/0.05). 08-14b: **not** the f2 donor-stratum skip — f1-only Harris (99 % cells, large U) is also 0 FDR; shuffle prior hits live in f1. Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? `act_block_only` Harris unique still missing from local `res/new`.

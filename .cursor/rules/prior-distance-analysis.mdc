@@ -23,6 +23,14 @@ Do **not** run ONE-cache I/O, large `res/*.npy` combines/plots, or `iblenv` anal
 scripts inside the Cursor sandbox — they routinely get stuck at 0% CPU. Always
 disable the sandbox and use `conda activate iblenv`.
 
+### Harris unique-null / long sessions → ORCD (since 2026-08-14)
+
+Do **not** re-run `--harris-unique-null` with long sessions (`--blocks-per-session` ≫ 6),
+`nrand=2000`, or large `--harris-n-extra-donors` on the laptop. Those refill
+`<ONE cache>/manifold_sim/session_cache/` (40-block × 80-donor ≈ 12 GB; whole cache
+hit 42 GB and was wiped 2026-08-14). Submit on **ORCD**. Laptop is only for the
+default 6-block / `nrand=100` / contrast-matched path.
+
 ## Phase 4b regression check
 
 Split-conditioned Phase 4b at seed 123 must give S curve_mean ≈ 0.012, p ≈ 0.78:

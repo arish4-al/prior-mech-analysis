@@ -11,7 +11,11 @@
 # Other presets:
 #   PRESET=act_block_duringstim bash scripts/submit_goal2_act_block_harris_sharded.sh
 #   PRESET=act_block_duringchoice …
+#   PRESET=act_block_harris_unsplit …   # stim-side + choice-side, no f1/f2
 #   PRESET=goal3_duringstim_act …   # contrast-expanded (needs donor contrasts)
+#
+# Unsplit-only wrapper:
+#   bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
 #
 # Outputs: $ONE_CACHE_DIR/manifold/res/{split}_harris_unique.npy
 #   (plain shuffle stays at {split}.npy — never overwritten)
@@ -46,7 +50,7 @@ export ACTKERNEL_NULL_MODE=""
 export ACTKERNEL_PSEUDO_LEN_FACTOR=""
 
 SUFFIX=_harris_unique
-JOB_PREFIX=g2abh
+JOB_PREFIX="${JOB_PREFIX:-g2abh}"
 
 module load miniforge 2>/dev/null || true
 if [[ -f "$HOME/conda_envs/ibl/bin/activate" ]]; then

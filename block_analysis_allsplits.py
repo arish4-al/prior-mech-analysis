@@ -122,6 +122,9 @@ align_old = {
          'block_duringstim_r':'stimOn_times',
          'act_block_duringstim_l':'stimOn_times',
          'act_block_duringstim_r':'stimOn_times',
+         # Choice-side prior (no stim/f1/f2): movement window via 'duringc' in name
+         'act_block_duringchoice_l':'firstMovement_times',
+         'act_block_duringchoice_r':'firstMovement_times',
          # Bayes-optimal prior (stimulus-history inference); mirrors act_block_*
          'bayes_block_stim_r_choice_r_f1':'stimOn_times',
          'bayes_block_stim_l_choice_l_f1':'stimOn_times',
@@ -309,6 +312,27 @@ def is_choice_lr_split(split):
 def is_act_block_prior_split(split):
     '''Prior L vs R under action-kernel prior: ``act_block_*`` (any window/contrast).'''
     return (split or '').startswith('act_block')
+
+
+# Stim-side unsplit: prior L vs R within one stim side (no choice / f1/f2).
+ACT_BLOCK_UNSPLIT_STIM = (
+    'act_block_duringstim_l',
+    'act_block_duringstim_r',
+)
+# Choice-side unsplit: prior L vs R within one choice (no stim / f1/f2).
+ACT_BLOCK_UNSPLIT_CHOICE = (
+    'act_block_duringchoice_l',
+    'act_block_duringchoice_r',
+)
+ACT_BLOCK_UNSPLIT_SPLITS = ACT_BLOCK_UNSPLIT_STIM + ACT_BLOCK_UNSPLIT_CHOICE
+
+
+def is_act_block_unsplit_split(split):
+    '''Prior L vs R with a single-factor stratum (stim-side or choice-side).'''
+    name = split or ''
+    if contrast_from_split(name) is not None:
+        name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', name)
+    return name in ACT_BLOCK_UNSPLIT_SPLITS
 
 
 def is_harris_eligible_split(split):
@@ -784,9 +808,14 @@ def _feedback_from_choice_stim(choice, stim_is_left):
 def _act_block_conditioning_spec(split):
     '''Conditioning for act_block prior L–R (labels = prior; not in mask).
 
-    Stratum is **stim × choice** (± contrast). Feedback is **not** a separate
-    factor: for these splits, stim×choice already selects f1 vs f2
+    Default stratum is **stim × choice** (± contrast). Feedback is **not** a
+    separate factor: for those splits, stim×choice already selects f1 vs f2
     (e.g. stim_l + choice_l ⇒ correct; stim_l + choice_r ⇒ incorrect).
+
+    Unsplit (model analog of stim-side / choice-side pooling):
+      - ``act_block_duringstim_{l,r}`` — stim side only (no choice / f1/f2)
+      - ``act_block_duringchoice_{l,r}`` — choice side only (no stim / f1/f2)
+      - ``act_block_only`` — no stim/choice stratum
 
     Returns dict: stim_is_left (bool|None), choice (±1|None), contrast (float|None).
     '''
@@ -798,6 +827,16 @@ def _act_block_conditioning_spec(split):
         return {
             'stim_is_left': None, 'choice': None, 'contrast': contrast,
         }
+    if name in ('act_block_duringstim_l', 'block_duringstim_l',
+                'bayes_block_duringstim_l'):
+        return {'stim_is_left': True, 'choice': None, 'contrast': contrast}
+    if name in ('act_block_duringstim_r', 'block_duringstim_r',
+                'bayes_block_duringstim_r'):
+        return {'stim_is_left': False, 'choice': None, 'contrast': contrast}
+    if name == 'act_block_duringchoice_l':
+        return {'stim_is_left': None, 'choice': 1.0, 'contrast': contrast}
+    if name == 'act_block_duringchoice_r':
+        return {'stim_is_left': None, 'choice': -1.0, 'contrast': contrast}
 
     stim_is_left = None
     if 'duringstim_l' in name or re.search(r'(?:^|_)stim_l(?:_|$)', name):
@@ -904,7 +943,9 @@ def _donor_block_conditioning_mask(rec, split, keep=None):
 
     Always restricted to non-0.5 true-block trials (same as recipient). For
     ``act_block_only`` that is the full biased-block session (no stim/choice
-    stratum). For choice×stim splits, further intersect stim × choice (±c).
+    stratum). For unsplit ``act_block_duringstim_{l,r}`` / ``duringchoice_{l,r}``
+    that is stim-side only or choice-side only. For choice×stim splits, further
+    intersect stim × choice (±c).
     '''
     rec = _normalize_donor_rec(rec)
     if rec.get('_legacy'):
@@ -1672,10 +1713,12 @@ def _compute_control_D_harris_block(
     '''
     Harris unique-null for act_block prior L vs R.
 
-    Recipient conditioning (stim × choice ± contrast) defines ``elig_idx`` /
-    neural ``b`` (f1/f2 in the split name is implied by stim×choice). Observed
-    labels = prior-L on those trials (act / bayes / true per split name).
-    Each null transplants another eid's **prior** labels from the same
+    Recipient conditioning defines ``elig_idx`` / neural ``b``:
+    stim × choice (± contrast) for f1/f2 splits; stim-side only for
+    ``act_block_duringstim_{l,r}``; choice-side only for
+    ``act_block_duringchoice_{l,r}``; none for ``act_block_only``.
+    Observed labels = prior-L on those trials (act / bayes / true per split
+    name). Each null transplants another eid's **prior** labels from the same
     conditioning stratum.
     '''
     del null_batch_size
@@ -2480,9 +2523,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     permutation (requires ``donor_bank``):
       - choice L–R: recipient stim×prior defines ``elig_idx``; null labels are
         another eid's choices from the same stim×prior stratum
-      - act_block prior L–R: recipient stim×choice×feedback (±contrast)
-        defines ``elig_idx``; null labels are another eid's **prior** labels
-        from the same conditioning stratum
+      - act_block prior L–R: recipient stratum defines ``elig_idx`` (stim×choice
+        ±contrast for f1/f2 splits; stim-side only for ``duringstim_{l,r}``;
+        choice-side only for ``duringchoice_{l,r}``); null labels are another
+        eid's **prior** labels from the same conditioning stratum
     Default False → label shuffle.
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
@@ -2704,6 +2748,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         # Revised Goal 3: block L vs R at 0% contrast, within a fixed choice.
         # Include both nominal stimulus sides and both feedback outcomes.
         trials = trials[goal3_c0_choice_mask(trials, split)]
+        for pleft in [0.8, 0.2]:
+            sel = trials['probabilityLeft'] == pleft
+            events.append(trials[align[split]][sel])
+            trn.append(np.arange(len(trials['choice']))[sel])
+
+    elif split in ACT_BLOCK_UNSPLIT_CHOICE:
+        # Prior L vs R within one choice side; firstMovement window; no stim/f1/f2.
+        ch = 1 if split.endswith('_l') else -1
+        trials = trials[trials['choice'] == ch]
         for pleft in [0.8, 0.2]:
             sel = trials['probabilityLeft'] == pleft
             events.append(trials[align[split]][sel])

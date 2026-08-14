@@ -153,6 +153,40 @@ The four experiments: **phase4** (all g/d=0), **absence** (g_s=d_s=0, fitted I/M
 
 ---
 
+### 2026-08-13c — Stage B fitted θ (s101 / s23)
+
+Full write-up: [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md) 2026-08-13c.
+Stim-side unsplit, same sessions as the 13b `--full-analysis` (cache HIT).
+
+| θ | S unsplit | S p | vs f1/f2 S |
+|---|----------:|----:|------------|
+| regular s101 (fitted I/M, `g_s=0`) | 0.0027 | 0.63 ✗ | 0.199, p=0 → **collapses** |
+| sensory s23 (P→S only, `g_s≈38`, `d_s≈33`) | 0.069 | 0 ✓ | 0.055, p=0 → **survives** |
+
+Regular matches canonical absence unsplit (S n.s., I/M large). Sensory S is not a composition artefact.
+
+### 2026-08-13d — Harris unique-null on the same unsplit test
+
+Full write-up: [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md) 2026-08-13d.
+`--harris-unique-null` (other-session prior sequences, unique patterns, 40 extra donor sessions). Unsplit unique pool 100/100.
+
+| θ | contrast-matched S | Harris unique S |
+|---|-------------------:|----------------:|
+| regular s101 | 0.0027, p=0.63 ✗ | 0.0031, p=0.33 ✗ |
+| sensory s23 | 0.069, p=0 ✓ | 0.069, p=0 ✓ |
+
+Harris does not change the unsplit conclusion. Split-conditioned Harris unique-null is under-resolved on f2 (do not use).
+
+### 2026-08-14 — same unsplit test at nrand=2000 / 40 blocks
+
+Full write-up: [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md) 2026-08-14.
+Longer sessions fill the f2 unique pool (U=2000, 40/40 kept). Unsplit S is still
+regular **0.0003, p=0.63** vs sensory **0.072, p=0**. Split-conditioned regular S
+(0.195, p=0) remains the composition artefact. Future Harris / long-session runs
+→ **ORCD**; local `session_cache/` wiped after this campaign.
+
+---
+
 ## Open / follow-up items
 
 - Unsplit S-only canonical (`g_s=g_i_fitted`, `g_i=0`) — not run.

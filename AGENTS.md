@@ -24,6 +24,19 @@ repeatedly on combine/plot/null jobs). Always:
 
 Do not retry the same ONE command under the default sandbox hoping it will finish.
 
+### Harris unique-null / long sessions → ORCD (since 2026-08-14)
+
+Do **not** re-run `--harris-unique-null` with long sessions (`--blocks-per-session` ≫ 6),
+`nrand=2000`, or large `--harris-n-extra-donors` on the laptop. Those draws refill
+`<ONE cache>/manifold_sim/session_cache/` (the 2026-08-14 40-block × 80-donor
+campaign was **~12 GB** of new pickles; the whole cache hit **42 GB**). After that
+run the entire `session_cache/` was deleted.
+
+Submit those jobs on **ORCD** (`mit_normal`). Laptop is fine for the default
+6-block / `nrand=100` / contrast-matched path (Phase 4b check, small unsplit).
+See [simulation infrastructure](journals/simulation_infrastructure.md) 2026-08-14
+and [retinal then joint](journals/retinal_then_joint_fitting.md) 2026-08-14.
+
 ### Phase 4b sanity check
 
 Before trusting new analysis paths, verify split-conditioned Phase 4b matches the retest:

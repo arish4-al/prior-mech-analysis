@@ -11,14 +11,14 @@
 **Not in scope:** weights-only ORCD batch ([simulation_fit_speedups.md](simulation_fit_speedups.md));
 prior-distance recovery; re-running failed joint-cold campaigns as the main line.
 
-**Status:** Local Stage B smoke (2026-08-12d) used repo `fit_targets/` nested
-I/M `{stim,choice}` (I-pre / M-post solid data on plots). `cma_only` from hybrid
-finished; DE Stage-1 at `bps=10` hit S-bucket `<10` → 1e12 because DE jittered
-retinal away from Stage A (exact hybrid was never in the pop). **2026-08-12e:**
-Stage-1 DE now **holds** Stage-A retinal; CMA/polish unfreeze it
-(`--stage1-hold-retinal`, Stage B default on). **2026-08-12f:** ORCD hold-smoke
-both masks still 1e12 — `--bps-stage1` never reached joint DE (stale import-time
-bps=5). Fix in `loss_joint_core` / DE context; resubmit after it is on `main`.
+**Status:** Stage B winners regular **s101**, sensory **s23**. Split-conditioned
+`--full-analysis`: regular **3/3**, sensory **2/3** with S prior sig. Stim-side
+**unsplit:** regular S **collapses** (0.003, p=0.63); sensory S **survives**
+(0.069, p=0). **Harris unique-null** agrees at both nrand=100/6-block (2026-08-13d)
+and nrand=2000/40-block (2026-08-14): regular unsplit S null; sensory unsplit S
+survives. Split-conditioned regular S remains the f1/f2 composition artefact.
+I/M remain sig. both models. **Future Harris / long-session runs: ORCD**, not
+the laptop (`session_cache/` wiped 2026-08-14). See 2026-08-13b / 13c / 13d / 14.
 
 **Code:** [`fit_retinal.py`](../fit_retinal.py) (hooks into
 `fit_weights_two_stage_v2`); drivers
@@ -467,6 +467,510 @@ SEEDS="999" OUT_TAG=stageB_hold_smoke TIME=1:00:00 \
 
 Log must show `BPS_STAGE1=20`, `hold_retinal=True`, `[Stage1] holding 7 dims`,
 and a **finite** Stage-1 loss (not 1e12).
+
+**ORCD hold-smoke retry (same day, after bps fix):** both masks `FIT_DONE` on a
+tiny budget. Regular recorded **1.281** (DE 1.005; polish rejected). Sensory
+recorded **2.183**. Wiring only — not a quality claim.
+
+---
+
+### 2026-08-12g — Stage B production `stageB_hold_s89` + shared-stim plots
+
+**Runs:** `weights_run_fj_stageB_hold_s89_{regular_mask12-13,sensory_mask6-7-8-9}_s{56,34,78,89,202}/`
+all `FIT_DONE`. Hybrid resume = WEIGHTS_REL ∪ Stage-A retinal **s89**. Stage-1 DE
+held retinal; CMA/polish unfroze. `bps1=bps2=20`.
+
+**Shared-stim eval** ([`scripts/plot_best_fit_results.py`](../scripts/plot_best_fit_results.py)):
+one `bps=20` session, stim seed **12345**, stim built from the **hybrid** mp
+(Stage-A α_w/β_w baked into the batch). Nested `fit_targets/` I/M + prior +
+`avg_mean_R`. `L_w` = traj+prior; **fair** = `L_w+L_S`.
+
+This is the notebook 1-bundle protocol, **not** the 2026-08-11 5-bundle mean that
+gave WEIGHTS_REL **1.344**. On *this* batch WEIGHTS_REL is **1.260**.
+
+| Model | recorded | L_w (traj+prior) | L_S | **fair** |
+|-------|---------:|-----------------:|----:|---------:|
+| hybrid (init) | 0.776 | 0.533 (0.417+0.116) | 0.496 | **1.028** |
+| WEIGHTS_REL | 0.404 | 0.581 (0.435+0.147) | 0.679 | 1.260 |
+| **regular s34** | 0.952 | **0.527** (0.320+0.207) | 0.495 | **1.023** |
+| regular s89 | 1.149 | 0.598 (0.403+0.195) | 0.496 | 1.094 |
+| regular s56 | 2.399 | 0.634 (0.347+0.287) | 0.496 | 1.129 |
+| regular s78 | 1.045 | 0.663 (0.387+0.276) | 0.508 | 1.171 |
+| regular s202 | 1.108 | 0.691 (0.420+0.271) | 0.496 | 1.187 |
+| **sensory s89** | 1.125 | 0.585 (0.364+0.221) | 0.441 | **1.025** |
+| sensory s56 | 1.304 | 0.631 (0.472+0.159) | 0.434 | 1.065 |
+| sensory s202 | 1.357 | 0.661 (0.558+0.104) | **0.431** | 1.093 |
+| sensory s34 | 1.658 | 0.698 (0.327+0.371) | 0.454 | 1.152 |
+| sensory s78 | 1.399 | 0.711 (0.471+0.240) | 0.455 | 1.167 |
+
+**Takeaways**
+
+1. All 10 Stage B finals beat the old joint path (best regular **2.083**) and beat
+   WEIGHTS_REL on this batch. Ranking by recorded fit loss ≠ shared-stim ranking
+   (regular s56 recorded 2.40 but fair 1.13).
+2. Most of the drop vs 1.344 / WEIGHTS_REL `L_S=0.679` is **Stage A**: hybrid
+   `L_S=0.496`. Regular Stage B barely moves `L_S` (retinal stayed at s89).
+   Sensory shaves `L_S` to **0.43–0.45**.
+3. Best regular **s34** is a small `L_w` win vs hybrid (traj 0.320 vs 0.417;
+   prior worse 0.207 vs 0.116). Net fair **1.023 vs 1.028**.
+4. Best sensory **s89** matches hybrid fair via better `L_S`, worse `L_w`.
+5. Regular s89 collapsed `g_i` to 0.28 (hybrid ~190) — still finite, not the
+   shared-stim winner.
+
+**Best-of parameters** (native; frozen gains are LOG_ZERO ≈ `9.36e-14`, written 0).
+Shared-stim winners, not lowest recorded fit loss.
+
+Regular **s34** — `weights_final_loss0p9523_20260812-161934.json`  
+(`frozen_idx=[12,13]` = `g_s`,`d_s`)
+
+| | W_ii | W_pp | W_mm | W_is | W_pi | W_mi |
+|--|-----:|-----:|-----:|-----:|-----:|-----:|
+| s34 | 0.402 | 0.496 | 0.299 | 0.178 | 2.31e-5 | 0.492 |
+| hybrid | 0.426 | 0.496 | 0.270 | 0.168 | 1.63e-5 | 0.507 |
+
+| | g_i | g_m | d_i | d_m | g_s | d_s | θ_c | θ_d |
+|--|----:|----:|----:|----:|----:|----:|----:|----:|
+| s34 | 166.2 | ≈0 | 22.36 | ≈0 | **0** | **0** | 0.768 | 0.408 |
+| hybrid | 189.7 | 0 | 21.56 | 0 | 0 | 0 | 0.760 | 0.401 |
+
+| | α_w | β_w | α_d | β_d | τ_a | W_as | W_ss |
+|--|----:|----:|----:|----:|----:|-----:|-----:|
+| s34 | 2.201 | −0.0138 | 32.37 | 1.193 | 117.7 | 36.95 | 0.00214 |
+| hybrid | 2.209 | −0.0139 | 32.38 | 1.194 | 117.3 | 36.85 | 0.00215 |
+
+Sensory **s89** — `weights_final_loss1p125_20260812-164336.json`  
+(`frozen_idx=[6,7,8,9]` = `g_i`,`g_m`,`d_i`,`d_m`)
+
+| | W_ii | W_pp | W_mm | W_is | W_pi | W_mi |
+|--|-----:|-----:|-----:|-----:|-----:|-----:|
+| s89 | 0.424 | 0.497 | 0.313 | 0.188 | 8.55e-5 | 0.505 |
+
+| | g_i | g_m | d_i | d_m | g_s | d_s | θ_c | θ_d |
+|--|----:|----:|----:|----:|----:|----:|----:|----:|
+| s89 | **0** | **0** | **0** | **0** | 0.709 | 12.12 | 0.681 | 0.443 |
+
+| | α_w | β_w | α_d | β_d | τ_a | W_as | W_ss |
+|--|----:|----:|----:|----:|----:|-----:|-----:|
+| s89 | 2.211 | +0.0052 | 25.00 | 0.811 | 156.2 | 37.22 | 0.00215 |
+| hybrid | 2.209 | −0.0139 | 32.38 | 1.194 | 117.3 | 36.85 | 0.00215 |
+
+Regular s34 stayed near Stage-A retinal; `g_i` dropped 190→166. Sensory s89 moved
+the front-end (`β_w` sign flip, `α_d`/`β_d` down, `τ_a` 117→156) and learned
+`g_s≈0.71`, `d_s≈12`.
+
+**Plots** (S = `model_vs_data_stim_Right (+1).svg` + `S_fit.png`; I/M pre/post;
+P; prior effects):
+
+- `~/Downloads/ONE/…/models/stageB_hold_s89_plots_bps20/`
+- copy: `figs/fit_result_plots_bps20/weights_run_fj_stageB_hold_s89_*/`
+  (hybrid folder: `hybrid_WEIGHTS_REL_retinal_s89/`)
+
+---
+
+### 2026-08-13 — Stage B second seed batch, shared-stim re-rank
+
+**Runs:** same hybrid / `OUT_TAG=stageB_hold_s89`, seeds
+`7 12 23 42 45 67 101 111 303 333` × regular `12|13` + sensory `6|7|8|9`.
+All 20 `FIT_DONE` (local openalyx `models/`). Combined with batch-1
+(`56 34 78 89 202`) → **15 × 2**.
+
+**Eval:** same protocol as 2026-08-12g (`bps=20`, stim seed **12345**, stim from
+hybrid mp, nested `fit_targets/`). Hybrid re-eval matched **fair 1.0284**.
+
+| Model | recorded | L_w (traj+prior) | L_S | **fair** |
+|-------|---------:|-----------------:|----:|---------:|
+| hybrid (init) | 0.776 | 0.533 (0.417+0.116) | 0.496 | 1.028 |
+| WEIGHTS_REL | 0.404 | 0.581 (0.435+0.147) | 0.679 | 1.260 |
+| **regular s101** | 1.131 | **0.504** (0.402+0.102) | 0.497 | **1.001** |
+| regular s333 | 0.962 | 0.521 (0.360+0.162) | 0.496 | 1.017 |
+| regular s34 | 0.952 | 0.527 (0.320+0.207) | 0.495 | 1.023 |
+| regular s12 | 0.960 | 0.532 (0.406+0.126) | 0.496 | 1.027 |
+| regular s303 | 1.030 | 0.549 (0.335+0.215) | 0.496 | 1.045 |
+| regular s45 | 1.524 | 0.576 (0.399+0.177) | 0.496 | 1.072 |
+| regular s7 | 0.996 | 0.550 (0.320+0.230) | 0.526 | 1.076 |
+| regular s89 | 1.149 | 0.598 (0.403+0.195) | 0.496 | 1.094 |
+| regular s42 | 1.169 | 0.630 (0.421+0.210) | 0.496 | 1.126 |
+| regular s56 | 2.399 | 0.634 (0.347+0.287) | 0.496 | 1.129 |
+| regular s78 | 1.045 | 0.663 (0.387+0.276) | 0.508 | 1.171 |
+| regular s67 | 1.380 | 0.683 (0.521+0.163) | 0.496 | 1.179 |
+| regular s202 | 1.108 | 0.691 (0.420+0.271) | 0.496 | 1.187 |
+| regular s111 | 1.549 | 0.780 (0.391+0.389) | 0.496 | 1.276 |
+| regular s23 | 1.168 | 0.983 (0.316+0.667) | 0.496 | 1.479 |
+| **sensory s23** | 1.148 | 0.559 (0.381+0.178) | 0.446 | **1.005** |
+| sensory s89 | 1.125 | 0.585 (0.364+0.221) | 0.441 | 1.025 |
+| sensory s333 | 1.523 | 0.615 (0.435+0.180) | 0.439 | 1.054 |
+| sensory s56 | 1.304 | 0.631 (0.472+0.159) | 0.434 | 1.065 |
+| sensory s12 | 1.584 | 0.619 (0.477+0.142) | 0.448 | 1.068 |
+| sensory s101 | 1.927 | 0.632 (0.447+0.185) | 0.436 | 1.068 |
+| sensory s7 | 1.123 | 0.632 (0.452+0.180) | 0.450 | 1.083 |
+| sensory s67 | 1.357 | 0.646 (0.434+0.212) | 0.441 | 1.087 |
+| sensory s202 | 1.357 | 0.661 (0.558+0.104) | **0.431** | 1.093 |
+| sensory s111 | 1.546 | 0.574 (0.504+0.070) | 0.536 | 1.111 |
+| sensory s34 | 1.658 | 0.698 (0.327+0.371) | 0.454 | 1.152 |
+| sensory s78 | 1.399 | 0.711 (0.471+0.240) | 0.455 | 1.167 |
+| sensory s303 | 1.068 | 0.504 (0.329+0.175) | 0.672 | 1.176 |
+| sensory s45 | 1.575 | 0.787 (0.681+0.106) | 0.449 | 1.236 |
+| sensory s42 | 1.292 | 0.957 (0.509+0.449) | 0.424 | 1.381 |
+
+Beat hybrid **1.028**: regular s101 / s333 / s34 / s12; sensory s23 / s89.
+Worse than WEIGHTS_REL **1.260** on this batch: regular s111, regular s23,
+sensory s42.
+
+**Takeaways**
+
+1. Second batch replaces the winners. Regular **s101 fair 1.001** and sensory
+   **s23 fair 1.005** beat first-batch s34 / s89 and the hybrid init. Recorded
+   fit loss still ≠ shared-stim rank (s101 rec 1.131 vs s12 rec 0.960).
+2. Regular s101 is an `L_w` win (0.504 vs hybrid 0.533): prior **0.102** (hybrid
+   0.116) and traj 0.402 (hybrid 0.417). `L_S` stays at Stage A (~0.497).
+   Learned **`g_m≈0.20`** (hybrid ~0); `W_mi` 0.507→0.576. Retinal still s89.
+3. Sensory s23 beats hybrid via `L_S` 0.446 (hybrid 0.496), with `L_w` a bit
+   worse (0.559). Unlike first-batch sensory s89, **retinal stayed at Stage A**
+   (no `β_w` sign flip / `τ_a` jump). Gains are much larger: **`g_s≈38`,
+   `d_s≈33`** vs s89’s 0.71 / 12.
+4. Regular `L_S` remains pinned ~0.496 except s7 (0.526). Sensory `L_S` is
+   typically 0.42–0.45; s111 (0.536) and s303 (0.672) drifted the front-end
+   (s303 recorded 1.068 looked good, fair did not).
+5. Regular s23 exploded prior (0.667) → fair **1.479**, the worst regular.
+
+**Best-of parameters** (native; frozen gains LOG_ZERO ≈ `9.36e-14`, written 0).
+Shared-stim winners, not lowest recorded fit loss.
+
+Regular **s101** — `weights_final_loss1p131_20260812-232651.json`  
+(`frozen_idx=[12,13]` = `g_s`,`d_s`)
+
+| | W_ii | W_pp | W_mm | W_is | W_pi | W_mi |
+|--|-----:|-----:|-----:|-----:|-----:|-----:|
+| s101 | 0.425 | 0.496 | 0.255 | 0.157 | 1.67e-5 | 0.576 |
+| hybrid | 0.426 | 0.496 | 0.270 | 0.168 | 1.63e-5 | 0.507 |
+
+| | g_i | g_m | d_i | d_m | g_s | d_s | θ_c | θ_d |
+|--|----:|----:|----:|----:|----:|----:|----:|----:|
+| s101 | 196.4 | **0.204** | 19.99 | ≈0 | **0** | **0** | 0.768 | 0.389 |
+| hybrid | 189.7 | 0 | 21.56 | 0 | 0 | 0 | 0.760 | 0.401 |
+
+| | α_w | β_w | α_d | β_d | τ_a | W_as | W_ss |
+|--|----:|----:|----:|----:|----:|-----:|-----:|
+| s101 | 2.214 | −0.0140 | 32.55 | 1.193 | 117.7 | 36.74 | 0.00215 |
+| hybrid | 2.209 | −0.0139 | 32.38 | 1.194 | 117.3 | 36.85 | 0.00215 |
+
+Sensory **s23** — `weights_final_loss1p148_20260812-234002.json`  
+(`frozen_idx=[6,7,8,9]` = `g_i`,`g_m`,`d_i`,`d_m`)
+
+| | W_ii | W_pp | W_mm | W_is | W_pi | W_mi |
+|--|-----:|-----:|-----:|-----:|-----:|-----:|
+| s23 | 0.403 | 0.499 | 0.241 | 0.239 | 8.74e-6 | 0.526 |
+| hybrid | 0.426 | 0.496 | 0.270 | 0.168 | 1.63e-5 | 0.507 |
+
+| | g_i | g_m | d_i | d_m | g_s | d_s | θ_c | θ_d |
+|--|----:|----:|----:|----:|----:|----:|----:|----:|
+| s23 | **0** | **0** | **0** | **0** | **38.28** | **32.89** | 0.663 | 0.499 |
+| s89 (old) | 0 | 0 | 0 | 0 | 0.709 | 12.12 | 0.681 | 0.443 |
+
+| | α_w | β_w | α_d | β_d | τ_a | W_as | W_ss |
+|--|----:|----:|----:|----:|----:|-----:|-----:|
+| s23 | 2.208 | −0.0138 | 32.40 | 1.194 | 117.1 | 36.80 | 0.00215 |
+| hybrid | 2.209 | −0.0139 | 32.38 | 1.194 | 117.3 | 36.85 | 0.00215 |
+| s89 (old) | 2.211 | +0.0052 | 25.00 | 0.811 | 156.2 | 37.22 | 0.00215 |
+
+**Plots:** `~/Downloads/ONE/…/models/stageB_hold_s89_plots_bps20/` (incl.
+`batch2_summary.json`); copy `figs/fit_result_plots_bps20/`.
+
+---
+
+### 2026-08-13b — BWM classifier + prior tests on Stage B winners
+
+Goal-1 `--full-analysis` on shared-stim winners (regular **s101**, sensory **s23**).
+Canonical analysis: 80 ms S / 150 ms I/M, fill-from-next-ITI, contrast-matched
+null. Seed **123**, 40 sessions, nrand **100**, n-jobs 8. Output under
+`manifold_sim/stageB_bwm/` (not the canonical `goal1/absence/` tree).
+
+**Load:** `load_fitted_model` now re-applies JSON `retinal` after
+`_update_model_params_for_dt` (that helper still hard-resets `tau_a→222.68`).
+Without this, Stage B `τ_a≈117` would be discarded. WEIGHTS_REL has no `retinal`
+key → unchanged. Verified: s101/s23 `tau_a≈117.7/117.1`; WEIGHTS_REL `222.68`.
+
+```bash
+# regular s101 — absence-style (fitted I/M, g_s=d_s=0)
+python simulate_recovery.py --run-experiment absence --full-analysis \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/weights_run_fj_stageB_hold_s89_regular_mask12-13_s101/weights_final_loss1p131_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+
+# sensory s23 — P→S only (I/M zeroed)
+python simulate_recovery.py --run-experiment s_presence --full-analysis \
+  --g-s-presence 38.28114411878634 --d-s-presence 32.885204811626714 \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/weights_run_fj_stageB_hold_s89_sensory_mask6-7-8-9_s23/weights_final_loss1p148_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+```
+
+Session cache **MISS** both (new mp). Wall ~5.6 min each.
+
+#### Regular s101 — `goal1/absence/cm_full/`
+
+`g_s=d_s=0`, `g_i≈196`, `d_i≈20`, **`g_m≈0.20`**, Stage-A retinal.
+
+Classifier **3/3**. Σ metrics almost identical to canonical WEIGHTS_REL absence
+(2026-07-07b):
+
+| pop | true | pred | Σ^stim,s | Σ^stim,m | mono | sc_stim | sc_choice |
+|-----|------|------|----------|----------|------|---------|-----------|
+| S | S | S | **0.993** | 0.509 | 0 | 0.007 | 0.491 |
+| I | I | I | 0.351 | 0.178 | 0 | 0.649 | 0.822 |
+| M | M | M | 0.330 | 0.174 | **1** | 0.670 | 0.826 |
+
+Absence reference: S Σ=0.993, I 0.351, M 0.331 / mono=1.
+
+Prior (`population_prior_tests` / `prior_modulation`, all p_mean=0 / ≈0.01):
+
+| pop | amp_euc | sig | absence amp (07-07) |
+|-----|--------:|:---:|--------------------:|
+| S | **1.076** | ✓ | 0.950 |
+| I | 0.070 | ✓ | 0.106 |
+| M | 0.411 | ✓ | 0.379 |
+
+`s_prior_stats`: S curve_mean **0.199**, p_mean=p_gain=**0**. Nonzero `g_m` did
+not break 3/3 recovery; I/M prior-mod signatures still sculpt the classifier.
+
+#### Sensory s23 — `goal1/s_presence_g_s38p2811_d_s32p8852/cm_full/`
+
+`g_i=d_i=g_m=d_m=0`, **`g_s≈38.28`, `d_s≈32.89`**, Stage-A retinal still in
+place (no s89-style `β_w`/`τ_a` move). Inside-adaptation `g_s`.
+
+Classifier **2/3** (S and I recovered; M→I). Historical P→S-only at
+`g_s=1800/2025` on WEIGHTS_REL was **1/3** (S→I).
+
+| pop | true | pred | Σ^stim,s | Σ^stim,m | mono | sc_stim | sc_choice |
+|-----|------|------|----------|----------|------|---------|-----------|
+| S | S | S | **0.801** | 0.429 | 0 | 0.199 | 0.571 |
+| I | I | I | 0.715 | 0.240 | 0 | 0.285 | 0.760 |
+| M | M | **I** | 0.641 | 0.212 | 0 | 0.359 | 0.788 |
+
+S Σ=0.801 is just above the 0.8 stimulus threshold (fragile). M still lacks a
+pre-movement ramp (`mono=0`) — no I/M prior mod.
+
+Prior — **S, I, and M all significant** (p_mean=0):
+
+| pop | amp_euc | p_mean | sig |
+|-----|--------:|-------:|:---:|
+| S | 0.065 | 0 | ✓ |
+| I | 0.211 | 0 | ✓ |
+| M | **0.597** | 0 | ✓ |
+
+`s_prior_stats`: S curve_mean **0.055**, p_mean=**0**, p_gain=0.01 (not <0.01).
+Amp order I/M ≫ S: S is detectable but small; downstream I (and M via `W_mi`)
+are larger, matching the historical I-before-S pattern. Contrast Experiment 1
+on WEIGHTS_REL (`g_s=189.7`, `d_s=21.6`): S curve_mean 0.037, p=0.15 ✗. Here
+`d_s≈33` plus Stage-A retinal is enough for S `p_mean` significance, in the
+same neighborhood as Experiment 2’s S-onset (`g_s=10`, `d_s=40`).
+
+#### Takeaways
+
+1. Regular Stage B θ behaves like canonical absence for the BWM classifier
+   (**3/3**) and for S/I/M prior significance, despite `g_m≈0.20` and Stage-A
+   retinal (`τ_a≈118`, `α_w≈2.21` vs WEIGHTS_REL 222.68 / 1.565).
+2. Sensory Stage B θ is **not** a 1/3 negative control: S is classified as
+   stimulus and S prior distance is significant, at joint-fitted
+   (`g_s,d_s`)≈(38, 33) with the Stage-A front-end. M still fails classification.
+3. Sensory S amp (0.065) is ~16× smaller than regular S (1.076). Detectable ≠
+   absence-scale. Downstream I/M still dominate the prior-distance readout.
+
+**CSVs:** `manifold_sim/stageB_bwm/goal1/{absence,s_presence_g_s38p2811_d_s32p8852}/cm_full/figs/`
+(`bwm_classification.csv`, `population_prior_tests.csv`, `prior_modulation.csv`,
+`s_prior_stats.csv`). Cross-ref:
+[bwm_classification_recovery.md](bwm_classification_recovery.md),
+[direct_sensory_prior_coupling.md](direct_sensory_prior_coupling.md).
+
+---
+
+### 2026-08-13c — Stim-side unsplit prior distance (s101 / s23)
+
+Same θ, sessions (cache HIT), seed 123, nrand 100, contrast-matched null, 80 ms S /
+150 ms I/M. `--unsplit-prior` default `stim_side`: `stim_l_unsplit` +
+`stim_r_unsplit` stacked (no f1/f2). Not fully unsplit.
+
+```bash
+python simulate_recovery.py --unsplit-prior absence \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/regular_mask12-13_s101/weights_final_loss1p131_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+
+python simulate_recovery.py --unsplit-prior s_presence \
+  --g-s-presence 38.28114411878634 --d-s-presence 32.885204811626714 \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/sensory_mask6-7-8-9_s23/weights_final_loss1p148_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+```
+
+| Model | pooling | S curve_mean | S p | I curve_mean | I p | M curve_mean | M p |
+|-------|---------|-------------:|----:|-------------:|----:|-------------:|----:|
+| regular s101 | f1/f2 (13b) | 0.199 | **0** | — | sig | — | sig |
+| **regular s101** | **stim_side unsplit** | **0.0027** | **0.63** | 0.498 | **0** | 1.638 | **0** |
+| WEIGHTS_REL absence | stim_side unsplit | 0.011 | 0.13 | 1.099 | 0 | 3.078 | 0 |
+| sensory s23 | f1/f2 (13b) | 0.055 | **0** | — | sig | — | sig |
+| **sensory s23** | **stim_side unsplit** | **0.069** | **0** | 0.260 | **0** | 0.824 | **0** |
+
+WEIGHTS_REL absence unsplit from [split_conditioning_vs_unsplit.md](split_conditioning_vs_unsplit.md).
+Split I/M in 13b were `amp_euc` (different metric); unsplit numbers are `curve_mean`.
+
+**Takeaways**
+
+1. Regular S prior on the f1/f2 test was the known **composition artefact**.
+   Unsplit S is null and below the WEIGHTS_REL absence unsplit residual. I and M
+   stay large — genuine I/M prior mod, same pattern as canonical absence unsplit.
+2. Sensory S **does not collapse**: unsplit 0.069, p=0 (p_mean/p_gain/p_amp all
+   0). Slightly *larger* than the split-conditioned 0.055. Direct P→S at
+   (`g_s,d_s`)≈(38, 33) with Stage-A retinal is detectable without f1/f2
+   selection. I and M remain larger (0.26 / 0.82).
+3. So the 13b regular S significance should not be read as sensory prior
+   coupling; the 13b sensory S significance should.
+
+**Outputs:** `manifold_sim/stageB_bwm/unsplit_prior/seed_123/{absence_unsplit,s_presence_g_s38p2811_d_s32p8852_unsplit}/`
+
+---
+
+### 2026-08-13d — Harris unique-null prior distance (s101 / s23)
+
+Act_block analog of `_harris_unique` from
+[structured_nulls_choice_lr.md](structured_nulls_choice_lr.md): freeze each
+session's S/I/M trials on the split's stim×choice (or stim-side) stratum;
+null labels are **other-session prior sequences** from the same stratum,
+length-matched with a contiguous window, unique patterns only. Observed
+sessions are leave-one-out donors; plus **40 extra** sessions at
+`seed=123+10007` (cache keys `1592e616773630d4` regular /
+`ee44046fa73b85fe` sensory). Canonical 80 ms S / 150 ms I/M, fill-from-next.
+Does not overwrite contrast-matched outputs.
+
+CLI: `--harris-unique-null` (incompatible with `--full-analysis` /
+`--label-shuffle-null`). Default `--harris-n-extra-donors 40`.
+
+```bash
+python simulate_recovery.py --unsplit-prior absence --harris-unique-null \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/regular_mask12-13_s101/weights_final_loss1p131_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+
+python simulate_recovery.py --unsplit-prior s_presence --harris-unique-null \
+  --g-s-presence 38.28114411878634 --d-s-presence 32.885204811626714 \
+  --seed 123 --n-sessions 40 --nrand 100 --n-jobs 8 \
+  --weights-json …/sensory_mask6-7-8-9_s23/weights_final_loss1p148_*.json \
+  --output-dir …/manifold_sim/stageB_bwm
+
+# split-conditioned (f1/f2) analog — see caveat below
+python simulate_recovery.py --run-experiment absence --harris-unique-null …
+python simulate_recovery.py --run-experiment s_presence --harris-unique-null …
+```
+
+#### Stim-side unsplit (the 13c test under Harris)
+
+Unique pool **100/100** on both stim_l and stim_r; 39/40 sessions kept
+(1 skipped: no donor with ≥ n_elig stratum trials). Null median curve_mean
+≈ 0.002, same ballpark as contrast-matched shuffle.
+
+| Model | null | S curve_mean | S p | S p_gain | I curve_mean | I p | M curve_mean | M p |
+|-------|------|-------------:|----:|---------:|-------------:|----:|-------------:|----:|
+| regular s101 | contrast-matched (13c) | 0.0027 | **0.63** | — | 0.498 | **0** | 1.638 | **0** |
+| **regular s101** | **Harris unique** | **0.0031** | **0.33** | 0.33 | 0.503 | **0** | 1.652 | **0** |
+| sensory s23 | contrast-matched (13c) | 0.069 | **0** | — | 0.260 | **0** | 0.824 | **0** |
+| **sensory s23** | **Harris unique** | **0.069** | **0** | **0** | 0.260 | **0** | 0.823 | **0** |
+
+Harris does **not** overturn 13c. Regular unsplit S stays null (p=0.33;
+observed still sits on the Harris floor). Sensory unsplit S still p=0 at
+the same 0.069, now with p_gain=0 too. I/M stay far above the Harris null
+in both models.
+
+#### Split-conditioned f1/f2 — unique pool collapses on f2
+
+Congruent f1 splits reached unique=100. **Incongruent f2** saturated at
+1–38 unique nulls (regular) or skipped entirely / unique=1–9 (sensory):
+small stim×choice cells are prior-imbalanced, so transplanted donor
+labels often fail ≥2/side. Combined `p_mean=0` for S/I/M is **not
+comparable** to contrast-matched nrand=100 (combined n_null is the min
+unique across splits; sensory M had a single null curve). Do not use the
+split-conditioned Harris combined p-values for claims.
+
+| Model | pooling | Harris S curve_mean | Harris S p | note |
+|-------|---------|--------------------:|-----------:|------|
+| regular s101 | f1/f2 | 0.203 | 0† | composition artefact still present; p under-resolved |
+| sensory s23 | f1/f2 | 0.037 | 0† | f2 S/I skipped; p under-resolved |
+
+† under-resolved unique pool on f2.
+
+**Takeaways**
+
+1. The Harris analog is well-powered on **stim-side unsplit** (U=100).
+   It is a stricter structured null than contrast-matched shuffle and
+   still agrees with 13c: regular S is composition; sensory S is not.
+2. Extra donor sessions were needed in the sense the user flagged: 40
+   extra at a held-out seed plus leave-one-out among the observed 40.
+   Unsplit still skipped 1/40 recipients (stratum longer than every donor).
+3. Split-conditioned Harris unique-null is **not** a drop-in replacement
+   for the 13b contrast-matched f1/f2 test — f2 unique-pool collapse is
+   the same pathology the real-data journal warns about for short strata.
+
+**Outputs:**
+- unsplit: `manifold_sim/stageB_bwm/unsplit_prior/seed_123/{absence_unsplit_harris_unique,s_presence_g_s38p2811_d_s32p8852_unsplit_harris_unique}/`
+- split: `manifold_sim/stageB_bwm/goal1/{absence,s_presence_g_s38p2811_d_s32p8852}/hu_sprior/`
+
+---
+
+### 2026-08-14 — long sessions, nrand=2000, extra 80 donors; then wipe cache
+
+Re-ran the 13d analog at real-data null resolution:
+`--n-sessions 40 --blocks-per-session 40 --nrand 2000 --harris-n-extra-donors 80`
+(~1779–2300 trials/session). Output root:
+`manifold_sim/stageB_bwm/harris_bps40/`. Combined p averages real/null curves
+across splits first (product-MC when unique counts are ragged; here they were
+not). All splits **unique=2000, kept=40, skipped=0** — the 13d f2 unique-pool
+collapse is gone.
+
+| Model | pooling | S | S p | I | I p | M | M p |
+|-------|---------|--:|----:|--:|----:|--:|----:|
+| regular s101 | f1/f2 | 0.195 | 0 | 0.131 | 0 | 0.591 | 0 |
+| sensory s23 | f1/f2 | 0.066 | 0 | 0.105 | 0 | 0.394 | 0 |
+| regular s101 | unsplit | **0.0003** | **0.63** | 0.541 | 0 | 1.773 | 0 |
+| sensory s23 | unsplit | **0.072** | **0** | 0.269 | 0 | 0.849 | 0 |
+
+Same scientific picture as 13c/13d: regular unsplit S null; sensory unsplit S
+survives; split-conditioned regular S is still the f1/f2 composition artefact.
+
+**Cache:** this campaign added **~12 GB** of 40-block pickles; whole
+`session_cache/` reached **42 GB**. After the run finished, the **entire**
+`<ONE cache>/manifold_sim/session_cache/` was deleted. `harris_bps40/` results
+(~31 MB) were kept. See [simulation infrastructure](simulation_infrastructure.md).
+
+**Policy:** do not re-run Harris unique-null with long sessions / `nrand=2000` /
+extra donors on the laptop. Submit on **ORCD**. Laptop stays for 6-block /
+`nrand=100` / contrast-matched checks.
+
+### 2026-08-14b — real-data Harris unique unsplit analog
+
+Wired the 13c/13d unsplit design on BWM `act_block` prior tests: stim-aligned
+stratify by stim only (`act_block_duringstim_{l,r}`); movement-aligned
+stratify by choice only (`act_block_duringchoice_{l,r}`); Harris unique-null.
+Submit on ORCD:
+
+```bash
+bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
+```
+
+Details: [structured nulls](structured_nulls_choice_lr.md) 2026-08-14c.
+
+---
+
+## To-do
+
+1. ~~**More Stage B seeds, shared-stim eval.**~~ Done 2026-08-13. Combined
+   15 × 2; winners **regular s101** / **sensory s23**.
+
+2. ~~**BWM classification + prior tests on the best Stage B θ.**~~ Done
+   2026-08-13b. Regular **3/3** (S/I/M prior sig.); sensory **2/3** with S
+   prior sig. at `g_s≈38`, `d_s≈33`.
+
+3. ~~**Harris unique-null on S/I/M prior distance.**~~ Done 2026-08-13d
+   (nrand=100 / 6-block) and 2026-08-14 (nrand=2000 / 40-block). Unsplit agrees
+   with 13c at both resolutions. Further Harris / long-session runs → **ORCD**.
 
 ---
 

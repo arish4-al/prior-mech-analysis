@@ -214,6 +214,8 @@ run_align = {
     'act_block_duringchoice': ['act_block_stim_r_duringchoice_r_f1', 'act_block_stim_l_duringchoice_l_f1', 
                             'act_block_stim_l_duringchoice_r_f2', 'act_block_stim_r_duringchoice_l_f2'
                             ],
+    'act_block_duringstim_unsplit': ['act_block_duringstim_l', 'act_block_duringstim_r'],
+    'act_block_duringchoice_unsplit': ['act_block_duringchoice_l', 'act_block_duringchoice_r'],
     'stim_duringstim': ['stim_choice_r_block_r', 'stim_choice_l_block_l', 
              'stim_choice_r_block_l', 'stim_choice_l_block_r'],
     'choice_duringchoice': ['choice_stim_r_block_r', 'choice_stim_l_block_l', 

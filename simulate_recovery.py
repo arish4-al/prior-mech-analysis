@@ -17,6 +17,9 @@ See AGENTS.md and .cursor/rules/prior-distance-analysis.mdc for agent guidance.
 
 Run with the iblenv conda environment, e.g.:
     ~/opt/anaconda3/envs/iblenv/bin/python simulate_recovery.py
+
+Harris unique-null with long sessions / nrand=2000 / extra donors: run on ORCD,
+not the laptop (session_cache pickles are multi-GB; wiped locally 2026-08-14).
 """
 
 from __future__ import annotations
@@ -72,6 +75,15 @@ NULL_SCHEME_CONTRAST_MATCHED = (
     "contrast-matched label shuffle (preserves per-contrast counts in high/low groups)"
 )
 NULL_SCHEME_LABEL_SHUFFLE = "unrestricted label shuffle"
+NULL_SCHEME_HARRIS_UNIQUE = (
+    "harris unique-null session permutation "
+    "(donor priors from the same stim×choice / stim-side stratum)"
+)
+HARRIS_MAX_TRIES = 50
+HARRIS_UNIQUE_STALE_LIMIT = 200
+HARRIS_MIN_TRIALS_PER_SIDE = 2
+HARRIS_N_EXTRA_DONORS_DEFAULT = 40
+HARRIS_DONOR_SEED_OFFSET = 10007
 PRIOR_LABEL_VARIANTS = {
     "subjective": PRIOR_COLUMN,
     "block": PRIOR_COLUMN_BLOCK,
@@ -752,6 +764,13 @@ def load_fitted_model(
     }
     mp["dt"] = DT_MS
     mf._update_model_params_for_dt(mp, DT_MS)
+    # Joint / Stage-A JSONs store fitted retinal separately. The dt helper
+    # hard-resets tau_a → 222.68; re-apply so recovery uses the fitted front-end.
+    # WEIGHTS_REL has no ``retinal`` key → unchanged (paper tau_a=222.68).
+    ret = meta.get("retinal") or {}
+    for k in ("alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss"):
+        if k in ret:
+            mp[k] = float(ret[k])
     return mp, meta
 
 
@@ -2289,6 +2308,7 @@ def _write_population_prior_outputs(
     prior_column,
     nrand,
     contrast_matched_null,
+    harris_unique_null=False,
 ):
     """Write CSV/JSON/figures for multi-population prior-distance analysis."""
     out_dir = Path(out_dir)
@@ -2343,6 +2363,12 @@ def _write_population_prior_outputs(
         file_prefix=file_prefix,
     )
 
+    if harris_unique_null:
+        null_scheme = NULL_SCHEME_HARRIS_UNIQUE
+    elif contrast_matched_null:
+        null_scheme = NULL_SCHEME_CONTRAST_MATCHED
+    else:
+        null_scheme = NULL_SCHEME_LABEL_SHUFFLE
     summary = {
         "condition": condition,
         "model_params": model_params,
@@ -2350,7 +2376,9 @@ def _write_population_prior_outputs(
         "prior_column": prior_column,
         "populations": list(populations),
         "nrand": nrand,
-        "contrast_matched_null": contrast_matched_null,
+        "contrast_matched_null": contrast_matched_null and not harris_unique_null,
+        "harris_unique_null": bool(harris_unique_null),
+        "null_scheme": null_scheme,
         "output_dir": str(out_dir),
         "res_dir": str(res_dir),
         "combined": summary_rows,
@@ -2377,6 +2405,8 @@ def _run_split_population_prior_distance(
     contrast_matched_null,
     n_jobs,
     extra_summary=None,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
 ):
     """
     Core S/I/M split-conditioned (f1/f2) prior-distance analysis on pre-simulated
@@ -2395,20 +2425,25 @@ def _run_split_population_prior_distance(
         n_jobs=n_jobs,
         contrast_matched_null=contrast_matched_null,
         res_dir=res_dir,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
     )
     splits = s_prior_splits()
-    contrast_df = write_multi_population_split_contrast_diagnostics(
-        session_dfs,
-        steps_before_obs,
-        splits,
-        nrand,
-        rng_seed,
-        out_dir,
-        populations,
-        out_csv=f"{file_prefix}_split_contrast.csv",
-        contrast_matched_null=contrast_matched_null,
-        prior_column=prior_column,
-    )
+    if not harris_unique_null:
+        contrast_df = write_multi_population_split_contrast_diagnostics(
+            session_dfs,
+            steps_before_obs,
+            splits,
+            nrand,
+            rng_seed,
+            out_dir,
+            populations,
+            out_csv=f"{file_prefix}_split_contrast.csv",
+            contrast_matched_null=contrast_matched_null,
+            prior_column=prior_column,
+        )
+    else:
+        contrast_df = pd.DataFrame()
     for pop in ("S", "I"):
         plot_p_block_s_trajectories(
             session_dfs,
@@ -2433,6 +2468,7 @@ def _run_split_population_prior_distance(
         prior_column=prior_column,
         nrand=nrand,
         contrast_matched_null=contrast_matched_null,
+        harris_unique_null=harris_unique_null,
     )
     if extra_summary:
         summary.update(extra_summary)
@@ -2491,12 +2527,15 @@ def run_experiment_case(
     gs_outside_adaptation=False,
     min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
     prior_column=None,
+    harris_unique_null=False,
+    n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
 ):
     """
     Unified Goal-1 single-experiment runner (cache-backed).
 
     sprior mode: S/I/M split-conditioned prior distance under the chosen null
-    (baseline = contrast-matched; 1.1 = label-shuffle via contrast_matched_null=False).
+    (baseline = contrast-matched; 1.1 = label-shuffle via contrast_matched_null=False;
+    Harris unique-null via harris_unique_null).
     full mode: full classification pipeline (1.3) to recover S/I/M/P types.
     Outputs under ``goal1/<exp_tag>/<null>_<mode>/``.
     """
@@ -2506,8 +2545,12 @@ def run_experiment_case(
     mp, exp_tag, cond_desc = _experiment_case_spec(
         case, weights_json, g_s=g_s, d_s=d_s, gs_outside_adaptation=gs_outside_adaptation
     )
-    null_tag = "cm" if contrast_matched_null else "ls"
-    null_name = "contrast-matched" if contrast_matched_null else "label-shuffle"
+    if harris_unique_null:
+        null_tag = "hu"
+        null_name = "harris unique-null"
+    else:
+        null_tag = "cm" if contrast_matched_null else "ls"
+        null_name = "contrast-matched" if contrast_matched_null else "label-shuffle"
     log_canonical_analysis_banner()
     print(
         f"\n=== Goal-1 experiment: {case} [{exp_tag}] | {cond_desc} | "
@@ -2515,6 +2558,10 @@ def run_experiment_case(
     )
 
     if full_analysis:
+        if harris_unique_null:
+            raise ValueError(
+                "Harris unique-null is for prior-distance only; omit --full-analysis"
+            )
         # Full classification reuses process_condition (rebuilds identical mp ->
         # session cache HIT). condition_name carries the goal1 output path.
         condition_name = f"goal1/{exp_tag}/{null_tag}_full"
@@ -2546,6 +2593,16 @@ def run_experiment_case(
         rng_seed,
         min_trials_per_session=min_trials_per_session,
     )
+    extra_donor_dfs = None
+    if harris_unique_null:
+        extra_donor_dfs = _simulate_harris_extra_donors(
+            mp,
+            n_extra_donors=n_extra_donors,
+            blocks_per_session=blocks_per_session,
+            max_obs_per_trial=max_obs_per_trial,
+            rng_seed=rng_seed,
+            min_trials_per_session=min_trials_per_session,
+        )
     out_dir = base_dir / "goal1" / exp_tag / f"{null_tag}_sprior"
     file_prefix = f"{exp_tag}_{null_tag}_sprior"
     return _run_split_population_prior_distance(
@@ -2562,11 +2619,14 @@ def run_experiment_case(
         prior_column=prior_column,
         contrast_matched_null=contrast_matched_null,
         n_jobs=n_jobs,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
         extra_summary={
             "case": case,
             "exp_tag": exp_tag,
             "null": null_name,
             "canonical_analysis": CANONICAL_PRIOR_DISTANCE_ANALYSIS,
+            "harris_n_extra_donors": int(n_extra_donors) if harris_unique_null else 0,
         },
     )
 
@@ -2647,6 +2707,8 @@ def run_unsplit_prior_distance_analysis(
     g_s=None,
     d_s=None,
     gs_outside_adaptation=False,
+    harris_unique_null=False,
+    n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
 ):
     """
     Experiment A: prior distance without f1/f2 choice×feedback splits.
@@ -2671,6 +2733,8 @@ def run_unsplit_prior_distance_analysis(
         raise ValueError(f"Unknown unsplit_mode: {unsplit_mode!r}")
     fully = unsplit_mode == "fully"
     suffix = "fully_unsplit" if fully else "unsplit"
+    if harris_unique_null:
+        suffix = f"{suffix}_harris_unique"
     log_canonical_analysis_banner()
     if case == "phase4":
         mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
@@ -2746,7 +2810,8 @@ def run_unsplit_prior_distance_analysis(
     }
     print(
         f"\n=== Unsplit prior distance: {case} "
-        f"(mode={unsplit_mode}, populations={populations}, seed={rng_seed}) ==="
+        f"(mode={unsplit_mode}, populations={populations}, seed={rng_seed}"
+        f"{', harris unique-null' if harris_unique_null else ''}) ==="
     )
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
         mp,
@@ -2755,6 +2820,15 @@ def run_unsplit_prior_distance_analysis(
         max_obs_per_trial,
         rng_seed,
     )
+    extra_donor_dfs = None
+    if harris_unique_null:
+        extra_donor_dfs = _simulate_harris_extra_donors(
+            mp,
+            n_extra_donors=n_extra_donors,
+            blocks_per_session=blocks_per_session,
+            max_obs_per_trial=max_obs_per_trial,
+            rng_seed=rng_seed,
+        )
 
     out_root = base_dir / "unsplit_prior" / f"seed_{rng_seed}" / out_name
     out_dir = out_root / "figs"
@@ -2779,20 +2853,25 @@ def run_unsplit_prior_distance_analysis(
         res_dir=res_dir,
         splits=splits,
         timeframe=timeframe,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
     )
 
-    contrast_df = write_multi_population_split_contrast_diagnostics(
-        session_dfs,
-        steps_before_obs,
-        splits,
-        nrand,
-        rng_seed,
-        out_dir,
-        populations,
-        out_csv=f"{file_prefix}_split_contrast.csv",
-        contrast_matched_null=contrast_matched_null,
-        prior_column=prior_column,
-    )
+    if harris_unique_null:
+        contrast_df = pd.DataFrame()
+    else:
+        contrast_df = write_multi_population_split_contrast_diagnostics(
+            session_dfs,
+            steps_before_obs,
+            splits,
+            nrand,
+            rng_seed,
+            out_dir,
+            populations,
+            out_csv=f"{file_prefix}_split_contrast.csv",
+            contrast_matched_null=contrast_matched_null,
+            prior_column=prior_column,
+        )
 
     summary = _write_population_prior_outputs(
         condition_name,
@@ -2807,6 +2886,7 @@ def run_unsplit_prior_distance_analysis(
         prior_column=prior_column,
         nrand=nrand,
         contrast_matched_null=contrast_matched_null,
+        harris_unique_null=harris_unique_null,
     )
     summary["unsplit"] = True
     summary["unsplit_mode"] = unsplit_mode
@@ -2814,6 +2894,9 @@ def run_unsplit_prior_distance_analysis(
     summary["splits"] = list(splits)
     summary["canonical_analysis"] = CANONICAL_PRIOR_DISTANCE_ANALYSIS
     summary["by_split_contrast"] = contrast_df.to_dict(orient="records")
+    summary["harris_n_extra_donors"] = (
+        int(n_extra_donors) if harris_unique_null else 0
+    )
     with open(out_root / f"{file_prefix}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved unsplit summary to {out_root / f'{file_prefix}_summary.json'}")
@@ -3787,6 +3870,8 @@ def _population_prior_from_sessions(
     res_dir=None,
     splits=None,
     timeframe=None,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
 ):
     """Run distance pipeline on fixed trajectories; return prior metrics per population."""
     populations = tuple(populations)
@@ -3813,6 +3898,8 @@ def _population_prior_from_sessions(
                 populations=populations,
                 n_jobs=n_jobs,
                 contrast_matched_null=contrast_matched_null,
+                harris_unique_null=harris_unique_null,
+                extra_donor_dfs=extra_donor_dfs,
             )
             stack_combined_timeframes(res_dir, [timeframe])
         return {
@@ -3948,29 +4035,11 @@ def run_random_prior_label_test(
     return summary
 
 
-def build_population_b_for_split(df, split, population, steps_before_obs):
-    """Per-trial binned model trajectories for one population: (trials, 2, bins).
-
-    For stimOn-aligned splits with a post-stim window, trials that end before
-    the window closes are extended by borrowing the start of the **next trial's
-    ITI** — matching the fill-from-next logic in model_functions.py
-    ``prior_distance_I_M_by_choice_and_prior``.  If the next trial is in a
-    different session or its ITI is too short to fill the gap, the trial is
-    skipped (no zero-padding).
-    """
+def _split_window_spec(split, population):
+    """Window / fill settings for one split × population (canonical 80 ms S cap)."""
     align_kind = ALIGN.get(split, "stimOn_times")
     pre, post = PRE_POST[split]
     n_bins = split_n_bins(split)
-    cond0, cond1 = trial_masks_for_split(df, split)
-    idx0 = np.where(cond0)[0]
-    idx1 = np.where(cond1)[0]
-    if len(idx0) < 2 or len(idx1) < 2:
-        return None
-
-    # Number of post-stim steps that the analysis window spans.
-    # S uses a shorter cap (S_DURINGSTIM_WINDOW_S) so that we only capture
-    # genuine stim-driven activity without borrowing large chunks of next-trial
-    # ITI at high contrast (where fast RTs leave most of the 150ms window empty).
     use_fill = align_kind == "stimOn_times" and post > 0
     if use_fill:
         if population == "S" and _s_prior_distance_split(split):
@@ -3981,51 +4050,94 @@ def build_population_b_for_split(df, split, population, steps_before_obs):
         n_bins = int(round(eff_post / B_SIZE)) * max(1, int(B_SIZE // STS))
     else:
         win_post_steps = 0
+    return {
+        "split": split,
+        "align_kind": align_kind,
+        "pre": pre,
+        "post": post,
+        "n_bins": n_bins,
+        "use_fill": use_fill,
+        "win_post_steps": win_post_steps,
+    }
+
+
+def _bin_trial_for_split(df, ti, population, steps_before_obs, spec):
+    """Binned (n_channels, n_bins) window, or None if the trial is skipped.
+
+    Fill-from-next-ITI when the post-stim window overruns the trial; never
+    zero-pad. Same skip rule as the grouped ``build_population_b_for_split``.
+    """
+    row = df.iloc[ti]
+    trace = row["traces"][population]
+    n_df = len(df)
+    if spec["use_fill"]:
+        win_post_steps = spec["win_post_steps"]
+        n_bins = spec["n_bins"]
+        post_avail = max(0, row["length"] - steps_before_obs)
+        take_post = min(win_post_steps, post_avail)
+        if take_post < win_post_steps:
+            need = win_post_steps - take_post
+            ti_next = ti + 1
+            can_fill = (
+                ti_next < n_df
+                and df.iloc[ti_next]["trial_idx"] == row["trial_idx"] + 1
+                and min(steps_before_obs, df.iloc[ti_next]["length"]) >= need
+            )
+            if not can_fill:
+                return None
+            next_trace = df.iloc[ti_next]["traces"][population]
+            parts = []
+            if take_post > 0:
+                parts.append(trace[steps_before_obs : steps_before_obs + take_post])
+            parts.append(next_trace[:need])
+            combined = np.vstack(parts)
+            seg = bin_trace_segment(combined, 0, win_post_steps, n_bins)
+        else:
+            seg = bin_trace_segment(
+                trace, steps_before_obs, steps_before_obs + win_post_steps, n_bins
+            )
+    else:
+        bounds = window_step_bounds(
+            spec["align_kind"],
+            row["length"],
+            row["reaction_time"],
+            steps_before_obs,
+            spec["pre"],
+            spec["post"],
+        )
+        if bounds is None:
+            return None
+        s, e = bounds
+        seg = bin_trace_segment(trace, s, e, spec["n_bins"])
+    return seg.T
+
+
+def build_population_b_for_split(df, split, population, steps_before_obs):
+    """Per-trial binned model trajectories for one population: (trials, 2, bins).
+
+    For stimOn-aligned splits with a post-stim window, trials that end before
+    the window closes are extended by borrowing the start of the **next trial's
+    ITI** — matching the fill-from-next logic in model_functions.py
+    ``prior_distance_I_M_by_choice_and_prior``.  If the next trial is in a
+    different session or its ITI is too short to fill the gap, the trial is
+    skipped (no zero-padding).
+    """
+    cond0, cond1 = trial_masks_for_split(df, split)
+    idx0 = np.where(cond0)[0]
+    idx1 = np.where(cond1)[0]
+    if len(idx0) < 2 or len(idx1) < 2:
+        return None
+    spec = _split_window_spec(split, population)
 
     def trials_to_stack(idxs):
         chunks = []
         contrasts = []
-        n_df = len(df)
         for ti in idxs:
-            row = df.iloc[ti]
-            trace = row["traces"][population]
-
-            if use_fill:
-                # Fill-from-next-ITI logic (mirrors model_functions.py).
-                post_avail = max(0, row["length"] - steps_before_obs)
-                take_post = min(win_post_steps, post_avail)
-
-                if take_post < win_post_steps:
-                    need = win_post_steps - take_post
-                    ti_next = ti + 1
-                    can_fill = (
-                        ti_next < n_df
-                        and df.iloc[ti_next]["trial_idx"] == row["trial_idx"] + 1
-                        and min(steps_before_obs, df.iloc[ti_next]["length"]) >= need
-                    )
-                    if not can_fill:
-                        continue  # skip rather than zero-pad
-                    next_trace = df.iloc[ti_next]["traces"][population]
-                    parts = []
-                    if take_post > 0:
-                        parts.append(trace[steps_before_obs : steps_before_obs + take_post])
-                    parts.append(next_trace[:need])
-                    combined = np.vstack(parts)  # (win_post_steps, 2)
-                    seg = bin_trace_segment(combined, 0, win_post_steps, n_bins)
-                else:
-                    seg = bin_trace_segment(trace, steps_before_obs, steps_before_obs + win_post_steps, n_bins)
-            else:
-                # Non-stim-aligned or pre-action window: clipped logic.
-                bounds = window_step_bounds(
-                    align_kind, row["length"], row["reaction_time"], steps_before_obs, pre, post
-                )
-                if bounds is None:
-                    continue
-                s, e = bounds
-                seg = bin_trace_segment(trace, s, e, n_bins)
-
-            chunks.append(seg.T)
-            contrasts.append(_trial_contrast_value(row, split))
+            seg_t = _bin_trial_for_split(df, ti, population, steps_before_obs, spec)
+            if seg_t is None:
+                continue
+            chunks.append(seg_t)
+            contrasts.append(_trial_contrast_value(df.iloc[ti], split))
         if not chunks:
             return None, None
         return np.stack(chunks, axis=0), np.asarray(contrasts, dtype=float)
@@ -4035,6 +4147,182 @@ def build_population_b_for_split(df, split, population, steps_before_obs):
     if b0 is None or b1 is None:
         return None
     return np.concatenate([b0, b1], axis=0), len(b0), np.concatenate([c0, c1])
+
+
+def build_population_b_temporal_for_split(df, split, population, steps_before_obs):
+    """Eligible trials in session order: (b, ys_true) or None.
+
+    ``ys_true`` is high-prior (p ≥ 0.5) on the same trials that enter ``b``.
+    Fill-skip matches ``build_population_b_for_split`` so the trial set is the
+    same; only the row order differs (temporal vs high-then-low).
+    """
+    spec = _split_window_spec(split, population)
+    elig = np.flatnonzero(split_fixed_condition_mask(df, split))
+    pcol = prior_column_for_split(split)
+    chunks = []
+    labels = []
+    for ti in elig:
+        seg_t = _bin_trial_for_split(df, ti, population, steps_before_obs, spec)
+        if seg_t is None:
+            continue
+        chunks.append(seg_t)
+        labels.append(bool(df.iloc[ti][pcol] >= 0.5))
+    if len(chunks) < 4:
+        return None
+    ys = np.asarray(labels, dtype=bool)
+    if int(ys.sum()) < HARRIS_MIN_TRIALS_PER_SIDE or int((~ys).sum()) < HARRIS_MIN_TRIALS_PER_SIDE:
+        return None
+    return np.stack(chunks, axis=0), ys
+
+
+def _harris_label_key(ys):
+    return np.asarray(ys, dtype=np.uint8).tobytes()
+
+
+def _ys_from_stratum_labels(labels, mask, n_elig, rng):
+    """Length-``n_elig`` boolean prior labels from a stratum (contiguous window)."""
+    labels = np.asarray(labels, dtype=bool).reshape(-1)
+    idx = np.flatnonzero(np.asarray(mask, dtype=bool))
+    if len(idx) < n_elig:
+        return None
+    if len(idx) > n_elig:
+        start = int(rng.integers(0, len(idx) - n_elig + 1))
+        idx = idx[start : start + n_elig]
+    return labels[idx]
+
+
+def _donor_stratum_prior_labels(df, split):
+    """Full-session prior-high labels and stim×choice (or stim-side) mask."""
+    pcol = prior_column_for_split(split)
+    labels = np.asarray(df[pcol].values >= 0.5, dtype=bool)
+    mask = np.asarray(split_fixed_condition_mask(df, split), dtype=bool)
+    return labels, mask
+
+
+def _harris_donor_bank(session_dfs, split, extra_donor_dfs=None):
+    """Observed sessions as leave-one-out donors, plus optional extra eids."""
+    bank = {}
+    for i, df in enumerate(session_dfs):
+        bank[f"obs{i}"] = _donor_stratum_prior_labels(df, split)
+    for j, df in enumerate(extra_donor_dfs or []):
+        bank[f"x{j}"] = _donor_stratum_prior_labels(df, split)
+    return bank
+
+
+def _distance_curve_from_labels(b, ys, min_side=HARRIS_MIN_TRIALS_PER_SIDE):
+    ys = np.asarray(ys, dtype=bool)
+    if int(ys.sum()) < min_side or int((~ys).sum()) < min_side:
+        return None
+    m0 = b[ys].mean(axis=0)
+    m1 = b[~ys].mean(axis=0)
+    return np.sum((m0 - m1) ** 2, axis=0), m0, m1
+
+
+def compute_harris_unique_distances(session_payloads, donor_bank, nrand, rng):
+    """Pooled observed distance; unique Harris nulls from other-session priors.
+
+    Each recipient session keeps its neural ``b``. Null labels are donor prior
+    sequences from the same split stratum, length-matched with a contiguous
+    window (``_ys_from_stratum_labels``). Only distinct concatenated label
+    patterns are kept (harris_unique).
+    """
+    if isinstance(rng, np.random.RandomState):
+        rng = np.random.default_rng(int(rng.randint(0, 2**31 - 1)))
+
+    kept = []
+    n_no_donor = 0
+    for rec in session_payloads:
+        n_elig = int(rec["b"].shape[0])
+        eid = rec["eid"]
+        cands = []
+        n_short = 0
+        for deid, (lab, mask) in donor_bank.items():
+            if deid == eid:
+                continue
+            if int(np.asarray(mask).sum()) < n_elig:
+                n_short += 1
+                continue
+            cands.append((lab, mask))
+        if not cands:
+            n_no_donor += 1
+            continue
+        kept.append({**rec, "candidates": cands, "n_short_donors": n_short})
+
+    if not kept:
+        return None
+
+    b = np.concatenate([r["b"] for r in kept], axis=0)
+    ys_true = np.concatenate([r["ys"] for r in kept])
+    obs = _distance_curve_from_labels(b, ys_true)
+    if obs is None:
+        return None
+    d_true, m0_true, m1_true = obs
+
+    def _ok(ys):
+        return (
+            ys is not None
+            and int(ys.sum()) >= HARRIS_MIN_TRIALS_PER_SIDE
+            and int((~ys).sum()) >= HARRIS_MIN_TRIALS_PER_SIDE
+        )
+
+    null_curves = []
+    seen = {_harris_label_key(ys_true)}
+    n_done = 0
+    n_tries = 0
+    n_stale = 0
+    max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
+    stale_limit = max(HARRIS_UNIQUE_STALE_LIMIT, nrand)
+    n_stratum_donors = int(np.mean([len(r["candidates"]) for r in kept]))
+
+    while n_done < nrand and n_stale < stale_limit:
+        n_tries += 1
+        parts = []
+        ok_draw = True
+        for rec in kept:
+            n_elig = int(rec["b"].shape[0])
+            cands = rec["candidates"]
+            lab, mask = cands[int(rng.integers(0, len(cands)))]
+            ys = _ys_from_stratum_labels(lab, mask, n_elig, rng)
+            if not _ok(ys):
+                ok_draw = False
+                break
+            parts.append(ys)
+        if not ok_draw:
+            n_stale += 1
+            if n_done == 0 and n_tries >= max_tries_total:
+                return None
+            continue
+        ys_null = np.concatenate(parts)
+        if not _ok(ys_null):
+            n_stale += 1
+            continue
+        key = _harris_label_key(ys_null)
+        if key in seen:
+            n_stale += 1
+            continue
+        dist = _distance_curve_from_labels(b, ys_null)
+        if dist is None:
+            n_stale += 1
+            continue
+        seen.add(key)
+        n_stale = 0
+        null_curves.append(dist[0])
+        n_done += 1
+
+    if n_done == 0:
+        return None
+
+    d_eucs = np.stack([d_true, *null_curves], axis=0)
+    return {
+        "d_eucs": d_eucs,
+        "ws": np.stack([m0_true, m1_true], axis=0),
+        "harris_n_unique_nulls": int(n_done),
+        "harris_n_sessions_kept": int(len(kept)),
+        "harris_n_sessions_skipped": int(n_no_donor),
+        "harris_n_stratum_donors_mean": float(n_stratum_donors),
+        "harris_n_tries": int(n_tries),
+        "null_scheme": "harris_session_permutation_unique",
+    }
 
 
 def _null_shuffle_executor(n_workers):
@@ -4185,6 +4473,64 @@ def build_split_results(
     return r, regde, regxn
 
 
+def build_split_results_harris_unique(
+    session_dfs,
+    split,
+    steps_before_obs,
+    nrand,
+    rng,
+    populations=None,
+    extra_donor_dfs=None,
+):
+    """Prior distance with Harris unique-null (act_block analog) on one split."""
+    populations = populations or MODEL_POPULATIONS
+    donor_bank = _harris_donor_bank(session_dfs, split, extra_donor_dfs=extra_donor_dfs)
+    regde = {}
+    regxn = {}
+    r = {}
+    for pop in populations:
+        payloads = []
+        for i, df in enumerate(session_dfs):
+            built = build_population_b_temporal_for_split(
+                df, split, pop, steps_before_obs
+            )
+            if built is None:
+                continue
+            b, ys = built
+            payloads.append({"eid": f"obs{i}", "b": b, "ys": ys})
+        if not payloads:
+            continue
+        dist = compute_harris_unique_distances(payloads, donor_bank, nrand, rng)
+        if dist is None:
+            print(f"    harris-null [{split}/{pop}]: no balanced unique donor draws; skip")
+            continue
+        d_eucs = np.asarray(dist["d_eucs"], dtype=float) / B_SIZE
+        regde[pop] = d_eucs
+        regxn[pop] = None
+        res = _metrics_from_regde(d_eucs, split)
+        res["ws"] = dist["ws"]
+        res["null_scheme"] = dist["null_scheme"]
+        res["harris_n_unique_nulls"] = dist["harris_n_unique_nulls"]
+        res["harris_n_sessions_kept"] = dist["harris_n_sessions_kept"]
+        res["harris_n_sessions_skipped"] = dist["harris_n_sessions_skipped"]
+        res["harris_n_stratum_donors_mean"] = dist["harris_n_stratum_donors_mean"]
+        r[pop] = res
+        sat = (
+            f" (saturated {dist['harris_n_unique_nulls']}/{nrand})"
+            if dist["harris_n_unique_nulls"] < nrand
+            else ""
+        )
+        print(
+            f"    harris-null [{split}/{pop}]: unique={dist['harris_n_unique_nulls']}"
+            f"{sat}, kept={dist['harris_n_sessions_kept']}, "
+            f"skipped={dist['harris_n_sessions_skipped']}, "
+            f"donors≈{dist['harris_n_stratum_donors_mean']:.0f}"
+        )
+    if not r:
+        return None
+    return r, regde, regxn
+
+
 def s_prior_splits():
     """Splits for S act_block_duringstim prior distance (subjective prior grouping)."""
     import analysis_functions as af
@@ -4220,12 +4566,38 @@ def build_res_from_trajectories(
     populations=None,
     n_jobs=1,
     contrast_matched_null=True,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
 ):
     """Write per-split res files by pooling trials across simulated sessions."""
     pth_res.mkdir(parents=True, exist_ok=True)
-    all_df = pd.concat(session_dfs, ignore_index=True)
     n_saved = 0
     t0 = time.perf_counter()
+    if harris_unique_null:
+        for i, split in enumerate(splits):
+            out = build_split_results_harris_unique(
+                session_dfs,
+                split,
+                steps_before_obs,
+                nrand,
+                rng,
+                populations=populations,
+                extra_donor_dfs=extra_donor_dfs,
+            )
+            if out is None:
+                continue
+            r, regde, regxn = out
+            np.save(pth_res / f"{split}_regde.npy", regde, allow_pickle=True)
+            np.save(pth_res / f"{split}_regxn.npy", regxn, allow_pickle=True)
+            np.save(pth_res / f"{split}.npy", r, allow_pickle=True)
+            n_saved += 1
+            print(
+                f"    split {i + 1}/{len(splits)} ({split}) — "
+                f"{time.perf_counter() - t0:.1f}s"
+            )
+        return n_saved
+
+    all_df = pd.concat(session_dfs, ignore_index=True)
     for i, split in enumerate(splits):
         out = build_split_results(
             all_df,
@@ -4258,14 +4630,63 @@ def collect_all_splits():
     return sorted(splits)
 
 
+def _add_null_curve_stacks(existing, incoming):
+    """Sum null-curve stacks, truncating to min unique count if ragged."""
+    existing = np.asarray(existing)
+    incoming = np.asarray(incoming)
+    if existing.size == 0:
+        return incoming
+    if incoming.size == 0:
+        return existing
+    n = min(existing.shape[0], incoming.shape[0])
+    return existing[:n] + incoming[:n]
+
+
+def _combine_split_null_stacks(stacks, rng_seed=0, n_mc_min=2000):
+    """Average observed curves; combine nulls (aligned sum or product-MC).
+
+    ``stacks`` is a list of ``(obs, nulls)`` with ``nulls`` shape ``(U, T)``.
+    Equal ``U`` → index-aligned mean (contrast-matched / full unique Harris).
+    Ragged ``U`` → product-MC with ``n_mc = max(min(U), n_mc_min)``, matching
+    real-data Harris combine (``plot_choice_null_comparison_table`` 2026-07-27).
+    Splits with zero nulls are dropped.
+    """
+    usable = []
+    for obs, nulls in stacks:
+        nulls = np.asarray(nulls)
+        if nulls.ndim == 1:
+            nulls = nulls.reshape(1, -1)
+        if nulls.size == 0 or nulls.shape[0] < 1:
+            continue
+        usable.append((np.asarray(obs, dtype=float), nulls.astype(float)))
+    if not usable:
+        return None
+    n_split = len(usable)
+    obs = np.sum([o for o, _ in usable], axis=0) / n_split
+    null_counts = [n.shape[0] for _, n in usable]
+    if len(set(null_counts)) == 1:
+        nulls = np.sum([n for _, n in usable], axis=0) / n_split
+        return obs, nulls
+    n_mc = max(int(min(null_counts)), int(n_mc_min))
+    T = obs.shape[0]
+    rng = np.random.default_rng(int(rng_seed) & 0xFFFFFFFF)
+    out = np.zeros((n_mc, T), dtype=float)
+    for k in range(n_mc):
+        acc = np.zeros(T, dtype=float)
+        for _, n in usable:
+            acc += n[int(rng.integers(0, n.shape[0]))]
+        out[k] = acc / n_split
+    return obs, out
+
+
 def stack_combined_timeframes(pth_res, timeframes):
     """Build combined_{splits}.npy and combined_regde_{splits}.npy per timeframe."""
     for timeframe in timeframes:
         splits = _splits_for_timeframe(timeframe)
         if not splits:
             continue
-        combined_regde = {}
-        combined_regxn = {}
+        per_reg_stacks = {}
+        per_reg_xn_stacks = {}
         n_stacked = 0
         for split in splits:
             regde_path = pth_res / f"{split}_regde.npy"
@@ -4276,33 +4697,38 @@ def stack_combined_timeframes(pth_res, timeframes):
             split_regde = np.load(regde_path, allow_pickle=True).item()
             split_regxn = np.load(regxn_path, allow_pickle=True).item() if regxn_path.exists() else {}
             for reg, curves in split_regde.items():
-                if reg not in combined_regde:
-                    combined_regde[reg] = [curves[0], np.array(curves[1:])]
-                else:
-                    combined_regde[reg][0] = combined_regde[reg][0] + curves[0]
-                    combined_regde[reg][1] = combined_regde[reg][1] + np.array(curves[1:])
+                obs = np.asarray(curves[0], dtype=float)
+                nulls = np.asarray(curves[1:])
+                per_reg_stacks.setdefault(reg, []).append((obs, nulls))
             for reg, curves in split_regxn.items():
                 if curves is None:
                     continue
-                if reg not in combined_regxn:
-                    combined_regxn[reg] = [curves[0], np.array(curves[1:]) if len(curves) > 1 else np.empty((0, len(curves[0])))]
-                else:
-                    combined_regxn[reg][0] = combined_regxn[reg][0] + curves[0]
-                    if len(curves) > 1:
-                        combined_regxn[reg][1] = combined_regxn[reg][1] + np.array(curves[1:])
+                obs = np.asarray(curves[0], dtype=float)
+                nulls = (
+                    np.asarray(curves[1:])
+                    if len(curves) > 1
+                    else np.empty((0, len(curves[0])))
+                )
+                per_reg_xn_stacks.setdefault(reg, []).append((obs, nulls))
 
-        if not combined_regde:
+        if not per_reg_stacks:
             continue
 
-        # Match analysis_functions.plot_regional_distance: average across L/R splits.
-        if n_stacked > 1:
-            for reg in combined_regde:
-                combined_regde[reg][0] = combined_regde[reg][0] / n_stacked
-                combined_regde[reg][1] = combined_regde[reg][1] / n_stacked
-            for reg in combined_regxn:
-                combined_regxn[reg][0] = combined_regxn[reg][0] / n_stacked
-                if combined_regxn[reg][1].size:
-                    combined_regxn[reg][1] = combined_regxn[reg][1] / n_stacked
+        combined_regde = {}
+        for reg, stacks in per_reg_stacks.items():
+            seed = int.from_bytes(hashlib.md5(f"{timeframe}|{reg}".encode()).digest()[:8], "little")
+            combined = _combine_split_null_stacks(stacks, rng_seed=seed)
+            if combined is None:
+                continue
+            combined_regde[reg] = [combined[0], combined[1]]
+
+        combined_regxn = {}
+        for reg, stacks in per_reg_xn_stacks.items():
+            seed = int.from_bytes(hashlib.md5(f"{timeframe}|xn|{reg}".encode()).digest()[:8], "little")
+            combined = _combine_split_null_stacks(stacks, rng_seed=seed)
+            if combined is None:
+                continue
+            combined_regxn[reg] = [combined[0], combined[1]]
 
         r = {}
         pre0, post0 = PRE_POST.get(splits[0], [0.4, -0.1])
@@ -6273,6 +6699,35 @@ def compare_conditions(
     return sensory_prior_recovery
 
 
+def _simulate_harris_extra_donors(
+    mp,
+    n_extra_donors,
+    blocks_per_session,
+    max_obs_per_trial,
+    rng_seed,
+    min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
+):
+    """Simulate additional sessions used only as Harris donor eids (not observed)."""
+    n_extra = int(n_extra_donors)
+    if n_extra <= 0:
+        return []
+    donor_seed = int(rng_seed) + HARRIS_DONOR_SEED_OFFSET
+    print(
+        f"  [harris donors] simulating {n_extra} extra sessions "
+        f"(seed={donor_seed} = {rng_seed}+{HARRIS_DONOR_SEED_OFFSET})"
+    )
+    extra_dfs, _, _ = simulate_condition_sessions(
+        mp,
+        n_extra,
+        blocks_per_session,
+        max_obs_per_trial,
+        donor_seed,
+        min_trials_per_session=min_trials_per_session,
+    )
+    print(f"  [harris donors] {len(extra_dfs)} extra sessions ready")
+    return extra_dfs
+
+
 def simulate_condition_sessions(
     mp,
     n_sessions,
@@ -6291,7 +6746,8 @@ def simulate_condition_sessions(
     ``(mp, seed, n_sessions, blocks, max_obs, min_trials, constant_s0)`` so many
     analysis variants (nulls, splits, classification) reuse one simulation.
     Pass ``use_cache=False`` for high-seed-cardinality loops (e.g. replicate
-    nulls) to avoid cache bloat.
+    nulls) to avoid cache bloat. Long Harris unique-null draws (many blocks ×
+    extra donors) belong on ORCD; the laptop cache was wiped 2026-08-14.
     """
     if use_cache is None:
         use_cache = SESSION_CACHE_ENABLED
@@ -6844,6 +7300,31 @@ def main():
         help="Use unrestricted label shuffle nulls (default: contrast-matched nulls)",
     )
     parser.add_argument(
+        "--harris-unique-null",
+        action="store_true",
+        help=(
+            "Harris unique-null for S/I/M prior distance (act_block analog): "
+            "freeze each session's neural trials and transplant other-session "
+            "prior labels from the same stim×choice / stim-side stratum. "
+            "Writes separate hu_sprior / *_harris_unique outputs; does not "
+            "overwrite contrast-matched results. Incompatible with "
+            "--label-shuffle-null and --full-analysis. Long sessions / "
+            "nrand=2000 / extra donors: run on ORCD, not the laptop "
+            "(session_cache is multi-GB)."
+        ),
+    )
+    parser.add_argument(
+        "--harris-n-extra-donors",
+        type=int,
+        default=HARRIS_N_EXTRA_DONORS_DEFAULT,
+        help=(
+            "Extra simulated sessions used only as Harris donors "
+            f"(default: {HARRIS_N_EXTRA_DONORS_DEFAULT}; seed = --seed + "
+            f"{HARRIS_DONOR_SEED_OFFSET}). Observed sessions are still "
+            "leave-one-out donors. 0 = observed sessions only."
+        ),
+    )
+    parser.add_argument(
         "--null-compare",
         action="store_true",
         help=(
@@ -7115,7 +7596,8 @@ def main():
         help=(
             "Disable the simulate-once session cache (session_cache/). By default "
             "deterministic session draws are cached and reused across analysis "
-            "variants (nulls, splits, classification)."
+            "variants (nulls, splits, classification). Long Harris unique-null "
+            "jobs belong on ORCD; do not refill a multi-GB cache on the laptop."
         ),
     )
     args = parser.parse_args()
@@ -7135,6 +7617,11 @@ def main():
     n_jobs = args.n_jobs if args.n_jobs is not None else _default_n_jobs()
     s_prior_only = not args.full_analysis
     contrast_matched_null = not args.label_shuffle_null
+    harris_unique_null = bool(args.harris_unique_null)
+    if harris_unique_null and args.label_shuffle_null:
+        parser.error("Use only one of --harris-unique-null and --label-shuffle-null")
+    if harris_unique_null and args.full_analysis:
+        parser.error("Harris unique-null is for prior-distance only; omit --full-analysis")
 
     if args.null_compare:
         run_null_scheme_comparison(
@@ -7224,6 +7711,8 @@ def main():
             d_s=args.d_s_presence,
             gs_outside_adaptation=args.gs_outside_adaptation,
             min_trials_per_session=args.min_trials_per_session,
+            harris_unique_null=harris_unique_null,
+            n_extra_donors=args.harris_n_extra_donors,
         )
         return
 
@@ -7266,6 +7755,8 @@ def main():
                 g_s=args.g_s_presence,
                 d_s=args.d_s_presence,
                 gs_outside_adaptation=args.gs_outside_adaptation,
+                harris_unique_null=harris_unique_null,
+                n_extra_donors=args.harris_n_extra_donors,
             )
         return
 

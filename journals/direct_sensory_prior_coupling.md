@@ -518,3 +518,36 @@ A small concordance-dependent boost on `S0` at stim onset, integrated over the t
 - [x] Plot suites: `g_s1_d_s48`, `g_s10_d_s21p5585`, `g_s5_d_s48`, `g_s5_d_s0`, `g_s68p0941_d_s21p5585_i_scaled`, `g_s2200_d_s0`, `g_s2025_d_s21p5585`, `g_s2200_d_s21p5585`, `g_s68p0941_d_s21p5585_i_scaled_gs_free`, `g_s1800_d_s0`, `g_s700_d_s0_gs_free`, `g_s800_d_s0_gs_free`
 - [ ] Unconditional / concordance-grouped trajectory diagnostic
 - [ ] Re-run full presence with `g_s=g_i_fitted`
+
+---
+
+### 2026-08-13b — Stage B sensory s23 (joint-fitted front-end)
+
+Full write-up: [retinal_then_joint_fitting.md](retinal_then_joint_fitting.md) 2026-08-13b.
+
+Re-tested Experiment-1 / Goal-2 at the Stage B sensory winner (`g_s≈38.28`,
+`d_s≈32.89`, I/M zeroed, Stage-A retinal `τ_a≈117`, not WEIGHTS_REL). Canonical
+split, contrast-matched, seed 123, nrand 100.
+
+| | S curve_mean | S p_mean | S sig | I amp | I sig |
+|--|-------------:|---------:|:-----:|------:|:-----:|
+| Exp. 1 WEIGHTS_REL (`g_s=189.7`, `d_s=21.6`) | 0.037 | 0.15 | ✗ | — | ✓ at canonical |
+| **s23 Stage-A retinal** | **0.055** | **0** | **✓** | 0.211 | ✓ |
+| Exp. 2 S-onset (`g_s=10`, `d_s=40`) | 0.071 | 0.00 | ✓ | — | ✓ |
+
+S prior **is** significant at this joint-fitted pair (amp 0.065, still ~16×
+below regular/absence S). I and M also significant; amp order M (0.60) > I
+(0.21) > S (0.065). Does not overturn the headline that biologically modest
+gain-only `g_s` is undetectable — this point has a substantial `d_s` offset
+(~1.5× fitted `d_i`) plus a different front-end. It does mean the Stage B
+sensory θ is in the Experiment-2 S-detectable neighborhood, not the Exp. 1 null.
+
+**Unsplit (2026-08-13c):** stim-side unsplit on the same sessions. Sensory S
+**survives** (curve_mean 0.069, p=0; p_gain=0 too). Regular s101 S **collapses**
+(0.003, p=0.63). So s23 S is not the f1/f2 composition artefact that produces
+absence/regular split-conditioned S. **Harris unique-null (2026-08-13d):**
+same unsplit numbers under other-session prior permutation (regular S p=0.33;
+sensory S still 0.069, p=0). **2026-08-14** (nrand=2000, 40-block sessions):
+regular unsplit S 0.0003 p=0.63; sensory 0.072 p=0. See
+[retinal then joint](retinal_then_joint_fitting.md). Further Harris / long-session
+runs → ORCD (`session_cache/` wiped).

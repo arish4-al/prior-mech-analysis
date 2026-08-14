@@ -57,7 +57,25 @@ Consequences:
 - Phase4 seed 999, 2 sessions: run 1 → `[session cache MISS] … saved`; run 2 → `[session cache HIT]`. ✓
 - New `--unsplit-prior s_presence --g-s-presence 1800 --d-s-presence 0` runs end to end, writes `s_presence_g_s1800_d_s0_unsplit/`, and reuses the same cache key as a future full `s_presence` run at matching `(mp, seed, n_sessions)`. ✓
 
-**Cost:** ≈ 15 MB (gzip) per 2-session draw → ≈ **300 MB per 40-session experiment**, ≈ 1.2 GB for E1–E4. Acceptable storage-for-time tradeoff.
+**Cost (6-block default):** ≈ 15 MB (gzip) per 2-session draw → ≈ **300 MB per 40-session experiment**, ≈ 1.2 GB for E1–E4. Acceptable for the default laptop path.
+
+### 2026-08-14 — long-session Harris cache blew the laptop; wipe + ORCD
+
+`--harris-unique-null` with `--blocks-per-session 40`, `--nrand 2000`, and
+`--harris-n-extra-donors 80` wrote **~12 GB** of new gzipped traces (regular
+observed 1.8 GB + extra-80 3.7 GB; sensory observed 2.1 GB + extra-80 4.4 GB).
+The whole `session_cache/` hit **42 GB**. Analysis outputs under
+`manifold_sim/stageB_bwm/harris_bps40/` were only **~31 MB**. Python RSS stayed
+~167 MB — disk is the cost, not RAM.
+
+After that campaign finished, the **entire**
+`<ONE cache>/manifold_sim/session_cache/` was deleted (2026-08-14). Curve
+results were kept.
+
+**Policy:** do not refill that cache on the laptop. Harris unique-null with
+long sessions / `nrand=2000` / extra donors goes on **ORCD** (`mit_normal`).
+The default 6-block / `nrand=100` / contrast-matched path can still run locally
+(Phase 4b check). See [retinal then joint](retinal_then_joint_fitting.md) 2026-08-14.
 
 > Note: the phase4 output path (`absence/figs/phase4_no_prior_mod/`) has no seed component, so a 2-session smoke run overwrote the old E1 baseline directory. E1 was regenerated cleanly afterwards.
 
