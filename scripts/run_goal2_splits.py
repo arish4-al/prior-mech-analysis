@@ -3,6 +3,7 @@
 Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split list.
 
   python scripts/run_goal2_splits.py --preset stimOn_times_act
+  python scripts/run_goal2_splits.py --preset act_block_harris_unsplit --list-splits
   python scripts/run_goal2_splits.py --preset goal3_c0_choice
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --list-splits
@@ -168,6 +169,12 @@ PRESETS = {
         + list(RUN_ALIGN['firstMovement_times'])
         + ['act_block_only']
     ),
+    # Unsplit prior L–R (model analog): stim-side only at stimOn; choice-side
+    # only at firstMovement. No f1/f2. Harris unique-null via
+    # --session-shuffle-null.
+    'act_block_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
+    'act_block_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
+    'act_block_harris_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)
     'choice_lr_excl_sticky_act': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
@@ -233,7 +240,7 @@ def main():
                    help='Harris unique-null session-permutation for '
                         'choice_stim*/choice_duringstim* (choice labels in '
                         'stim×prior stratum) or act_block_* (prior labels in '
-                        'stim×choice×feedback stratum). Writes '
+                        'stim×choice, stim-side, or choice-side stratum). Writes '
                         '{split}_harris_unique*.npy; does not overwrite '
                         'legacy {split}_harris*.npy')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,

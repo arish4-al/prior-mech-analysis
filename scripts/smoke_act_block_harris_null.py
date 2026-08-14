@@ -21,6 +21,10 @@ if str(ROOT) not in sys.path:
 import block_analysis_allsplits as ba  # noqa: E402
 
 SPLITS = [
+    'act_block_duringstim_l',
+    'act_block_duringstim_r',
+    'act_block_duringchoice_l',
+    'act_block_duringchoice_r',
     'act_block_duringstim_l_choice_l_f1',
     'act_block_duringstim_r_choice_r_f1',
     'act_block_only',
