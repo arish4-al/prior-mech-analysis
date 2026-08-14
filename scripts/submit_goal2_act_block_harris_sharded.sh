@@ -9,7 +9,8 @@
 #   act_block_only (1): prior L vs R, no stim/choice stratum
 #
 # Other presets:
-#   PRESET=act_block_duringstim bash scripts/submit_goal2_act_block_harris_sharded.sh
+#   PRESET=act_block_only bash scripts/submit_goal2_act_block_harris_sharded.sh
+#   PRESET=act_block_duringstim …
 #   PRESET=act_block_duringchoice …
 #   PRESET=act_block_harris_unsplit …   # stim-side + choice-side, no f1/f2
 #   PRESET=goal3_duringstim_act …   # contrast-expanded (needs donor contrasts)

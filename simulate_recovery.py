@@ -17,13 +17,19 @@ See AGENTS.md and .cursor/rules/prior-distance-analysis.mdc for agent guidance.
 
 Run with the iblenv conda environment, e.g.:
     ~/opt/anaconda3/envs/iblenv/bin/python simulate_recovery.py
+
+Harris unique-null with long sessions / nrand=2000 / extra donors: run on ORCD,
+not the laptop (session_cache pickles are multi-GB; wiped locally 2026-08-14).
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import json
 import os
+import pickle
 import random
 import shutil
 import sys
@@ -69,6 +75,15 @@ NULL_SCHEME_CONTRAST_MATCHED = (
     "contrast-matched label shuffle (preserves per-contrast counts in high/low groups)"
 )
 NULL_SCHEME_LABEL_SHUFFLE = "unrestricted label shuffle"
+NULL_SCHEME_HARRIS_UNIQUE = (
+    "harris unique-null session permutation "
+    "(donor priors from the same stim×choice / stim-side stratum)"
+)
+HARRIS_MAX_TRIES = 50
+HARRIS_UNIQUE_STALE_LIMIT = 200
+HARRIS_MIN_TRIALS_PER_SIDE = 2
+HARRIS_N_EXTRA_DONORS_DEFAULT = 40
+HARRIS_DONOR_SEED_OFFSET = 10007
 PRIOR_LABEL_VARIANTS = {
     "subjective": PRIOR_COLUMN,
     "block": PRIOR_COLUMN_BLOCK,
@@ -91,6 +106,18 @@ PRIOR_OFFSET_BINS = 5
 TUNED_G_S_PRESENCE = None  # sentinel: replaced by g_i at runtime
 
 
+def _s_prior_distance_split(split):
+    """
+    Splits where the canonical 80 ms S post-stim cap applies (prior-distance only).
+
+    Decorrelation splits (stim_choice / choice_duringstim / stim_block / *_short)
+    keep the full PRE_POST window for every population so d^stim,s vs d^stim,se differ.
+    """
+    if split in UNSPLIT_PRIOR_SPLITS or split == FULLY_UNSPLIT_PRIOR_SPLIT:
+        return True
+    return "act_block_duringstim" in split
+
+
 def time_axis_for_split(split, n_bins):
     """
     Plot time axis in ms, aligned to the split's event (stimOn or movement).
@@ -100,15 +127,21 @@ def time_axis_for_split(split, n_bins):
     """
     if "duringchoice" in split:
         return np.linspace(-150, 0, n_bins)
-    if "duringstim" in split and "short" in split:
-        return np.linspace(0, 80, n_bins)
-    if "duringstim" in split:
-        return np.linspace(0, 150, n_bins)
+    if "short" in split:
+        return np.linspace(0, SHORT_DURINGSTIM_WINDOW_S * 1000.0, n_bins)
+    if (
+        "duringstim" in split
+        or split.startswith(("stim_choice_", "choice_duringstim_", "stim_block_"))
+    ):
+        return np.linspace(0, IM_DURINGSTIM_WINDOW_S * 1000.0, n_bins)
     return np.linspace(-400, -100, n_bins)
 
 
 def _time_xlabel(split):
-    if "duringstim" in split:
+    if (
+        "duringstim" in split
+        or split.startswith(("stim_choice_", "choice_duringstim_", "stim_block_"))
+    ):
         return "Time from stim onset (ms)"
     if "duringchoice" in split:
         return "Time from choice onset (ms)"
@@ -134,8 +167,13 @@ def _one_cache_dir_candidates():
     bases = []
     if "ONE_CACHE_DIR" in os.environ:
         bases.append(Path(os.environ["ONE_CACHE_DIR"]))
-    cache = Path(mf.one.cache_dir)
-    bases.extend([cache, cache / "alyx"])
+    # ONE may be bypassed in the fit path (mf.one is None); fall back to env cache dir.
+    if getattr(mf, "one", None) is not None:
+        cache = Path(mf.one.cache_dir)
+        bases.extend([cache, cache / "alyx"])
+    elif getattr(mf, "_one_cache_dir", None):
+        cache = Path(mf._one_cache_dir)
+        bases.extend([cache, cache / "alyx"])
     seen = set()
     for base in bases:
         base = base.resolve()
@@ -161,6 +199,91 @@ def resolve_one_cache_dir():
 
 def default_output_dir():
     return resolve_one_cache_dir() / "manifold_sim"
+
+
+# ---------------------------------------------------------------------------
+# Session-level simulation cache (simulate once, reuse across analyses)
+#
+# Every analysis re-derives ``session_dfs`` from ``(mp, seed, n_sessions,
+# blocks_per_session, max_obs_per_trial, min_trials_per_session, constant_s0)``
+# via a deterministic simulation.  To run many analysis variants (different
+# nulls, different splits, full classification) on the *same* draw without
+# re-simulating, we persist ``(session_dfs, steps_before_obs, session_meta)``
+# keyed by a hash of those inputs.  Bump SESSION_CACHE_VERSION whenever the
+# simulator or trial-table schema changes so stale caches are ignored.
+# ---------------------------------------------------------------------------
+SESSION_CACHE_VERSION = "1"
+SESSION_CACHE_ENABLED = True
+
+
+def session_cache_root():
+    return default_output_dir() / "session_cache"
+
+
+def _json_default(o):
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (set, frozenset)):
+        return sorted(o)
+    if isinstance(o, Path):
+        return str(o)
+    return str(o)
+
+
+def _session_cache_payload(
+    mp,
+    n_sessions,
+    blocks_per_session,
+    max_obs_per_trial,
+    rng_seed,
+    min_trials_per_session,
+    constant_s0,
+):
+    """Human-readable params that fully determine ``session_dfs``."""
+    return {
+        "version": SESSION_CACHE_VERSION,
+        "mp": mp,
+        "n_sessions": int(n_sessions),
+        "blocks_per_session": blocks_per_session,
+        "max_obs_per_trial": int(max_obs_per_trial),
+        "rng_seed": int(rng_seed),
+        "min_trials_per_session": min_trials_per_session,
+        "constant_s0": bool(constant_s0),
+        "dt_ms": DT_MS,
+    }
+
+
+def _session_cache_key(payload):
+    blob = json.dumps(payload, sort_keys=True, default=_json_default)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_cached_sessions(blob_path):
+    with gzip.open(blob_path, "rb") as f:
+        cached = pickle.load(f)
+    return cached["session_dfs"], cached["steps_before_obs"], cached["session_meta"]
+
+
+def _save_cached_sessions(root, key, payload, session_dfs, steps_before_obs, session_meta):
+    root.mkdir(parents=True, exist_ok=True)
+    blob_path = root / f"{key}.pkl.gz"
+    tmp_path = root / f"{key}.pkl.gz.tmp{os.getpid()}"
+    with gzip.open(tmp_path, "wb") as f:
+        pickle.dump(
+            {
+                "session_dfs": session_dfs,
+                "steps_before_obs": steps_before_obs,
+                "session_meta": session_meta,
+            },
+            f,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+    os.replace(tmp_path, blob_path)
+    with open(root / f"{key}.json", "w") as f:
+        json.dump(payload, f, indent=2, default=_json_default)
+    return blob_path
 
 
 def _project_root():
@@ -350,12 +473,20 @@ SC_TIMES = [
 
 TIMING_SPLITS = ["act_block_duringstim", "act_block_duringchoice"]
 S_PRIOR_TIMEFRAME = "act_block_duringstim"
-# Unsplit = no choice×feedback (f1/f2) conditioning; still split by stim side (L/R).
+# Unsplit = no choice×feedback (f1/f2) conditioning.
+# Stim-aligned (S, I): stim_l + stim_r. Move-aligned (M): choice_l + choice_r.
 UNSPLIT_PRIOR_TIMEFRAME = "act_block_duringstim_unsplit"
 UNSPLIT_PRIOR_SPLITS = (
     "act_block_duringstim_stim_l_unsplit",
     "act_block_duringstim_stim_r_unsplit",
 )
+UNSPLIT_CHOICE_PRIOR_TIMEFRAME = "act_block_duringchoice_unsplit"
+UNSPLIT_CHOICE_PRIOR_SPLITS = (
+    "act_block_duringchoice_choice_l_unsplit",
+    "act_block_duringchoice_choice_r_unsplit",
+)
+UNSPLIT_STIM_POPS = ("S", "I")
+UNSPLIT_MOVE_POPS = ("M",)
 # Fully unsplit: all duringstim trials in one pool (L+R stim; S channel misalignment risk).
 FULLY_UNSPLIT_PRIOR_SPLIT = "act_block_duringstim_fully_unsplit"
 FULLY_UNSPLIT_PRIOR_TIMEFRAME = FULLY_UNSPLIT_PRIOR_SPLIT
@@ -365,10 +496,30 @@ FULLY_UNSPLIT_PRIOR_TIMEFRAME = FULLY_UNSPLIT_PRIOR_SPLIT
 S_DURINGSTIM_WINDOW_S = 0.08
 IM_DURINGSTIM_WINDOW_S = 0.15
 
-# Canonical analysis defaults (2026-06-19 retest; see research_journal_2026-06-18.md).
+
+def set_s_analysis_window_s(win_s):
+    """Override the S prior-distance post-stim cap (seconds). Canonical default 0.08."""
+    global S_DURINGSTIM_WINDOW_S
+    S_DURINGSTIM_WINDOW_S = float(win_s)
+
+
+# Decorrelation *_short splits (d^stim,se): 80 ms for all populations — matches
+# BWM short manifold segments / analysis_functions short duringstim timeframes.
+SHORT_DURINGSTIM_WINDOW_S = S_DURINGSTIM_WINDOW_S
+
+# BWM decorrelation timeframes (Σ classifier); plotted in full-analysis recovery.
+BWM_DECORR_PANELS = [
+    ("stim_duringstim_act", r"$d^{stim,s}$"),
+    ("choice_duringstim_act", r"$d^{choice,s}$"),
+    ("stim_duringstim_short_act", r"$d^{stim,se}$"),
+    ("stim_duringstim1_act", r"$d^{stim,se'}$"),
+]
+
+# Canonical analysis defaults (2026-06-19 retest; see journals/canonical_analysis_conventions.md).
 CANONICAL_PRIOR_DISTANCE_ANALYSIS = {
     "s_window_s": S_DURINGSTIM_WINDOW_S,
     "im_window_s": IM_DURINGSTIM_WINDOW_S,
+    "short_decorrelation_window_s": SHORT_DURINGSTIM_WINDOW_S,
     "truncation": "fill_from_next_iti",  # never zero-pad truncated stimOn windows
     "contrast_matched_null": True,
     "phase4b_sanity_seed123": {"s_curve_mean": 0.0124, "s_p_mean": 0.78},
@@ -376,14 +527,19 @@ CANONICAL_PRIOR_DISTANCE_ANALYSIS = {
 
 
 def log_canonical_analysis_banner():
-    """Print canonical analysis settings at the start of each analysis run."""
+    """Print analysis window settings at the start of each run (live S cap)."""
     c = CANONICAL_PRIOR_DISTANCE_ANALYSIS
     print(
         "Canonical prior-distance analysis: "
-        f"S={c['s_window_s']*1000:.0f}ms, I/M={c['im_window_s']*1000:.0f}ms, "
+        f"S={S_DURINGSTIM_WINDOW_S*1000:.0f}ms, I/M={c['im_window_s']*1000:.0f}ms, "
         f"truncation={c['truncation']}, "
         f"null={'contrast-matched' if c['contrast_matched_null'] else 'label-shuffle'}"
     )
+    if abs(S_DURINGSTIM_WINDOW_S - c["s_window_s"]) > 1e-9:
+        print(
+            f"  S window override (canonical {c['s_window_s']*1000:.0f} ms): "
+            "saved curves use the longer window; 80 ms p-values can be sliced later."
+        )
 
 FOCUSED_TIMEFRAMES = SC_TIMES + TIMING_SPLITS + [
     "stim_duringstim1_act",
@@ -466,11 +622,18 @@ def build_align_pre_post():
             else:
                 align[split] = "stimOn_times"
             if "short" in split:
-                pre_post[split] = [0, 0.15]
+                # Genuine 80 ms analysis window for d^stim,se (all populations).
+                pre_post[split] = [0, SHORT_DURINGSTIM_WINDOW_S]
             elif "duringchoice" in split or (
                 split.startswith("choice_") and "duringstim" not in split
             ):
                 pre_post[split] = [0.15, 0]
+            elif split.startswith("stim_block_"):
+                # d^stim,se': early 80 ms stim, prior-only (no choice conditioning).
+                pre_post[split] = [0, SHORT_DURINGSTIM_WINDOW_S]
+            elif "stim_choice_" in split or "choice_duringstim_" in split:
+                # Decorrelation / during-stim Σ metrics (not block-prior ITI window).
+                pre_post[split] = [0, 0.15]
             elif "block" in split:
                 pre_post[split] = [0.4, -0.1]
             else:
@@ -482,8 +645,12 @@ ALIGN, PRE_POST = build_align_pre_post()
 for _unsplit in (*UNSPLIT_PRIOR_SPLITS, FULLY_UNSPLIT_PRIOR_SPLIT):
     ALIGN[_unsplit] = "stimOn_times"
     PRE_POST[_unsplit] = [0, IM_DURINGSTIM_WINDOW_S]
+for _unsplit in UNSPLIT_CHOICE_PRIOR_SPLITS:
+    ALIGN[_unsplit] = "firstMovement_times"
+    PRE_POST[_unsplit] = [IM_DURINGSTIM_WINDOW_S, 0]
 SIM_TIMEFRAME_SPLITS = {
     UNSPLIT_PRIOR_TIMEFRAME: list(UNSPLIT_PRIOR_SPLITS),
+    UNSPLIT_CHOICE_PRIOR_TIMEFRAME: list(UNSPLIT_CHOICE_PRIOR_SPLITS),
     FULLY_UNSPLIT_PRIOR_TIMEFRAME: [FULLY_UNSPLIT_PRIOR_SPLIT],
 }
 
@@ -622,6 +789,13 @@ def load_fitted_model(
     }
     mp["dt"] = DT_MS
     mf._update_model_params_for_dt(mp, DT_MS)
+    # Joint / Stage-A JSONs store fitted retinal separately. The dt helper
+    # hard-resets tau_a → 222.68; re-apply so recovery uses the fitted front-end.
+    # WEIGHTS_REL has no ``retinal`` key → unchanged (paper tau_a=222.68).
+    ret = meta.get("retinal") or {}
+    for k in ("alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss"):
+        if k in ret:
+            mp[k] = float(ret[k])
     return mp, meta
 
 
@@ -842,7 +1016,15 @@ def split_fixed_condition_mask(df, split):
         cr = df["contrastRight"].values
         m &= ~np.isnan(cl) | ~np.isnan(cr)
     elif "unsplit" in split:
-        if "stim_l" in split:
+        if "duringchoice" in split:
+            cl = df["contrastLeft"].values
+            cr = df["contrastRight"].values
+            m &= ~np.isnan(cl) | ~np.isnan(cr)
+            if "choice_l" in split:
+                m &= df["choice"].values == 1
+            elif "choice_r" in split:
+                m &= df["choice"].values == -1
+        elif "stim_l" in split:
             m &= ~np.isnan(df["contrastLeft"].values)
         elif "stim_r" in split:
             m &= ~np.isnan(df["contrastRight"].values)
@@ -957,7 +1139,12 @@ def trial_s_binned_signed(row, split, steps_before_obs, population="S"):
     pre, post = PRE_POST[split]
     # Apply the same 80 ms cap for S that build_population_b_for_split uses so
     # that concordant-trial zero-padding does not cancel the g_s/d_s boost.
-    if population == "S" and align_kind == "stimOn_times" and post > 0:
+    if (
+        population == "S"
+        and align_kind == "stimOn_times"
+        and post > 0
+        and _s_prior_distance_split(split)
+    ):
         post = min(post, S_DURINGSTIM_WINDOW_S)
         n_coarse = max(1, int(round(post / B_SIZE)))
         n_bins = n_coarse * max(1, int(B_SIZE // STS))
@@ -1198,7 +1385,12 @@ def plot_p_block_s_trajectories(
         # Use population-specific time axis: S uses 80 ms cap, I/M use full 150 ms.
         align_kind = ALIGN.get(split, "stimOn_times")
         _, post_full = PRE_POST[split]
-        if population == "S" and align_kind == "stimOn_times" and post_full > 0:
+        if (
+            population == "S"
+            and align_kind == "stimOn_times"
+            and post_full > 0
+            and _s_prior_distance_split(split)
+        ):
             post_eff = min(post_full, S_DURINGSTIM_WINDOW_S)
             n_coarse = max(1, int(round(post_eff / B_SIZE)))
             n_bins_pop = n_coarse * max(1, int(B_SIZE // STS))
@@ -2016,14 +2208,21 @@ def _unpack_regde_curves(curves):
     return np.asarray(real, dtype=float), nulls
 
 
+def _per_split_regde_files(res_dir):
+    """Yield (split, path) for per-split ``*_regde.npy`` (skip combined stacks)."""
+    res_dir = Path(res_dir)
+    for path in sorted(res_dir.glob("*_regde.npy")):
+        if path.name.startswith("combined_"):
+            continue
+        split = path.name[: -len("_regde.npy")]
+        yield split, path
+
+
 def per_split_population_prior_metrics(res_dir, populations):
     """Per-split true vs shuffle prior-distance metrics for each population."""
     populations = tuple(populations)
     rows = []
-    for split in s_prior_splits():
-        regde_path = Path(res_dir) / f"{split}_regde.npy"
-        if not regde_path.exists():
-            continue
+    for split, regde_path in _per_split_regde_files(res_dir):
         regde = np.load(regde_path, allow_pickle=True).item()
         for pop in populations:
             if pop not in regde:
@@ -2149,6 +2348,7 @@ def _write_population_prior_outputs(
     prior_column,
     nrand,
     contrast_matched_null,
+    harris_unique_null=False,
 ):
     """Write CSV/JSON/figures for multi-population prior-distance analysis."""
     out_dir = Path(out_dir)
@@ -2203,6 +2403,12 @@ def _write_population_prior_outputs(
         file_prefix=file_prefix,
     )
 
+    if harris_unique_null:
+        null_scheme = NULL_SCHEME_HARRIS_UNIQUE
+    elif contrast_matched_null:
+        null_scheme = NULL_SCHEME_CONTRAST_MATCHED
+    else:
+        null_scheme = NULL_SCHEME_LABEL_SHUFFLE
     summary = {
         "condition": condition,
         "model_params": model_params,
@@ -2210,9 +2416,15 @@ def _write_population_prior_outputs(
         "prior_column": prior_column,
         "populations": list(populations),
         "nrand": nrand,
-        "contrast_matched_null": contrast_matched_null,
+        "contrast_matched_null": contrast_matched_null and not harris_unique_null,
+        "harris_unique_null": bool(harris_unique_null),
+        "null_scheme": null_scheme,
         "output_dir": str(out_dir),
         "res_dir": str(res_dir),
+        "s_window_s": float(S_DURINGSTIM_WINDOW_S),
+        "s_window_canonical_s": float(
+            CANONICAL_PRIOR_DISTANCE_ANALYSIS["s_window_s"]
+        ),
         "combined": summary_rows,
         "by_split": split_df.to_dict(orient="records"),
     }
@@ -2220,6 +2432,247 @@ def _write_population_prior_outputs(
     with open(summary_json, "w") as f:
         json.dump(summary, f, indent=2)
     return summary
+
+
+def _run_split_population_prior_distance(
+    session_dfs,
+    steps_before_obs,
+    out_dir,
+    file_prefix,
+    condition_name,
+    plot_title,
+    model_params,
+    populations,
+    nrand,
+    rng_seed,
+    prior_column,
+    contrast_matched_null,
+    n_jobs,
+    extra_summary=None,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
+):
+    """
+    Core S/I/M split-conditioned (f1/f2) prior-distance analysis on pre-simulated
+    sessions. Shared by phase4 and the unified ``--run-experiment`` path so all
+    four experiments get identical S/I/M treatment under either null.
+    """
+    out_dir = Path(out_dir)
+    res_dir = out_dir / "res"
+    priors_by_pop, res_dir = _population_prior_from_sessions(
+        session_dfs,
+        steps_before_obs,
+        nrand,
+        rng_seed,
+        prior_column,
+        populations,
+        n_jobs=n_jobs,
+        contrast_matched_null=contrast_matched_null,
+        res_dir=res_dir,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
+    )
+    splits = s_prior_splits()
+    if not harris_unique_null:
+        contrast_df = write_multi_population_split_contrast_diagnostics(
+            session_dfs,
+            steps_before_obs,
+            splits,
+            nrand,
+            rng_seed,
+            out_dir,
+            populations,
+            out_csv=f"{file_prefix}_split_contrast.csv",
+            contrast_matched_null=contrast_matched_null,
+            prior_column=prior_column,
+        )
+    else:
+        contrast_df = pd.DataFrame()
+    for pop in ("S", "I"):
+        plot_p_block_s_trajectories(
+            session_dfs,
+            steps_before_obs,
+            out_dir,
+            splits=splits,
+            condition_name=condition_name,
+            rng_seed=rng_seed,
+            prior_column=prior_column,
+            population=pop,
+        )
+    summary = _write_population_prior_outputs(
+        condition_name,
+        priors_by_pop,
+        res_dir,
+        populations,
+        out_dir,
+        file_prefix=file_prefix,
+        plot_title=plot_title,
+        rng_seed=rng_seed,
+        model_params=model_params,
+        prior_column=prior_column,
+        nrand=nrand,
+        contrast_matched_null=contrast_matched_null,
+        harris_unique_null=harris_unique_null,
+    )
+    if extra_summary:
+        summary.update(extra_summary)
+    summary["by_split_contrast"] = contrast_df.to_dict(orient="records")
+    with open(out_dir / f"{file_prefix}_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
+
+
+def _model_params_dict(mp):
+    return {k: mp[k] for k in ("g_s", "d_s", "g_i", "d_i", "g_m", "d_m")}
+
+
+def _experiment_case_spec(case, weights_json, g_s=None, d_s=None, gs_outside_adaptation=False):
+    """Build (mp, exp_tag, cond_desc) for a Goal-1 experiment case."""
+    case = case.lower()
+    if case == "phase4":
+        mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
+        return mp, "phase4", "no P mod (all g_*=d_*=0)"
+    if case == "absence":
+        mp, _ = load_fitted_model(g_s=0.0, d_s=0.0, json_path=weights_json)
+        return mp, "absence", "absence (g_s=d_s=0, fitted I/M)"
+    if case == "s_presence":
+        if g_s is None:
+            raise ValueError("case 's_presence' requires g_s")
+        d_s = 0.0 if d_s is None else float(d_s)
+        mp, _ = load_fitted_model(
+            g_s=float(g_s),
+            d_s=d_s,
+            zero_im_prior_mod=True,
+            json_path=weights_json,
+            gs_outside_adaptation=gs_outside_adaptation,
+        )
+        tag = f"s_presence_g_s{float(g_s):g}_d_s{d_s:g}".replace(".", "p")
+        if gs_outside_adaptation:
+            tag += "_gs_free"
+        gate = "outside adaptation" if gs_outside_adaptation else "inside adaptation"
+        return mp, tag, f"P->S only (g_s={float(g_s):g}, d_s={d_s:g}, {gate})"
+    raise ValueError(f"Unknown experiment case: {case!r}")
+
+
+def run_experiment_case(
+    base_dir,
+    case,
+    full_analysis=False,
+    contrast_matched_null=True,
+    weights_json=None,
+    n_sessions=N_SESSIONS_DEFAULT,
+    blocks_per_session=BLOCKS_PER_SESSION_DEFAULT,
+    max_obs_per_trial=400,
+    rng_seed=42,
+    nrand=NRAND_DEFAULT,
+    n_jobs=1,
+    g_s=None,
+    d_s=None,
+    gs_outside_adaptation=False,
+    min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
+    prior_column=None,
+    harris_unique_null=False,
+    n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
+):
+    """
+    Unified Goal-1 single-experiment runner (cache-backed).
+
+    sprior mode: S/I/M split-conditioned prior distance under the chosen null
+    (baseline = contrast-matched; 1.1 = label-shuffle via contrast_matched_null=False;
+    Harris unique-null via harris_unique_null).
+    full mode: full classification pipeline (1.3) to recover S/I/M/P types.
+    Outputs under ``goal1/<exp_tag>/<null>_<mode>/``.
+    """
+    base_dir = Path(base_dir)
+    weights_json = resolve_weights_json(weights_json)
+    prior_column = prior_column or PRIOR_COLUMN
+    mp, exp_tag, cond_desc = _experiment_case_spec(
+        case, weights_json, g_s=g_s, d_s=d_s, gs_outside_adaptation=gs_outside_adaptation
+    )
+    if harris_unique_null:
+        null_tag = "hu"
+        null_name = "harris unique-null"
+    else:
+        null_tag = "cm" if contrast_matched_null else "ls"
+        null_name = "contrast-matched" if contrast_matched_null else "label-shuffle"
+    log_canonical_analysis_banner()
+    print(
+        f"\n=== Goal-1 experiment: {case} [{exp_tag}] | {cond_desc} | "
+        f"null={null_name} | mode={'full' if full_analysis else 'sprior'} | seed={rng_seed} ==="
+    )
+
+    if full_analysis:
+        if harris_unique_null:
+            raise ValueError(
+                "Harris unique-null is for prior-distance only; omit --full-analysis"
+            )
+        # Full classification reuses process_condition (rebuilds identical mp ->
+        # session cache HIT). condition_name carries the goal1 output path.
+        condition_name = f"goal1/{exp_tag}/{null_tag}_full"
+        return process_condition(
+            condition_name,
+            g_s=float(mp["g_s"]),
+            d_s=float(mp["d_s"]),
+            n_sessions=n_sessions,
+            nrand=nrand,
+            blocks_per_session=blocks_per_session,
+            max_obs_per_trial=max_obs_per_trial,
+            base_dir=base_dir,
+            rng_seed=rng_seed,
+            weights_json=weights_json,
+            min_trials_per_session=min_trials_per_session,
+            s_prior_only=False,
+            n_jobs=n_jobs,
+            contrast_matched_null=contrast_matched_null,
+            zero_im_prior_mod=(case == "s_presence"),
+            zero_all_prior_mod=(case == "phase4"),
+            gs_outside_adaptation=gs_outside_adaptation,
+        )
+
+    session_dfs, steps_before_obs, _ = simulate_condition_sessions(
+        mp,
+        n_sessions,
+        blocks_per_session,
+        max_obs_per_trial,
+        rng_seed,
+        min_trials_per_session=min_trials_per_session,
+    )
+    extra_donor_dfs = None
+    if harris_unique_null:
+        extra_donor_dfs = _simulate_harris_extra_donors(
+            mp,
+            n_extra_donors=n_extra_donors,
+            blocks_per_session=blocks_per_session,
+            max_obs_per_trial=max_obs_per_trial,
+            rng_seed=rng_seed,
+            min_trials_per_session=min_trials_per_session,
+        )
+    out_dir = base_dir / "goal1" / exp_tag / f"{null_tag}_sprior"
+    file_prefix = f"{exp_tag}_{null_tag}_sprior"
+    return _run_split_population_prior_distance(
+        session_dfs,
+        steps_before_obs,
+        out_dir,
+        file_prefix=file_prefix,
+        condition_name=f"{exp_tag} ({cond_desc}, {null_name} null)",
+        plot_title=f"S/I/M prior distance: {exp_tag} ({null_name} null)",
+        model_params=_model_params_dict(mp),
+        populations=SIM_POPULATIONS,
+        nrand=nrand,
+        rng_seed=rng_seed,
+        prior_column=prior_column,
+        contrast_matched_null=contrast_matched_null,
+        n_jobs=n_jobs,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
+        extra_summary={
+            "case": case,
+            "exp_tag": exp_tag,
+            "null": null_name,
+            "canonical_analysis": CANONICAL_PRIOR_DISTANCE_ANALYSIS,
+            "harris_n_extra_donors": int(n_extra_donors) if harris_unique_null else 0,
+        },
+    )
 
 
 def run_phase4_no_prior_mod_analysis(
@@ -2246,14 +2699,6 @@ def run_phase4_no_prior_mod_analysis(
     populations = tuple(populations or SIM_POPULATIONS)
     prior_column = prior_column or PRIOR_COLUMN
     mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
-    model_params = {
-        "g_s": mp["g_s"],
-        "d_s": mp["d_s"],
-        "g_i": mp["g_i"],
-        "d_i": mp["d_i"],
-        "g_m": mp["g_m"],
-        "d_m": mp["d_m"],
-    }
     s0_label = "constant S0=contrast" if constant_s0 else "stochastic S0"
     log_canonical_analysis_banner()
     print(
@@ -2269,67 +2714,24 @@ def run_phase4_no_prior_mod_analysis(
         rng_seed,
         constant_s0=constant_s0,
     )
-
     out_name = "phase4_no_prior_mod_constant_s0" if constant_s0 else "phase4_no_prior_mod"
-    file_prefix = out_name
     out_dir = base_dir / "absence" / "figs" / out_name
-    res_dir = out_dir / "res"
-    priors_by_pop, res_dir = _population_prior_from_sessions(
+    return _run_split_population_prior_distance(
         session_dfs,
         steps_before_obs,
-        nrand,
-        rng_seed,
-        prior_column,
-        populations,
-        n_jobs=n_jobs,
-        contrast_matched_null=contrast_matched_null,
-        res_dir=res_dir,
-    )
-
-    splits = s_prior_splits()
-    contrast_df = write_multi_population_split_contrast_diagnostics(
-        session_dfs,
-        steps_before_obs,
-        splits,
-        nrand,
-        rng_seed,
         out_dir,
-        populations,
-        out_csv=f"{file_prefix}_split_contrast.csv",
-        contrast_matched_null=contrast_matched_null,
-        prior_column=prior_column,
-    )
-    for pop in ("S", "I"):
-        plot_p_block_s_trajectories(
-            session_dfs,
-            steps_before_obs,
-            out_dir,
-            splits=splits,
-            condition_name=f"absence (no P mod, {s0_label})",
-            rng_seed=rng_seed,
-            prior_column=prior_column,
-            population=pop,
-        )
-
-    summary = _write_population_prior_outputs(
-        f"absence (no P mod, {s0_label})",
-        priors_by_pop,
-        res_dir,
-        populations,
-        out_dir,
-        file_prefix=file_prefix,
+        file_prefix=out_name,
+        condition_name=f"absence (no P mod, {s0_label})",
         plot_title=f"Phase 4: S/I/M prior distance (all g_*=d_*=0, {s0_label})",
-        rng_seed=rng_seed,
-        model_params=model_params,
-        prior_column=prior_column,
+        model_params=_model_params_dict(mp),
+        populations=populations,
         nrand=nrand,
+        rng_seed=rng_seed,
+        prior_column=prior_column,
         contrast_matched_null=contrast_matched_null,
+        n_jobs=n_jobs,
+        extra_summary={"constant_s0": constant_s0},
     )
-    summary["constant_s0"] = constant_s0
-    summary["by_split_contrast"] = contrast_df.to_dict(orient="records")
-    with open(out_dir / f"{file_prefix}_summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
-    return summary
 
 
 def run_unsplit_prior_distance_analysis(
@@ -2346,15 +2748,26 @@ def run_unsplit_prior_distance_analysis(
     populations=None,
     prior_column=None,
     unsplit_mode="stim_side",
+    g_s=None,
+    d_s=None,
+    gs_outside_adaptation=False,
+    harris_unique_null=False,
+    n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
 ):
     """
     Experiment A: prior distance without f1/f2 choice×feedback splits.
 
     unsplit_mode:
-      - ``stim_side`` (default): stim_l + stim_r unsplit splits, stacked.
+      - ``stim_side`` (default): S/I on stim-aligned stim_l+stim_r; M on
+        move-aligned choice_l+choice_r. No f1/f2.
       - ``fully``: single pool of all duringstim trials (L+R mixed; S artefact risk).
 
-    case: ``phase4`` (all g_*=d_*=0) or ``absence`` (fitted I/M, g_s=d_s=0).
+    case:
+      - ``phase4``: all g_*=d_*=0.
+      - ``absence``: fitted I/M, g_s=d_s=0.
+      - ``presence``: fitted I/M + swept g_s/d_s (Goal 4 presence sweep).
+      - ``s_presence``: P->S only (g_s/d_s from args; g_i=d_i=g_m=d_m=0). Used for
+        the gain-only threshold experiments (E3 I-first, E4 S-first).
     """
     base_dir = Path(base_dir)
     populations = tuple(populations or SIM_POPULATIONS)
@@ -2364,10 +2777,12 @@ def run_unsplit_prior_distance_analysis(
     if unsplit_mode not in ("stim_side", "fully"):
         raise ValueError(f"Unknown unsplit_mode: {unsplit_mode!r}")
     fully = unsplit_mode == "fully"
+    suffix = "fully_unsplit" if fully else "unsplit"
+    if harris_unique_null:
+        suffix = f"{suffix}_harris_unique"
     log_canonical_analysis_banner()
     if case == "phase4":
         mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
-        suffix = "fully_unsplit" if fully else "unsplit"
         condition_name = f"absence (no P mod, {suffix})"
         out_name = f"phase4_no_prior_mod_{suffix}"
         plot_title = (
@@ -2377,7 +2792,6 @@ def run_unsplit_prior_distance_analysis(
         )
     elif case == "absence":
         mp, _ = load_fitted_model(g_s=0.0, d_s=0.0, json_path=weights_json)
-        suffix = "fully_unsplit" if fully else "unsplit"
         condition_name = f"absence ({suffix})"
         out_name = f"absence_{suffix}"
         plot_title = (
@@ -2385,8 +2799,51 @@ def run_unsplit_prior_distance_analysis(
             if fully
             else "Absence unsplit: S/I/M prior distance (g_s=d_s=0, fitted I/M)"
         )
+    elif case == "presence":
+        g_s = 0.0 if g_s is None else g_s
+        d_s = 0.0 if d_s is None else d_s
+        mp, _ = load_fitted_model(
+            g_s=g_s,
+            d_s=d_s,
+            json_path=weights_json,
+            gs_outside_adaptation=gs_outside_adaptation,
+        )
+        param_tag = f"g_s{float(g_s):g}_d_s{float(d_s):g}".replace(".", "p")
+        if gs_outside_adaptation:
+            param_tag += "_gs_free"
+        condition_name = f"presence {param_tag} ({suffix})"
+        out_name = f"presence_{param_tag}_{suffix}"
+        gate = "outside adaptation" if gs_outside_adaptation else "inside adaptation"
+        plot_title = (
+            f"Presence {'fully ' if fully else ''}unsplit: prior distance "
+            f"(g_s={float(g_s):g}, d_s={float(d_s):g}, fitted I/M, {gate})"
+        )
+    elif case == "s_presence":
+        if g_s is None:
+            raise ValueError("case 's_presence' requires g_s (pass --g-s-presence)")
+        d_s = 0.0 if d_s is None else d_s
+        mp, _ = load_fitted_model(
+            g_s=g_s,
+            d_s=d_s,
+            zero_im_prior_mod=True,
+            json_path=weights_json,
+            gs_outside_adaptation=gs_outside_adaptation,
+        )
+        param_tag = f"g_s{float(g_s):g}_d_s{float(d_s):g}".replace(".", "p")
+        if gs_outside_adaptation:
+            param_tag += "_gs_free"
+        condition_name = f"s_presence {param_tag} ({suffix})"
+        out_name = f"s_presence_{param_tag}_{suffix}"
+        gate = "outside adaptation" if gs_outside_adaptation else "inside adaptation"
+        plot_title = (
+            f"S-presence {'fully ' if fully else ''}unsplit: prior distance "
+            f"(g_s={float(g_s):g}, d_s={float(d_s):g}, g_i=d_i=g_m=d_m=0, {gate})"
+        )
     else:
-        raise ValueError(f"Unknown unsplit case: {case!r} (expected 'phase4' or 'absence')")
+        raise ValueError(
+            f"Unknown unsplit case: {case!r} "
+            "(expected 'phase4', 'absence', 'presence', or 's_presence')"
+        )
 
     model_params = {
         "g_s": mp["g_s"],
@@ -2398,7 +2855,8 @@ def run_unsplit_prior_distance_analysis(
     }
     print(
         f"\n=== Unsplit prior distance: {case} "
-        f"(mode={unsplit_mode}, populations={populations}, seed={rng_seed}) ==="
+        f"(mode={unsplit_mode}, populations={populations}, seed={rng_seed}"
+        f"{', harris unique-null' if harris_unique_null else ''}) ==="
     )
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
         mp,
@@ -2407,19 +2865,21 @@ def run_unsplit_prior_distance_analysis(
         max_obs_per_trial,
         rng_seed,
     )
+    extra_donor_dfs = None
+    if harris_unique_null:
+        extra_donor_dfs = _simulate_harris_extra_donors(
+            mp,
+            n_extra_donors=n_extra_donors,
+            blocks_per_session=blocks_per_session,
+            max_obs_per_trial=max_obs_per_trial,
+            rng_seed=rng_seed,
+        )
 
     out_root = base_dir / "unsplit_prior" / f"seed_{rng_seed}" / out_name
     out_dir = out_root / "figs"
     res_dir = out_root / "res"
     file_prefix = out_name
-    if fully:
-        splits = s_prior_splits_fully_unsplit()
-        timeframe = FULLY_UNSPLIT_PRIOR_TIMEFRAME
-    else:
-        splits = s_prior_splits_unsplit()
-        timeframe = UNSPLIT_PRIOR_TIMEFRAME
-
-    priors_by_pop, res_dir = _population_prior_from_sessions(
+    priors_by_pop, res_dir, splits, jobs = _unsplit_priors_from_sessions(
         session_dfs,
         steps_before_obs,
         nrand,
@@ -2429,22 +2889,26 @@ def run_unsplit_prior_distance_analysis(
         n_jobs=n_jobs,
         contrast_matched_null=contrast_matched_null,
         res_dir=res_dir,
-        splits=splits,
-        timeframe=timeframe,
+        fully=fully,
+        harris_unique_null=harris_unique_null,
+        extra_donor_dfs=extra_donor_dfs,
     )
 
-    contrast_df = write_multi_population_split_contrast_diagnostics(
-        session_dfs,
-        steps_before_obs,
-        splits,
-        nrand,
-        rng_seed,
-        out_dir,
-        populations,
-        out_csv=f"{file_prefix}_split_contrast.csv",
-        contrast_matched_null=contrast_matched_null,
-        prior_column=prior_column,
-    )
+    if harris_unique_null:
+        contrast_df = pd.DataFrame()
+    else:
+        contrast_df = write_multi_population_split_contrast_diagnostics(
+            session_dfs,
+            steps_before_obs,
+            splits,
+            nrand,
+            rng_seed,
+            out_dir,
+            populations,
+            out_csv=f"{file_prefix}_split_contrast.csv",
+            contrast_matched_null=contrast_matched_null,
+            prior_column=prior_column,
+        )
 
     summary = _write_population_prior_outputs(
         condition_name,
@@ -2459,16 +2923,185 @@ def run_unsplit_prior_distance_analysis(
         prior_column=prior_column,
         nrand=nrand,
         contrast_matched_null=contrast_matched_null,
+        harris_unique_null=harris_unique_null,
     )
     summary["unsplit"] = True
     summary["unsplit_mode"] = unsplit_mode
+    summary["unsplit_strata"] = (
+        {"S": "fully", "I": "fully", "M": "fully"}
+        if fully
+        else {"S": "stim_side", "I": "stim_side", "M": "choice_side"}
+    )
     summary["case"] = case
     summary["splits"] = list(splits)
+    summary["jobs"] = [
+        {"populations": list(pops), "splits": list(sp), "timeframe": tf}
+        for pops, sp, tf in jobs
+    ]
     summary["canonical_analysis"] = CANONICAL_PRIOR_DISTANCE_ANALYSIS
     summary["by_split_contrast"] = contrast_df.to_dict(orient="records")
+    summary["harris_n_extra_donors"] = (
+        int(n_extra_donors) if harris_unique_null else 0
+    )
     with open(out_root / f"{file_prefix}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved unsplit summary to {out_root / f'{file_prefix}_summary.json'}")
+    return summary
+
+
+def run_presence_unsplit_plots(
+    base_dir,
+    g_s,
+    d_s=0.0,
+    weights_json=None,
+    n_sessions=N_SESSIONS_DEFAULT,
+    blocks_per_session=BLOCKS_PER_SESSION_DEFAULT,
+    max_obs_per_trial=400,
+    rng_seed=42,
+    nrand=NRAND_DEFAULT,
+    n_jobs=1,
+    contrast_matched_null=True,
+    gs_outside_adaptation=False,
+    unsplit_mode="stim_side",
+):
+    """
+    Full plot suite for presence (fitted I/M) at one (g_s, d_s), default unsplit
+    (S/I stim-aligned stim strata; M move-aligned choice strata).
+
+    Reuses session cache from the Goal-4 sweep when (mp, seed, n_sessions) match.
+    """
+    base_dir = Path(base_dir)
+    weights_json = resolve_weights_json(weights_json)
+    g_s, d_s = float(g_s), float(d_s)
+    unsplit_mode = unsplit_mode.lower().replace("-", "_")
+    if unsplit_mode not in ("stim_side", "fully"):
+        raise ValueError(f"Unknown unsplit_mode: {unsplit_mode!r}")
+    fully = unsplit_mode == "fully"
+    suffix = "fully_unsplit" if fully else "unsplit"
+    param_tag = f"g_s{g_s:g}_d_s{d_s:g}".replace(".", "p")
+    if gs_outside_adaptation:
+        param_tag += "_gs_free"
+    out_root = base_dir / f"presence_{param_tag}_{suffix}"
+    res_dir = out_root / "res"
+    fig_dir = out_root / "figs"
+    if res_dir.exists():
+        shutil.rmtree(res_dir)
+    res_dir.mkdir(parents=True, exist_ok=True)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    gate = "outside adaptation" if gs_outside_adaptation else "inside adaptation"
+    condition = (
+        f"presence unsplit (g_s={g_s:g}, d_s={d_s:g}, fitted I/M, {gate})"
+    )
+    plot_title = f"Presence {'fully ' if fully else ''}unsplit: S/I/M prior distance ({gate})"
+    file_prefix = f"presence_{param_tag}_{suffix}"
+    print(f"\n=== Presence unsplit plots: {condition}, seed={rng_seed} ===")
+    print(f"  output: {out_root}")
+    log_canonical_analysis_banner()
+
+    mp, _ = load_fitted_model(
+        g_s=g_s,
+        d_s=d_s,
+        json_path=weights_json,
+        gs_outside_adaptation=gs_outside_adaptation,
+    )
+    session_dfs, steps_before_obs, _ = simulate_condition_sessions(
+        mp,
+        n_sessions,
+        blocks_per_session,
+        max_obs_per_trial,
+        rng_seed,
+    )
+
+    priors_by_pop, res_dir, splits, jobs = _unsplit_priors_from_sessions(
+        session_dfs,
+        steps_before_obs,
+        nrand,
+        rng_seed,
+        PRIOR_COLUMN,
+        populations=SIM_POPULATIONS,
+        n_jobs=n_jobs,
+        contrast_matched_null=contrast_matched_null,
+        res_dir=res_dir,
+        fully=fully,
+    )
+
+    write_multi_population_split_contrast_diagnostics(
+        session_dfs,
+        steps_before_obs,
+        splits,
+        nrand,
+        rng_seed,
+        fig_dir,
+        SIM_POPULATIONS,
+        out_csv=f"{file_prefix}_split_contrast.csv",
+        contrast_matched_null=contrast_matched_null,
+        prior_column=PRIOR_COLUMN,
+    )
+
+    s_prior = priors_by_pop.get("S")
+    if s_prior is not None:
+        plot_s_prior_figures(condition, s_prior, fig_dir)
+    for pop in ("I", "M"):
+        pop_prior = priors_by_pop.get(pop)
+        if pop_prior is None:
+            continue
+        pop_dir = fig_dir / pop
+        plot_s_prior_curve(f"{condition} — {pop}", pop_prior, pop_dir)
+        plot_s_shuffle_control(
+            f"{condition} — {pop}",
+            pop_prior,
+            pop_dir,
+            filename=f"{pop.lower()}_shuffle_control.png",
+        )
+        pd.DataFrame(
+            [{k: v for k, v in pop_prior.items() if not isinstance(v, (np.ndarray, list))}]
+        ).to_csv(pop_dir / f"{pop.lower()}_prior_stats.csv", index=False)
+
+    bc_dir = fig_dir / "block_confounds"
+    plot_block_confound_distributions(
+        session_dfs,
+        steps_before_obs,
+        bc_dir,
+        condition_name=condition,
+        rng_seed=rng_seed,
+    )
+    for pops, job_splits, _tf in jobs:
+        for pop in pops:
+            plot_p_block_s_trajectories(
+                session_dfs,
+                steps_before_obs,
+                bc_dir,
+                splits=job_splits,
+                condition_name=condition,
+                rng_seed=rng_seed,
+                population=pop,
+            )
+
+    summary = _write_population_prior_outputs(
+        condition,
+        priors_by_pop,
+        res_dir,
+        SIM_POPULATIONS,
+        fig_dir,
+        file_prefix=file_prefix,
+        plot_title=plot_title,
+        rng_seed=rng_seed,
+        model_params=_model_params_dict(mp),
+        prior_column=PRIOR_COLUMN,
+        nrand=nrand,
+        contrast_matched_null=contrast_matched_null,
+    )
+    summary["unsplit"] = True
+    summary["unsplit_mode"] = unsplit_mode
+    summary["case"] = "presence"
+    summary["g_s"] = g_s
+    summary["d_s"] = d_s
+    summary["output_dir"] = str(out_root)
+    (out_root / f"{file_prefix}_summary.json").write_text(
+        json.dumps(summary, indent=2, default=str)
+    )
+    print(f"Saved presence unsplit plots to {out_root}")
     return summary
 
 
@@ -2715,6 +3348,46 @@ def run_s_presence_i_scaled_plots(
     return summary
 
 
+def default_presence_unsplit_sweep_grid(g_i_fit, d_i_fit, g_s_max=2500.0, d_s_max=None):
+    """Default (g_s, d_s) grid for Goal 4 presence unsplit sweep."""
+    g_s_max = float(g_s_max)
+    d_s_max = float(d_i_fit) if d_s_max is None else float(d_s_max)
+    g_s_vals = sorted(
+        g
+        for g in {
+            0.0,
+            50.0,
+            100.0,
+            200.0,
+            500.0,
+            900.0,
+            1200.0,
+            1500.0,
+            1800.0,
+            2025.0,
+            float(g_i_fit) * 0.36,
+            float(g_i_fit),
+            float(g_i_fit) * 2,
+            float(g_i_fit) * 5,
+            float(g_i_fit) * 10,
+            g_s_max,
+        }
+        if 0.0 <= g <= g_s_max
+    )
+    d_s_vals = sorted(
+        d
+        for d in {
+            0.0,
+            d_s_max * 0.25,
+            d_s_max * 0.5,
+            d_s_max * 0.75,
+            d_s_max,
+        }
+        if 0.0 <= d <= d_s_max
+    )
+    return g_s_vals, d_s_vals
+
+
 def default_gs_ds_tune_grid(g_i_fit, d_i_fit):
     """Default (g_s, d_s) grid: log-ish spacing around fitted integrator scales."""
     g_s_vals = sorted(
@@ -2749,10 +3422,10 @@ def _parse_float_list(text):
     return [float(x.strip()) for x in text.split(",") if x.strip()]
 
 
-def _prior_tune_row(g_s, d_s, priors_by_pop, alpha=0.01):
-    """One sweep row with S and I prior metrics."""
+def _prior_tune_row(g_s, d_s, priors_by_pop, alpha=0.01, populations=("S", "I")):
+    """One sweep row with per-population prior metrics."""
     row = {"g_s": g_s, "d_s": d_s}
-    for pop in ("S", "I"):
+    for pop in populations:
         p = priors_by_pop.get(pop)
         prefix = pop.lower()
         if p is None:
@@ -2956,6 +3629,187 @@ def run_gs_ds_tune_sweep(
     return df, summary
 
 
+def run_presence_unsplit_sweep(
+    base_dir,
+    weights_json=None,
+    n_sessions=N_SESSIONS_DEFAULT,
+    blocks_per_session=BLOCKS_PER_SESSION_DEFAULT,
+    max_obs_per_trial=400,
+    rng_seed=42,
+    nrand=NRAND_DEFAULT,
+    n_jobs=1,
+    contrast_matched_null=True,
+    g_s_values=None,
+    d_s_values=None,
+    g_s_max=2500.0,
+    d_s_max=None,
+    alpha=0.01,
+    stop_on_s_significant=False,
+    stop_on_s_p_gain=False,
+    stop_on_s_mean_and_gain=False,
+    gs_outside_adaptation=False,
+    unsplit_mode="stim_side",
+):
+    """
+    Goal 4: grid over g_s/d_s with fitted I/M prior modulation, default unsplit
+    (S/I stim-aligned stim strata; M move-aligned choice strata).
+
+    Reports S/I/M block-prior significance per (g_s, d_s) pair.
+    """
+    base_dir = Path(base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    weights_json = resolve_weights_json(weights_json)
+    g_i_fit, d_i_fit = fitted_integrator_scales(weights_json)
+    d_s_max = float(d_i_fit) if d_s_max is None else float(d_s_max)
+    if g_s_values is None or d_s_values is None:
+        default_g, default_d = default_presence_unsplit_sweep_grid(
+            g_i_fit, d_i_fit, g_s_max=g_s_max, d_s_max=d_s_max
+        )
+        g_s_values = default_g if g_s_values is None else g_s_values
+        d_s_values = default_d if d_s_values is None else d_s_values
+
+    unsplit_mode = unsplit_mode.lower().replace("-", "_")
+    if unsplit_mode not in ("stim_side", "fully"):
+        raise ValueError(f"Unknown unsplit_mode: {unsplit_mode!r}")
+    fully = unsplit_mode == "fully"
+    populations = SIM_POPULATIONS
+
+    out_csv = base_dir / "presence_unsplit_sweep.csv"
+    rows = []
+    n_total = len(g_s_values) * len(d_s_values)
+    log_canonical_analysis_banner()
+    print(
+        f"\n=== presence unsplit sweep (fitted I/M, mode={unsplit_mode}, "
+        f"seed={rng_seed}, n_sessions={n_sessions}, nrand={nrand}, alpha={alpha}) ==="
+    )
+    print(f"  g_i_fitted={g_i_fit:.4g}, d_i_fitted={d_i_fit:.4g}")
+    print(f"  g_s range: [{min(g_s_values):g}, {max(g_s_values):g}]")
+    print(f"  d_s range: [{min(d_s_values):g}, {max(d_s_values):g}]")
+    print(f"  grid: {len(g_s_values)} g_s x {len(d_s_values)} d_s = {n_total} pairs")
+    print(f"  g_s values: {g_s_values}")
+    print(f"  d_s values: {d_s_values}")
+
+    for i, g_s in enumerate(g_s_values):
+        for j, d_s in enumerate(d_s_values):
+            idx = i * len(d_s_values) + j + 1
+            print(f"\n--- [{idx}/{n_total}] g_s={g_s}, d_s={d_s} ---")
+            mp, _ = load_fitted_model(
+                g_s=g_s,
+                d_s=d_s,
+                json_path=weights_json,
+                gs_outside_adaptation=gs_outside_adaptation,
+            )
+            session_dfs, steps_before_obs, _ = simulate_condition_sessions(
+                mp,
+                n_sessions,
+                blocks_per_session,
+                max_obs_per_trial,
+                rng_seed,
+            )
+            priors_by_pop, _, _, _ = _unsplit_priors_from_sessions(
+                session_dfs,
+                steps_before_obs,
+                nrand,
+                rng_seed,
+                PRIOR_COLUMN,
+                populations=populations,
+                n_jobs=n_jobs,
+                contrast_matched_null=contrast_matched_null,
+                fully=fully,
+            )
+            row = _prior_tune_row(
+                g_s, d_s, priors_by_pop, alpha=alpha, populations=populations
+            )
+            rows.append(row)
+            pd.DataFrame(rows).to_csv(out_csv, index=False)
+            print(
+                f"  S: curve_mean={row['s_curve_mean']:.4g}, "
+                f"null={row['s_null_median']:.4g}, p_mean={row['s_p_mean']:.4g}, "
+                f"p_gain={row['s_p_gain']:.4g}, "
+                f"mean_sig={row['s_significant_alpha']}, gain_sig={row['s_p_gain_significant_alpha']}"
+            )
+            print(
+                f"  I: curve_mean={row['i_curve_mean']:.4g}, "
+                f"null={row['i_null_median']:.4g}, p_mean={row['i_p_mean']:.4g}, "
+                f"p_gain={row['i_p_gain']:.4g}, "
+                f"mean_sig={row['i_significant_alpha']}, gain_sig={row['i_p_gain_significant_alpha']}"
+            )
+            print(
+                f"  M: curve_mean={row['m_curve_mean']:.4g}, "
+                f"null={row['m_null_median']:.4g}, p_mean={row['m_p_mean']:.4g}, "
+                f"p_gain={row['m_p_gain']:.4g}"
+            )
+            if stop_on_s_mean_and_gain and row["s_mean_and_gain_significant"]:
+                print(
+                    f"  >> Stopping: S p_mean and p_gain significant at g_s={g_s}, d_s={d_s}"
+                )
+                break
+            if stop_on_s_p_gain and row["s_p_gain_significant_alpha"]:
+                print(f"  >> Stopping: S p_gain significant at g_s={g_s}, d_s={d_s}")
+                break
+            if stop_on_s_significant and row["s_significant_alpha"]:
+                print(f"  >> Stopping: S significant at g_s={g_s}, d_s={d_s}")
+                break
+        else:
+            continue
+        break
+
+    df = pd.DataFrame(rows)
+    df.to_csv(out_csv, index=False)
+    s_hits = df[df["s_significant_alpha"]].sort_values("s_p_mean")
+    s_gain_hits = df[df["s_p_gain_significant_alpha"]].sort_values("s_p_gain")
+    s_both_hits = df[df["s_mean_and_gain_significant"]].sort_values(["s_p_mean", "s_p_gain"])
+    summary = {
+        "case": "presence_unsplit",
+        "unsplit_mode": unsplit_mode,
+        "g_i_fitted": g_i_fit,
+        "d_i_fitted": d_i_fit,
+        "g_s_max": float(g_s_max),
+        "d_s_max": d_s_max,
+        "rng_seed": rng_seed,
+        "n_sessions": n_sessions,
+        "nrand": nrand,
+        "alpha": alpha,
+        "n_grid_pairs": n_total,
+        "n_evaluated": len(df),
+        "n_s_significant": int(s_hits.shape[0]),
+        "n_s_p_gain_significant": int(s_gain_hits.shape[0]),
+        "n_s_mean_and_gain_significant": int(s_both_hits.shape[0]),
+        "best_s_row": s_hits.iloc[0].to_dict() if len(s_hits) else None,
+        "best_s_p_gain_row": s_gain_hits.iloc[0].to_dict() if len(s_gain_hits) else None,
+        "best_s_mean_and_gain_row": s_both_hits.iloc[0].to_dict() if len(s_both_hits) else None,
+        "s_significant_rows": s_hits.to_dict(orient="records"),
+        "s_p_gain_significant_rows": s_gain_hits.to_dict(orient="records"),
+        "s_mean_and_gain_significant_rows": s_both_hits.to_dict(orient="records"),
+        "csv": str(out_csv),
+    }
+    summary_path = base_dir / "presence_unsplit_sweep_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, default=str))
+    print(f"\nSaved sweep to {out_csv}")
+    print(f"Saved summary to {summary_path}")
+    if len(s_both_hits):
+        best = s_both_hits.iloc[0]
+        print(
+            f"\nBest S (p_mean + p_gain): g_s={best['g_s']}, d_s={best['d_s']}, "
+            f"p_mean={best['s_p_mean']:.4g}, p_gain={best['s_p_gain']:.4g}"
+        )
+    elif len(s_gain_hits):
+        best = s_gain_hits.iloc[0]
+        print(
+            f"\nBest S p_gain: g_s={best['g_s']}, d_s={best['d_s']}, "
+            f"p_gain={best['s_p_gain']:.4g}, p_mean={best['s_p_mean']:.4g}"
+        )
+    elif len(s_hits):
+        best = s_hits.iloc[0]
+        print(
+            f"\nBest S-significant: g_s={best['g_s']}, d_s={best['d_s']}, "
+            f"p_mean={best['s_p_mean']:.4g}"
+        )
+    else:
+        print("\nNo S-significant (g_s, d_s) pair found in grid.")
+    return df, summary
+
+
 def default_gs_tune_p_gain_grid(g_i_fit):
     """g_s values for p_gain tuning at fixed d_s."""
     return sorted(
@@ -3050,6 +3904,8 @@ def _population_prior_from_sessions(
     res_dir=None,
     splits=None,
     timeframe=None,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
 ):
     """Run distance pipeline on fixed trajectories; return prior metrics per population."""
     populations = tuple(populations)
@@ -3076,6 +3932,8 @@ def _population_prior_from_sessions(
                 populations=populations,
                 n_jobs=n_jobs,
                 contrast_matched_null=contrast_matched_null,
+                harris_unique_null=harris_unique_null,
+                extra_donor_dfs=extra_donor_dfs,
             )
             stack_combined_timeframes(res_dir, [timeframe])
         return {
@@ -3211,6 +4069,83 @@ def run_random_prior_label_test(
     return summary
 
 
+def _split_window_spec(split, population):
+    """Window / fill settings for one split × population (canonical 80 ms S cap)."""
+    align_kind = ALIGN.get(split, "stimOn_times")
+    pre, post = PRE_POST[split]
+    n_bins = split_n_bins(split)
+    use_fill = align_kind == "stimOn_times" and post > 0
+    if use_fill:
+        if population == "S" and _s_prior_distance_split(split):
+            eff_post = min(post, S_DURINGSTIM_WINDOW_S)
+        else:
+            eff_post = post
+        win_post_steps = int(round(eff_post * 1000.0 / DT_MS))
+        n_bins = int(round(eff_post / B_SIZE)) * max(1, int(B_SIZE // STS))
+    else:
+        win_post_steps = 0
+    return {
+        "split": split,
+        "align_kind": align_kind,
+        "pre": pre,
+        "post": post,
+        "n_bins": n_bins,
+        "use_fill": use_fill,
+        "win_post_steps": win_post_steps,
+    }
+
+
+def _bin_trial_for_split(df, ti, population, steps_before_obs, spec):
+    """Binned (n_channels, n_bins) window, or None if the trial is skipped.
+
+    Fill-from-next-ITI when the post-stim window overruns the trial; never
+    zero-pad. Same skip rule as the grouped ``build_population_b_for_split``.
+    """
+    row = df.iloc[ti]
+    trace = row["traces"][population]
+    n_df = len(df)
+    if spec["use_fill"]:
+        win_post_steps = spec["win_post_steps"]
+        n_bins = spec["n_bins"]
+        post_avail = max(0, row["length"] - steps_before_obs)
+        take_post = min(win_post_steps, post_avail)
+        if take_post < win_post_steps:
+            need = win_post_steps - take_post
+            ti_next = ti + 1
+            can_fill = (
+                ti_next < n_df
+                and df.iloc[ti_next]["trial_idx"] == row["trial_idx"] + 1
+                and min(steps_before_obs, df.iloc[ti_next]["length"]) >= need
+            )
+            if not can_fill:
+                return None
+            next_trace = df.iloc[ti_next]["traces"][population]
+            parts = []
+            if take_post > 0:
+                parts.append(trace[steps_before_obs : steps_before_obs + take_post])
+            parts.append(next_trace[:need])
+            combined = np.vstack(parts)
+            seg = bin_trace_segment(combined, 0, win_post_steps, n_bins)
+        else:
+            seg = bin_trace_segment(
+                trace, steps_before_obs, steps_before_obs + win_post_steps, n_bins
+            )
+    else:
+        bounds = window_step_bounds(
+            spec["align_kind"],
+            row["length"],
+            row["reaction_time"],
+            steps_before_obs,
+            spec["pre"],
+            spec["post"],
+        )
+        if bounds is None:
+            return None
+        s, e = bounds
+        seg = bin_trace_segment(trace, s, e, spec["n_bins"])
+    return seg.T
+
+
 def build_population_b_for_split(df, split, population, steps_before_obs):
     """Per-trial binned model trajectories for one population: (trials, 2, bins).
 
@@ -3221,71 +4156,22 @@ def build_population_b_for_split(df, split, population, steps_before_obs):
     different session or its ITI is too short to fill the gap, the trial is
     skipped (no zero-padding).
     """
-    align_kind = ALIGN.get(split, "stimOn_times")
-    pre, post = PRE_POST[split]
-    n_bins = split_n_bins(split)
     cond0, cond1 = trial_masks_for_split(df, split)
     idx0 = np.where(cond0)[0]
     idx1 = np.where(cond1)[0]
     if len(idx0) < 2 or len(idx1) < 2:
         return None
-
-    # Number of post-stim steps that the analysis window spans.
-    # S uses a shorter cap (S_DURINGSTIM_WINDOW_S) so that we only capture
-    # genuine stim-driven activity without borrowing large chunks of next-trial
-    # ITI at high contrast (where fast RTs leave most of the 150ms window empty).
-    use_fill = align_kind == "stimOn_times" and post > 0
-    if use_fill:
-        eff_post = min(post, S_DURINGSTIM_WINDOW_S) if population == "S" else post
-        win_post_steps = int(round(eff_post * 1000.0 / DT_MS))
-        n_bins = int(round(eff_post / B_SIZE)) * max(1, int(B_SIZE // STS))
-    else:
-        win_post_steps = 0
+    spec = _split_window_spec(split, population)
 
     def trials_to_stack(idxs):
         chunks = []
         contrasts = []
-        n_df = len(df)
         for ti in idxs:
-            row = df.iloc[ti]
-            trace = row["traces"][population]
-
-            if use_fill:
-                # Fill-from-next-ITI logic (mirrors model_functions.py).
-                post_avail = max(0, row["length"] - steps_before_obs)
-                take_post = min(win_post_steps, post_avail)
-
-                if take_post < win_post_steps:
-                    need = win_post_steps - take_post
-                    ti_next = ti + 1
-                    can_fill = (
-                        ti_next < n_df
-                        and df.iloc[ti_next]["trial_idx"] == row["trial_idx"] + 1
-                        and min(steps_before_obs, df.iloc[ti_next]["length"]) >= need
-                    )
-                    if not can_fill:
-                        continue  # skip rather than zero-pad
-                    next_trace = df.iloc[ti_next]["traces"][population]
-                    parts = []
-                    if take_post > 0:
-                        parts.append(trace[steps_before_obs : steps_before_obs + take_post])
-                    parts.append(next_trace[:need])
-                    combined = np.vstack(parts)  # (win_post_steps, 2)
-                    seg = bin_trace_segment(combined, 0, win_post_steps, n_bins)
-                else:
-                    seg = bin_trace_segment(trace, steps_before_obs, steps_before_obs + win_post_steps, n_bins)
-            else:
-                # Non-stim-aligned or pre-action window: clipped logic.
-                bounds = window_step_bounds(
-                    align_kind, row["length"], row["reaction_time"], steps_before_obs, pre, post
-                )
-                if bounds is None:
-                    continue
-                s, e = bounds
-                seg = bin_trace_segment(trace, s, e, n_bins)
-
-            chunks.append(seg.T)
-            contrasts.append(_trial_contrast_value(row, split))
+            seg_t = _bin_trial_for_split(df, ti, population, steps_before_obs, spec)
+            if seg_t is None:
+                continue
+            chunks.append(seg_t)
+            contrasts.append(_trial_contrast_value(df.iloc[ti], split))
         if not chunks:
             return None, None
         return np.stack(chunks, axis=0), np.asarray(contrasts, dtype=float)
@@ -3295,6 +4181,182 @@ def build_population_b_for_split(df, split, population, steps_before_obs):
     if b0 is None or b1 is None:
         return None
     return np.concatenate([b0, b1], axis=0), len(b0), np.concatenate([c0, c1])
+
+
+def build_population_b_temporal_for_split(df, split, population, steps_before_obs):
+    """Eligible trials in session order: (b, ys_true) or None.
+
+    ``ys_true`` is high-prior (p ≥ 0.5) on the same trials that enter ``b``.
+    Fill-skip matches ``build_population_b_for_split`` so the trial set is the
+    same; only the row order differs (temporal vs high-then-low).
+    """
+    spec = _split_window_spec(split, population)
+    elig = np.flatnonzero(split_fixed_condition_mask(df, split))
+    pcol = prior_column_for_split(split)
+    chunks = []
+    labels = []
+    for ti in elig:
+        seg_t = _bin_trial_for_split(df, ti, population, steps_before_obs, spec)
+        if seg_t is None:
+            continue
+        chunks.append(seg_t)
+        labels.append(bool(df.iloc[ti][pcol] >= 0.5))
+    if len(chunks) < 4:
+        return None
+    ys = np.asarray(labels, dtype=bool)
+    if int(ys.sum()) < HARRIS_MIN_TRIALS_PER_SIDE or int((~ys).sum()) < HARRIS_MIN_TRIALS_PER_SIDE:
+        return None
+    return np.stack(chunks, axis=0), ys
+
+
+def _harris_label_key(ys):
+    return np.asarray(ys, dtype=np.uint8).tobytes()
+
+
+def _ys_from_stratum_labels(labels, mask, n_elig, rng):
+    """Length-``n_elig`` boolean prior labels from a stratum (contiguous window)."""
+    labels = np.asarray(labels, dtype=bool).reshape(-1)
+    idx = np.flatnonzero(np.asarray(mask, dtype=bool))
+    if len(idx) < n_elig:
+        return None
+    if len(idx) > n_elig:
+        start = int(rng.integers(0, len(idx) - n_elig + 1))
+        idx = idx[start : start + n_elig]
+    return labels[idx]
+
+
+def _donor_stratum_prior_labels(df, split):
+    """Full-session prior-high labels and stratum mask (stim×choice, stim-side, or choice-side)."""
+    pcol = prior_column_for_split(split)
+    labels = np.asarray(df[pcol].values >= 0.5, dtype=bool)
+    mask = np.asarray(split_fixed_condition_mask(df, split), dtype=bool)
+    return labels, mask
+
+
+def _harris_donor_bank(session_dfs, split, extra_donor_dfs=None):
+    """Observed sessions as leave-one-out donors, plus optional extra eids."""
+    bank = {}
+    for i, df in enumerate(session_dfs):
+        bank[f"obs{i}"] = _donor_stratum_prior_labels(df, split)
+    for j, df in enumerate(extra_donor_dfs or []):
+        bank[f"x{j}"] = _donor_stratum_prior_labels(df, split)
+    return bank
+
+
+def _distance_curve_from_labels(b, ys, min_side=HARRIS_MIN_TRIALS_PER_SIDE):
+    ys = np.asarray(ys, dtype=bool)
+    if int(ys.sum()) < min_side or int((~ys).sum()) < min_side:
+        return None
+    m0 = b[ys].mean(axis=0)
+    m1 = b[~ys].mean(axis=0)
+    return np.sum((m0 - m1) ** 2, axis=0), m0, m1
+
+
+def compute_harris_unique_distances(session_payloads, donor_bank, nrand, rng):
+    """Pooled observed distance; unique Harris nulls from other-session priors.
+
+    Each recipient session keeps its neural ``b``. Null labels are donor prior
+    sequences from the same split stratum, length-matched with a contiguous
+    window (``_ys_from_stratum_labels``). Only distinct concatenated label
+    patterns are kept (harris_unique).
+    """
+    if isinstance(rng, np.random.RandomState):
+        rng = np.random.default_rng(int(rng.randint(0, 2**31 - 1)))
+
+    kept = []
+    n_no_donor = 0
+    for rec in session_payloads:
+        n_elig = int(rec["b"].shape[0])
+        eid = rec["eid"]
+        cands = []
+        n_short = 0
+        for deid, (lab, mask) in donor_bank.items():
+            if deid == eid:
+                continue
+            if int(np.asarray(mask).sum()) < n_elig:
+                n_short += 1
+                continue
+            cands.append((lab, mask))
+        if not cands:
+            n_no_donor += 1
+            continue
+        kept.append({**rec, "candidates": cands, "n_short_donors": n_short})
+
+    if not kept:
+        return None
+
+    b = np.concatenate([r["b"] for r in kept], axis=0)
+    ys_true = np.concatenate([r["ys"] for r in kept])
+    obs = _distance_curve_from_labels(b, ys_true)
+    if obs is None:
+        return None
+    d_true, m0_true, m1_true = obs
+
+    def _ok(ys):
+        return (
+            ys is not None
+            and int(ys.sum()) >= HARRIS_MIN_TRIALS_PER_SIDE
+            and int((~ys).sum()) >= HARRIS_MIN_TRIALS_PER_SIDE
+        )
+
+    null_curves = []
+    seen = {_harris_label_key(ys_true)}
+    n_done = 0
+    n_tries = 0
+    n_stale = 0
+    max_tries_total = max(nrand * HARRIS_MAX_TRIES, HARRIS_MAX_TRIES)
+    stale_limit = max(HARRIS_UNIQUE_STALE_LIMIT, nrand)
+    n_stratum_donors = int(np.mean([len(r["candidates"]) for r in kept]))
+
+    while n_done < nrand and n_stale < stale_limit:
+        n_tries += 1
+        parts = []
+        ok_draw = True
+        for rec in kept:
+            n_elig = int(rec["b"].shape[0])
+            cands = rec["candidates"]
+            lab, mask = cands[int(rng.integers(0, len(cands)))]
+            ys = _ys_from_stratum_labels(lab, mask, n_elig, rng)
+            if not _ok(ys):
+                ok_draw = False
+                break
+            parts.append(ys)
+        if not ok_draw:
+            n_stale += 1
+            if n_done == 0 and n_tries >= max_tries_total:
+                return None
+            continue
+        ys_null = np.concatenate(parts)
+        if not _ok(ys_null):
+            n_stale += 1
+            continue
+        key = _harris_label_key(ys_null)
+        if key in seen:
+            n_stale += 1
+            continue
+        dist = _distance_curve_from_labels(b, ys_null)
+        if dist is None:
+            n_stale += 1
+            continue
+        seen.add(key)
+        n_stale = 0
+        null_curves.append(dist[0])
+        n_done += 1
+
+    if n_done == 0:
+        return None
+
+    d_eucs = np.stack([d_true, *null_curves], axis=0)
+    return {
+        "d_eucs": d_eucs,
+        "ws": np.stack([m0_true, m1_true], axis=0),
+        "harris_n_unique_nulls": int(n_done),
+        "harris_n_sessions_kept": int(len(kept)),
+        "harris_n_sessions_skipped": int(n_no_donor),
+        "harris_n_stratum_donors_mean": float(n_stratum_donors),
+        "harris_n_tries": int(n_tries),
+        "null_scheme": "harris_session_permutation_unique",
+    }
 
 
 def _null_shuffle_executor(n_workers):
@@ -3445,6 +4507,64 @@ def build_split_results(
     return r, regde, regxn
 
 
+def build_split_results_harris_unique(
+    session_dfs,
+    split,
+    steps_before_obs,
+    nrand,
+    rng,
+    populations=None,
+    extra_donor_dfs=None,
+):
+    """Prior distance with Harris unique-null (act_block analog) on one split."""
+    populations = populations or MODEL_POPULATIONS
+    donor_bank = _harris_donor_bank(session_dfs, split, extra_donor_dfs=extra_donor_dfs)
+    regde = {}
+    regxn = {}
+    r = {}
+    for pop in populations:
+        payloads = []
+        for i, df in enumerate(session_dfs):
+            built = build_population_b_temporal_for_split(
+                df, split, pop, steps_before_obs
+            )
+            if built is None:
+                continue
+            b, ys = built
+            payloads.append({"eid": f"obs{i}", "b": b, "ys": ys})
+        if not payloads:
+            continue
+        dist = compute_harris_unique_distances(payloads, donor_bank, nrand, rng)
+        if dist is None:
+            print(f"    harris-null [{split}/{pop}]: no balanced unique donor draws; skip")
+            continue
+        d_eucs = np.asarray(dist["d_eucs"], dtype=float) / B_SIZE
+        regde[pop] = d_eucs
+        regxn[pop] = None
+        res = _metrics_from_regde(d_eucs, split)
+        res["ws"] = dist["ws"]
+        res["null_scheme"] = dist["null_scheme"]
+        res["harris_n_unique_nulls"] = dist["harris_n_unique_nulls"]
+        res["harris_n_sessions_kept"] = dist["harris_n_sessions_kept"]
+        res["harris_n_sessions_skipped"] = dist["harris_n_sessions_skipped"]
+        res["harris_n_stratum_donors_mean"] = dist["harris_n_stratum_donors_mean"]
+        r[pop] = res
+        sat = (
+            f" (saturated {dist['harris_n_unique_nulls']}/{nrand})"
+            if dist["harris_n_unique_nulls"] < nrand
+            else ""
+        )
+        print(
+            f"    harris-null [{split}/{pop}]: unique={dist['harris_n_unique_nulls']}"
+            f"{sat}, kept={dist['harris_n_sessions_kept']}, "
+            f"skipped={dist['harris_n_sessions_skipped']}, "
+            f"donors≈{dist['harris_n_stratum_donors_mean']:.0f}"
+        )
+    if not r:
+        return None
+    return r, regde, regxn
+
+
 def s_prior_splits():
     """Splits for S act_block_duringstim prior distance (subjective prior grouping)."""
     import analysis_functions as af
@@ -3457,9 +4577,77 @@ def s_prior_splits_unsplit():
     return list(UNSPLIT_PRIOR_SPLITS)
 
 
+def m_prior_splits_unsplit():
+    """Duringchoice trials pooled per choice side (no stim / f1/f2 splits)."""
+    return list(UNSPLIT_CHOICE_PRIOR_SPLITS)
+
+
 def s_prior_splits_fully_unsplit():
     """All duringstim trials in one pool (no stim side or choice×feedback splits)."""
     return [FULLY_UNSPLIT_PRIOR_SPLIT]
+
+
+def _unsplit_analysis_jobs(fully, populations):
+    """(pops, splits, timeframe) jobs: S/I stim-aligned; M move-aligned choice strata."""
+    populations = tuple(populations)
+    if fully:
+        return [
+            (populations, s_prior_splits_fully_unsplit(), FULLY_UNSPLIT_PRIOR_TIMEFRAME)
+        ]
+    stim_set = set(UNSPLIT_STIM_POPS)
+    move_set = set(UNSPLIT_MOVE_POPS)
+    stim_pops = tuple(p for p in populations if p in stim_set)
+    move_pops = tuple(p for p in populations if p in move_set)
+    other = tuple(p for p in populations if p not in stim_set and p not in move_set)
+    if other:
+        stim_pops = stim_pops + other
+    jobs = []
+    if stim_pops:
+        jobs.append((stim_pops, s_prior_splits_unsplit(), UNSPLIT_PRIOR_TIMEFRAME))
+    if move_pops:
+        jobs.append(
+            (move_pops, m_prior_splits_unsplit(), UNSPLIT_CHOICE_PRIOR_TIMEFRAME)
+        )
+    return jobs
+
+
+def _unsplit_priors_from_sessions(
+    session_dfs,
+    steps_before_obs,
+    nrand,
+    rng_seed,
+    prior_column,
+    populations,
+    n_jobs=1,
+    contrast_matched_null=True,
+    res_dir=None,
+    fully=False,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
+):
+    """S/I on stim-aligned stim strata; M on move-aligned choice strata (unless fully)."""
+    priors = {}
+    all_splits = []
+    jobs = _unsplit_analysis_jobs(fully, populations)
+    for pops, splits, timeframe in jobs:
+        all_splits.extend(splits)
+        part, res_dir = _population_prior_from_sessions(
+            session_dfs,
+            steps_before_obs,
+            nrand,
+            rng_seed,
+            prior_column,
+            pops,
+            n_jobs=n_jobs,
+            contrast_matched_null=contrast_matched_null,
+            res_dir=res_dir,
+            splits=splits,
+            timeframe=timeframe,
+            harris_unique_null=harris_unique_null,
+            extra_donor_dfs=extra_donor_dfs,
+        )
+        priors.update(part)
+    return priors, res_dir, all_splits, jobs
 
 
 def _splits_for_timeframe(timeframe):
@@ -3480,12 +4668,38 @@ def build_res_from_trajectories(
     populations=None,
     n_jobs=1,
     contrast_matched_null=True,
+    harris_unique_null=False,
+    extra_donor_dfs=None,
 ):
     """Write per-split res files by pooling trials across simulated sessions."""
     pth_res.mkdir(parents=True, exist_ok=True)
-    all_df = pd.concat(session_dfs, ignore_index=True)
     n_saved = 0
     t0 = time.perf_counter()
+    if harris_unique_null:
+        for i, split in enumerate(splits):
+            out = build_split_results_harris_unique(
+                session_dfs,
+                split,
+                steps_before_obs,
+                nrand,
+                rng,
+                populations=populations,
+                extra_donor_dfs=extra_donor_dfs,
+            )
+            if out is None:
+                continue
+            r, regde, regxn = out
+            np.save(pth_res / f"{split}_regde.npy", regde, allow_pickle=True)
+            np.save(pth_res / f"{split}_regxn.npy", regxn, allow_pickle=True)
+            np.save(pth_res / f"{split}.npy", r, allow_pickle=True)
+            n_saved += 1
+            print(
+                f"    split {i + 1}/{len(splits)} ({split}) — "
+                f"{time.perf_counter() - t0:.1f}s"
+            )
+        return n_saved
+
+    all_df = pd.concat(session_dfs, ignore_index=True)
     for i, split in enumerate(splits):
         out = build_split_results(
             all_df,
@@ -3518,39 +4732,105 @@ def collect_all_splits():
     return sorted(splits)
 
 
+def _add_null_curve_stacks(existing, incoming):
+    """Sum null-curve stacks, truncating to min unique count if ragged."""
+    existing = np.asarray(existing)
+    incoming = np.asarray(incoming)
+    if existing.size == 0:
+        return incoming
+    if incoming.size == 0:
+        return existing
+    n = min(existing.shape[0], incoming.shape[0])
+    return existing[:n] + incoming[:n]
+
+
+def _combine_split_null_stacks(stacks, rng_seed=0, n_mc_min=2000):
+    """Average observed curves; combine nulls (aligned sum or product-MC).
+
+    ``stacks`` is a list of ``(obs, nulls)`` with ``nulls`` shape ``(U, T)``.
+    Equal ``U`` → index-aligned mean (contrast-matched / full unique Harris).
+    Ragged ``U`` → product-MC with ``n_mc = max(min(U), n_mc_min)``, matching
+    real-data Harris combine (``plot_choice_null_comparison_table`` 2026-07-27).
+    Splits with zero nulls are dropped.
+    """
+    usable = []
+    for obs, nulls in stacks:
+        nulls = np.asarray(nulls)
+        if nulls.ndim == 1:
+            nulls = nulls.reshape(1, -1)
+        if nulls.size == 0 or nulls.shape[0] < 1:
+            continue
+        usable.append((np.asarray(obs, dtype=float), nulls.astype(float)))
+    if not usable:
+        return None
+    n_split = len(usable)
+    obs = np.sum([o for o, _ in usable], axis=0) / n_split
+    null_counts = [n.shape[0] for _, n in usable]
+    if len(set(null_counts)) == 1:
+        nulls = np.sum([n for _, n in usable], axis=0) / n_split
+        return obs, nulls
+    n_mc = max(int(min(null_counts)), int(n_mc_min))
+    T = obs.shape[0]
+    rng = np.random.default_rng(int(rng_seed) & 0xFFFFFFFF)
+    out = np.zeros((n_mc, T), dtype=float)
+    for k in range(n_mc):
+        acc = np.zeros(T, dtype=float)
+        for _, n in usable:
+            acc += n[int(rng.integers(0, n.shape[0]))]
+        out[k] = acc / n_split
+    return obs, out
+
+
 def stack_combined_timeframes(pth_res, timeframes):
     """Build combined_{splits}.npy and combined_regde_{splits}.npy per timeframe."""
     for timeframe in timeframes:
         splits = _splits_for_timeframe(timeframe)
         if not splits:
             continue
-        combined_regde = {}
-        combined_regxn = {}
+        per_reg_stacks = {}
+        per_reg_xn_stacks = {}
+        n_stacked = 0
         for split in splits:
             regde_path = pth_res / f"{split}_regde.npy"
             regxn_path = pth_res / f"{split}_regxn.npy"
             if not regde_path.exists():
                 continue
+            n_stacked += 1
             split_regde = np.load(regde_path, allow_pickle=True).item()
             split_regxn = np.load(regxn_path, allow_pickle=True).item() if regxn_path.exists() else {}
             for reg, curves in split_regde.items():
-                if reg not in combined_regde:
-                    combined_regde[reg] = [curves[0], np.array(curves[1:])]
-                else:
-                    combined_regde[reg][0] = combined_regde[reg][0] + curves[0]
-                    combined_regde[reg][1] = combined_regde[reg][1] + np.array(curves[1:])
+                obs = np.asarray(curves[0], dtype=float)
+                nulls = np.asarray(curves[1:])
+                per_reg_stacks.setdefault(reg, []).append((obs, nulls))
             for reg, curves in split_regxn.items():
                 if curves is None:
                     continue
-                if reg not in combined_regxn:
-                    combined_regxn[reg] = [curves[0], np.array(curves[1:]) if len(curves) > 1 else np.empty((0, len(curves[0])))]
-                else:
-                    combined_regxn[reg][0] = combined_regxn[reg][0] + curves[0]
-                    if len(curves) > 1:
-                        combined_regxn[reg][1] = combined_regxn[reg][1] + np.array(curves[1:])
+                obs = np.asarray(curves[0], dtype=float)
+                nulls = (
+                    np.asarray(curves[1:])
+                    if len(curves) > 1
+                    else np.empty((0, len(curves[0])))
+                )
+                per_reg_xn_stacks.setdefault(reg, []).append((obs, nulls))
 
-        if not combined_regde:
+        if not per_reg_stacks:
             continue
+
+        combined_regde = {}
+        for reg, stacks in per_reg_stacks.items():
+            seed = int.from_bytes(hashlib.md5(f"{timeframe}|{reg}".encode()).digest()[:8], "little")
+            combined = _combine_split_null_stacks(stacks, rng_seed=seed)
+            if combined is None:
+                continue
+            combined_regde[reg] = [combined[0], combined[1]]
+
+        combined_regxn = {}
+        for reg, stacks in per_reg_xn_stacks.items():
+            seed = int.from_bytes(hashlib.md5(f"{timeframe}|xn|{reg}".encode()).digest()[:8], "little")
+            combined = _combine_split_null_stacks(stacks, rng_seed=seed)
+            if combined is None:
+                continue
+            combined_regxn[reg] = [combined[0], combined[1]]
 
         r = {}
         pre0, post0 = PRE_POST.get(splits[0], [0.4, -0.1])
@@ -3691,85 +4971,6 @@ def _load_combined_results(pth_res, combined):
         }
         for reg, row in df.iterrows()
     }
-
-
-def load_population_features(pth_res):
-    """Amp/d_euc features per population across focused timeframes."""
-    timeframes = SC_TIMES + TIMING_SPLITS
-    features = {pop: {} for pop in MODEL_POPULATIONS}
-    for tf in timeframes:
-        combined, regde_name, _ = _combined_names(tf)
-        d = _load_combined_results(pth_res, combined)
-        if d is None:
-            continue
-        regde_path = pth_res / f"{regde_name}.npy"
-        regde = np.load(regde_path, allow_pickle=True).item() if regde_path.exists() else {}
-        for pop in MODEL_POPULATIONS:
-            if pop not in d:
-                continue
-            entry = {
-                "amp_euc": float(d[pop]["amp_euc"]),
-                "p_euc": float(d[pop].get("p_euc", np.nan)),
-                "lat_euc": float(d[pop].get("lat_euc", np.nan)),
-            }
-            if pop in regde:
-                real, nulls = regde[pop]
-                nulls = np.atleast_2d(np.asarray(nulls, dtype=float))
-                real = np.asarray(real, dtype=float)
-                entry["prior_real"] = real
-                entry["prior_null_mean"] = np.mean(nulls, axis=0)
-            features[pop][tf] = entry
-    return features
-
-
-def classify_populations(features):
-    """
-    Population-specific classifier for the three circuit populations.
-
-    Uses competitive assignment on timing-specific signatures:
-    - M: max choice_duringchoice_act (movement-aligned coding)
-    - S: max act_block_duringstim among remaining (sensory block prior)
-    - I: remaining population (integrator)
-    """
-    rows = []
-    recovered = {t: [] for t in ("S", "I", "M")}
-    sim_pops = [p for p in MODEL_POPULATIONS if p != "P"]
-
-    block_stim = {
-        p: features[p].get("act_block_duringstim", {}).get("amp_euc", 0.0) for p in sim_pops
-    }
-    choice_dc = {
-        p: features[p].get("choice_duringchoice_act", {}).get("amp_euc", 0.0) for p in sim_pops
-    }
-
-    m_pop = max(sim_pops, key=lambda p: choice_dc[p])
-    remaining = [p for p in sim_pops if p != m_pop]
-    s_pop = max(remaining, key=lambda p: block_stim[p])
-    i_pop = next(p for p in remaining if p != s_pop)
-
-    pred_map = {m_pop: "M", s_pop: "S", i_pop: "I", "P": "P"}
-
-    for pop in MODEL_POPULATIONS:
-        pred = pred_map[pop]
-        true_t = POPULATION_TYPE[pop]
-        if pop in recovered and pred in recovered:
-            recovered[pred].append(pop)
-        rows.append(
-            {
-                "region": pop,
-                "true": true_t,
-                "pred": pred,
-                "correct": pred == true_t,
-                "block_stim_amp": float(block_stim.get(pop, np.nan)),
-                "choice_duringchoice_amp": float(choice_dc.get(pop, np.nan)),
-            }
-        )
-
-    df = pd.DataFrame(rows)
-    sim = df[df["true"].isin(["S", "I", "M"])]
-    acc = float(sim["correct"].mean()) if len(sim) else 0.0
-    cm = pd.crosstab(sim["true"], sim["pred"], dropna=False) if len(sim) else pd.DataFrame()
-    return recovered, df, cm, acc
 
 
 def _prior_offset_stats(real, nulls, n_early=PRIOR_OFFSET_BINS):
@@ -4032,6 +5233,7 @@ def run_absence_pres_abs_null(
             blocks_per_session,
             max_obs_per_trial,
             rep_seed,
+            use_cache=False,  # high seed cardinality: skip cache to avoid bloat
         )
         with tempfile.TemporaryDirectory() as td:
             res_dir = Path(td)
@@ -4453,42 +5655,128 @@ def population_prior_tests(pth_res, alpha=0.01):
     return pd.DataFrame(rows)
 
 
-def classify_regions(sc_table, af, alpha=0.01, ptype="p_mean_c"):
+def _combined_split_name(af, timeframe):
+    splits = af.run_align[timeframe]
+    return splits[0] if len(splits) == 1 else "combined_" + "_".join(splits)
+
+
+def _raw_sc_feature_table(pth_res, af, alpha=0.01, ptype="p_mean_c"):
+    """
+    Per-region stim/choice decorrelation amplitudes and movement-shape features,
+    without masking by prior (or any) significance — used only for functional
+    S/I/M assignment on model populations.
+    """
+    if "act" in SC_TIMES[0]:
+        stim_short, stim_early = "stim_duringstim_short_act", "stim_duringstim1_act"
+    else:
+        stim_short, stim_early = "stim_duringstim_short", "stim_duringstim1"
+
+    load_times = list(SC_TIMES) + [stim_short, stim_early]
+    frames = {}
+    for time in load_times:
+        split_name = _combined_split_name(af, time)
+        df = af.manifold_to_csv(split_name, alpha, ptype).set_index("region")
+        frames[time] = df
+
+    regions = frames[load_times[0]].index.tolist()
+    out = pd.DataFrame(index=regions)
+    for time in load_times:
+        out[f"amp_{time}"] = frames[time].reindex(regions)["amp_euc"].fillna(0.0)
+
+    # movement-shape features from choice-aligned during-choice split
+    cc = frames["choice_duringchoice_act"].reindex(regions)
+    out["slope_last"] = cc["slope_last"].fillna(0.0)
+    out["amp_last5_is_global_max"] = cc["amp_last5_is_global_max"].fillna(0).astype(int)
+    out["amp_slope_pos"] = (cc["amp_slope"].fillna(0.0) > 0).astype(int)
+    return out, stim_short, stim_early
+
+
+def classify_regions(pth_res, af, alpha=0.01, ptype="p_mean_c", sigma_stim_thresh=0.8):
+    """
+    BWM functional classification for S/I/M model populations from decorrelated
+    stimulus / choice sensitivity only (no prior significance, no block splits).
+
+    Model prior population P is excluded — it is not assigned a stimulus /
+    integrator / movement functional type.
+
+    Implements the paper definitions via the same ratios as ``get_sc_table``:
+      Σ^stim,s  high  ↔ sc_duringstim low  (stimulus processors)
+      Σ^stim,s' high  ↔ loose early-stim criterion
+      Σ^stim,m  low + pre-movement monotonicity  ↔ movement initiators
+      otherwise (with stim/choice coding)  ↔ integrator/choice processors
+
+    Returns (recovered, metrics_df) where recovered maps functional type
+    {'S','I','M'} → list of population names.
+    """
+    amps, stim_short, stim_early = _raw_sc_feature_table(pth_res, af, alpha, ptype)
+    amps = amps.loc[[p for p in SIM_POPULATIONS if p in amps.index]]
+
+    stim_s = amps["amp_stim_duringstim_act"]
+    choice_s = amps["amp_choice_duringstim_act"]
+    stim_short_a = amps[f"amp_{stim_short}"]
+    stim_early_a = amps[f"amp_{stim_early}"]
+    stim_m = amps["amp_stim_duringchoice_act"]
+    choice_m = amps["amp_choice_duringchoice_act"]
+
+    denom_s = stim_s + choice_s + stim_short_a + stim_early_a
+    sc_duringstim = choice_s / denom_s.replace(0, np.nan)
+    denom_s0 = stim_s + choice_s + stim_short_a
+    sc_duringstim0 = choice_s / denom_s0.replace(0, np.nan)
+    sigma_stim_s = 1.0 - sc_duringstim
+
+    denom_m = stim_m + choice_m
+    sc_duringchoice = choice_m / denom_m.replace(0, np.nan)
+    sigma_stim_m = 1.0 - sc_duringchoice
+
+    # Pre-movement monotonicity (choice-aligned during-choice ramp).
+    monotonicity = (
+        (amps["amp_last5_is_global_max"] == 1) & (amps["slope_last"] > 0)
+    ).astype(int)
+
+    stim_strict = sigma_stim_s > sigma_stim_thresh
+    stim_loose = (sigma_stim_s > sigma_stim_thresh) | (
+        (sc_duringstim0 < (1.0 - sigma_stim_thresh)) & (stim_early_a > 0)
+    )
+    is_stim = stim_strict | stim_loose
+
+    is_move = (sigma_stim_m <= sigma_stim_thresh) & (monotonicity == 1)
+    has_coding = (denom_s > 0) | (denom_m > 0)
+
     recovered = {t: [] for t in ("S", "I", "M")}
-    stim_regs = af.plot_combined_onetype(
-        SC_TIMES,
-        "stim",
-        ["act_block_duringstim"],
-        ptype=ptype,
-        alpha=alpha,
-        combined_p=True,
-        n=72,
-        sc_threshold=0.0,
-    )
-    int_regs = af.plot_combined_onetype(
-        SC_TIMES,
-        "integrator",
-        ["act_block_duringstim", "act_block_duringchoice"],
-        ptype=ptype,
-        alpha=alpha,
-        combined_p=True,
-        n=72,
-        sc_threshold=0.0,
-    )
-    move_regs = af.plot_combined_onetype(
-        SC_TIMES,
-        "move",
-        ["act_block_duringstim", "act_block_duringchoice"],
-        ptype=ptype,
-        alpha=alpha,
-        combined_p=True,
-        n=72,
-        sc_threshold=0.0,
-    )
-    recovered["S"] = stim_regs
-    recovered["I"] = int_regs
-    recovered["M"] = move_regs
-    return recovered
+    rows = []
+    for reg in amps.index:
+        true_t = POPULATION_TYPE.get(reg, reg)
+        if is_stim.get(reg, False):
+            ftype, pred = "stimulus", "S"
+        elif is_move.get(reg, False):
+            ftype, pred = "movement", "M"
+        elif has_coding.get(reg, False) and (
+            sigma_stim_s.get(reg, 1.0) <= sigma_stim_thresh
+            or sigma_stim_m.get(reg, 1.0) <= sigma_stim_thresh
+        ):
+            ftype, pred = "integrator", "I"
+        else:
+            ftype, pred = "unassigned", "none"
+        if pred in recovered:
+            recovered[pred].append(reg)
+        rows.append(
+            {
+                "region": reg,
+                "true": true_t,
+                "pred": pred,
+                "correct": pred == true_t,
+                "functional_type": ftype,
+                "sigma_stim_s": float(sigma_stim_s.get(reg, np.nan)),
+                "sigma_stim_s_loose": bool(stim_loose.get(reg, False)),
+                "sigma_stim_m": float(sigma_stim_m.get(reg, np.nan)),
+                "monotonicity": int(monotonicity.get(reg, 0)),
+                "sc_duringstim": float(sc_duringstim.get(reg, np.nan)),
+                "sc_duringchoice": float(sc_duringchoice.get(reg, np.nan)),
+            }
+        )
+
+    metrics_df = pd.DataFrame(rows)
+    return recovered, metrics_df
 
 
 def prior_modulation_table(pth_res, regions_by_type, timeframe="act_block_duringstim", ptype="p_mean_c"):
@@ -4741,6 +6029,71 @@ def plot_s_prior_curve(condition, s_prior, fig_dir, prior_label=""):
     plt.close(fig)
 
 
+def plot_bwm_decorrelation_curves(
+    res_dir,
+    fig_dir,
+    condition,
+    populations=("S", "I", "M"),
+    panels=None,
+):
+    """
+    Four-panel BWM decorrelation curves (d^stim,s, d^choice,s, d^stim,se, d^stim,se').
+
+    Each panel uses independent axes (no sharex/sharey) and per-population time
+  axes derived from actual curve length.
+    """
+    import analysis_functions as af
+
+    panels = panels or BWM_DECORR_PANELS
+    res_dir = Path(res_dir)
+    fig_dir = Path(fig_dir)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    pop_colors = {"S": "C0", "I": "C1", "M": "C2", "P": "C3"}
+
+    def _load_curve(timeframe, pop):
+        splits = af.run_align[timeframe]
+        regde_name = "combined_regde_" + "_".join(splits)
+        regde_path = res_dir / f"{regde_name}.npy"
+        if not regde_path.exists():
+            return None, splits[0]
+        regde = np.load(regde_path, allow_pickle=True).item()
+        if pop not in regde or not len(regde[pop]):
+            return None, splits[0]
+        return np.asarray(regde[pop][0], dtype=float), splits[0]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    for ax, (timeframe, title) in zip(axes.ravel(), panels):
+        for pop in populations:
+            curve, ref_split = _load_curve(timeframe, pop)
+            if curve is None:
+                continue
+            t = time_axis_for_split(ref_split, len(curve))
+            ax.plot(
+                t,
+                curve,
+                color=pop_colors.get(pop, "gray"),
+                lw=1.8,
+                label=pop,
+            )
+        _mark_align_event(ax, af.run_align[timeframe][0])
+        ax.set_title(f"{title}\n({timeframe})", fontsize=9)
+        ax.set_xlabel(_time_xlabel(af.run_align[timeframe][0]))
+        ax.set_ylabel(r"$d_{euc}$")
+        ax.legend(fontsize=8, loc="best")
+
+    fig.suptitle(
+        f"BWM decorrelation curves ({condition}) — populations {', '.join(populations)}",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    pops_tag = "".join(populations)
+    out = fig_dir / f"sim_duringstim_stim_choice_d_euc_{pops_tag}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def plot_recovery_figures(
     condition,
     pth_res,
@@ -4749,8 +6102,7 @@ def plot_recovery_figures(
     cm,
     prior_df,
     regde_stim,
-    pop_class_df=None,
-    pop_cm=None,
+    bwm_metrics_df=None,
     s_prior=None,
 ):
     fig_dir.mkdir(parents=True, exist_ok=True)
@@ -4759,13 +6111,8 @@ def plot_recovery_figures(
         plot_s_prior_curve(condition, s_prior, fig_dir)
         plot_s_shuffle_control(condition, s_prior, fig_dir)
 
-    # Population-specific confusion matrix (preferred)
-    use_cm = pop_cm if pop_cm is not None and len(pop_cm) else cm
-    use_df = pop_class_df if pop_class_df is not None and len(pop_class_df) else class_df
-    cm_title = "Population classifier" if pop_cm is not None and len(pop_cm) else "BWM classifier"
-
     fig, ax = plt.subplots(figsize=(5, 4))
-    cm_vals = use_cm.reindex(index=["S", "I", "M"], columns=["S", "I", "M", "none"], fill_value=0)
+    cm_vals = cm.reindex(index=["S", "I", "M"], columns=["S", "I", "M", "none"], fill_value=0)
     im = ax.imshow(cm_vals.values, cmap="Blues")
     ax.set_xticks(range(len(cm_vals.columns)))
     ax.set_yticks(range(len(cm_vals.index)))
@@ -4773,7 +6120,7 @@ def plot_recovery_figures(
     ax.set_yticklabels(cm_vals.index)
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
-    ax.set_title(f"Classification recovery ({condition}) — {cm_title}")
+    ax.set_title(f"Classification recovery ({condition}) — BWM classifier")
     for i in range(cm_vals.shape[0]):
         for j in range(cm_vals.shape[1]):
             ax.text(j, i, int(cm_vals.values[i, j]), ha="center", va="center")
@@ -4785,16 +6132,24 @@ def plot_recovery_figures(
     # Prior distance curves for S/I/M groups (act_block_duringstim combined)
     if regde_stim:
         ref_split = s_prior_splits()[0] if s_prior is None else s_prior.get("ref_split", s_prior_splits()[0])
-        t_stim = time_axis_for_split(ref_split, len(next(iter(regde_stim.values()))[0]))
         fig, ax = plt.subplots(figsize=(7, 4))
         for gtype, color in zip(["S", "I", "M"], ["C0", "C1", "C2"]):
             regs = [r for r, t in POPULATION_TYPE.items() if t == gtype and r in regde_stim]
             if not regs:
                 continue
             curves = [regde_stim[r][0] for r in regs if len(regde_stim[r])]
-            if curves:
-                mean_c = np.mean(curves, axis=0)
-                ax.plot(t_stim, mean_c, label=f"{gtype} (n={len(curves)})", color=color)
+            if not curves:
+                continue
+            # Populations can use different post-stim windows (canonical S=80ms
+            # => fewer bins; I/M=150ms), so pool only same-length curves and
+            # build the time axis per group rather than from one arbitrary region.
+            L = len(curves[0])
+            curves = [c for c in curves if len(c) == L]
+            mean_c = np.mean(curves, axis=0)
+            axis_split = (ref_split + "_short"
+                          if (gtype == "S" and "short" not in ref_split) else ref_split)
+            t = time_axis_for_split(axis_split, L)
+            ax.plot(t, mean_c, label=f"{gtype} (n={len(curves)})", color=color)
         _mark_align_event(ax, ref_split)
         ax.set_xlabel(_time_xlabel(ref_split))
         ax.set_ylabel("Prior distance (d_euc)")
@@ -4815,10 +6170,18 @@ def plot_recovery_figures(
         fig.savefig(fig_dir / "prior_modulation_table.png", dpi=150)
         plt.close(fig)
 
-    use_df.to_csv(fig_dir / "classification_details.csv", index=False)
-    if pop_class_df is not None and len(pop_class_df):
-        pop_class_df.to_csv(fig_dir / "population_classification.csv", index=False)
+    if bwm_metrics_df is not None and len(bwm_metrics_df):
+        bwm_metrics_df.to_csv(fig_dir / "bwm_classification.csv", index=False)
+        bwm_metrics_df.to_csv(fig_dir / "classification_details.csv", index=False)
+    elif class_df is not None and len(class_df):
+        class_df.to_csv(fig_dir / "classification_details.csv", index=False)
     prior_df.to_csv(fig_dir / "prior_modulation.csv", index=False)
+
+    try:
+        plot_path = plot_bwm_decorrelation_curves(pth_res, fig_dir, condition)
+        print(f"Saved BWM decorrelation panels to {plot_path}")
+    except Exception as exc:
+        print(f"[warn] BWM decorrelation plot failed: {exc}")
 
 
 def plot_s_prior_figures(condition, s_prior, fig_dir, prior_label=""):
@@ -4855,8 +6218,15 @@ def process_condition(
     n_jobs=1,
     contrast_matched_null=True,
     zero_im_prior_mod=False,
+    zero_all_prior_mod=False,
+    gs_outside_adaptation=False,
 ):
-    im_label = " (g_i=d_i=g_m=d_m=0)" if zero_im_prior_mod else ""
+    if zero_all_prior_mod:
+        im_label = " (all g_*=d_*=0)"
+    elif zero_im_prior_mod:
+        im_label = " (g_i=d_i=g_m=d_m=0)"
+    else:
+        im_label = ""
     print(f"\n=== Condition: {condition_name} (g_s={g_s}, d_s={d_s}){im_label} ===")
     null_scheme = (
         NULL_SCHEME_CONTRAST_MATCHED if contrast_matched_null else NULL_SCHEME_LABEL_SHUFFLE
@@ -4868,7 +6238,9 @@ def process_condition(
         g_s=g_s,
         d_s=d_s,
         zero_im_prior_mod=zero_im_prior_mod,
+        zero_all_prior_mod=zero_all_prior_mod,
         json_path=weights_json,
+        gs_outside_adaptation=gs_outside_adaptation,
     )
 
     cond_dir = base_dir / condition_name
@@ -4884,33 +6256,15 @@ def process_condition(
     timeframes = [S_PRIOR_TIMEFRAME] if s_prior_only else FOCUSED_TIMEFRAMES
     n_jobs = max(1, int(n_jobs))
     rng = np.random.RandomState(rng_seed)
-    session_dfs = []
-    steps_before_obs = int(mf.STEPS_BEFORE_OBS_DURATION_MS / DT_MS)
 
-    session_meta = []
-    for sess in range(n_sessions):
-        sess_rng = np.random.RandomState(rng_seed + sess)
-        if blocks_per_session is None:
-            n_blocks, planned_trials = blocks_for_min_trials(min_trials_per_session, sess_rng)
-        else:
-            n_blocks = blocks_per_session
-            planned_trials = None
-        results, sbo = simulate_session(mp, n_blocks, sess_rng, max_obs_per_trial)
-        df = extract_trial_table(results, sbo)
-        session_dfs.append(apply_act_prior(df))
-        session_meta.append(
-            {
-                "session": sess,
-                "n_blocks": n_blocks,
-                "n_trials": len(df),
-                "planned_trials_min_target": planned_trials,
-            }
-        )
-        print(
-            f"  session {sess + 1}/{n_sessions}: {n_blocks} blocks, "
-            f"{len(df)} trials"
-            + (f" (target >={min_trials_per_session})" if blocks_per_session is None else "")
-        )
+    session_dfs, steps_before_obs, session_meta = simulate_condition_sessions(
+        mp,
+        n_sessions,
+        blocks_per_session,
+        max_obs_per_trial,
+        rng_seed,
+        min_trials_per_session=min_trials_per_session,
+    )
 
     print(
         f"  distance stage: {len(splits)} splits, populations="
@@ -4993,11 +6347,8 @@ def process_condition(
         return summary
 
     sc_table, af = run_analysis(res_dir)
-    bwm_recovered = classify_regions(sc_table, af)
+    bwm_recovered, bwm_metrics_df = classify_regions(res_dir, af)
     bwm_class_df, bwm_cm, bwm_acc = recovery_classification_metrics(bwm_recovered)
-
-    pop_features = load_population_features(res_dir)
-    pop_recovered, pop_class_df, pop_cm, pop_acc = classify_populations(pop_features)
     s_prior = s_only_prior_test(res_dir)
     pop_prior_df = population_prior_tests(res_dir)
 
@@ -5019,8 +6370,7 @@ def process_condition(
         bwm_cm,
         prior_df,
         regde_stim,
-        pop_class_df=pop_class_df,
-        pop_cm=pop_cm,
+        bwm_metrics_df=bwm_metrics_df,
         s_prior=s_prior,
     )
     if s_prior is not None:
@@ -5048,14 +6398,10 @@ def process_condition(
         },
         "sessions": session_meta,
         "n_trials_total": n_trials_total,
-        "classification_accuracy": float(pop_acc),
-        "bwm_classification_accuracy": float(bwm_acc),
-        "recovered_S": pop_recovered["S"],
-        "recovered_I": pop_recovered["I"],
-        "recovered_M": pop_recovered["M"],
-        "bwm_recovered_S": bwm_recovered["S"],
-        "bwm_recovered_I": bwm_recovered["I"],
-        "bwm_recovered_M": bwm_recovered["M"],
+        "classification_accuracy": float(bwm_acc),
+        "recovered_S": bwm_recovered["S"],
+        "recovered_I": bwm_recovered["I"],
+        "recovered_M": bwm_recovered["M"],
         "g_i_fitted": float(meta["g"]["g_i"]),
         "d_i_fitted": float(meta["d"]["d_i"]),
         "s_prior_p_mean": s_prior["p_mean"] if s_prior else np.nan,
@@ -5455,7 +6801,112 @@ def compare_conditions(
     return sensory_prior_recovery
 
 
+def _simulate_harris_extra_donors(
+    mp,
+    n_extra_donors,
+    blocks_per_session,
+    max_obs_per_trial,
+    rng_seed,
+    min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
+):
+    """Simulate additional sessions used only as Harris donor eids (not observed)."""
+    n_extra = int(n_extra_donors)
+    if n_extra <= 0:
+        return []
+    donor_seed = int(rng_seed) + HARRIS_DONOR_SEED_OFFSET
+    print(
+        f"  [harris donors] simulating {n_extra} extra sessions "
+        f"(seed={donor_seed} = {rng_seed}+{HARRIS_DONOR_SEED_OFFSET})"
+    )
+    extra_dfs, _, _ = simulate_condition_sessions(
+        mp,
+        n_extra,
+        blocks_per_session,
+        max_obs_per_trial,
+        donor_seed,
+        min_trials_per_session=min_trials_per_session,
+    )
+    print(f"  [harris donors] {len(extra_dfs)} extra sessions ready")
+    return extra_dfs
+
+
 def simulate_condition_sessions(
+    mp,
+    n_sessions,
+    blocks_per_session,
+    max_obs_per_trial,
+    rng_seed,
+    min_trials_per_session=MIN_TRIALS_PER_SESSION_DEFAULT,
+    constant_s0=False,
+    use_cache=None,
+):
+    """
+    Return ``(session_dfs, steps_before_obs, session_meta)`` for a condition.
+
+    Cache-aware: when ``use_cache`` (or the ``SESSION_CACHE_ENABLED`` global) is
+    set, the deterministic draw is persisted under ``session_cache/`` keyed by
+    ``(mp, seed, n_sessions, blocks, max_obs, min_trials, constant_s0)`` so many
+    analysis variants (nulls, splits, classification) reuse one simulation.
+    Pass ``use_cache=False`` for high-seed-cardinality loops (e.g. replicate
+    nulls) to avoid cache bloat. Long Harris unique-null draws (many blocks ×
+    extra donors) belong on ORCD; the laptop cache was wiped 2026-08-14.
+    """
+    if use_cache is None:
+        use_cache = SESSION_CACHE_ENABLED
+    if not use_cache:
+        return _simulate_condition_sessions_raw(
+            mp,
+            n_sessions,
+            blocks_per_session,
+            max_obs_per_trial,
+            rng_seed,
+            min_trials_per_session=min_trials_per_session,
+            constant_s0=constant_s0,
+        )
+
+    payload = _session_cache_payload(
+        mp,
+        n_sessions,
+        blocks_per_session,
+        max_obs_per_trial,
+        rng_seed,
+        min_trials_per_session,
+        constant_s0,
+    )
+    key = _session_cache_key(payload)
+    root = session_cache_root()
+    blob_path = root / f"{key}.pkl.gz"
+    if blob_path.exists():
+        try:
+            out = _load_cached_sessions(blob_path)
+            print(
+                f"  [session cache HIT] {blob_path.name} "
+                f"(seed={rng_seed}, n_sessions={n_sessions}, g_s={mp.get('g_s')}, "
+                f"d_s={mp.get('d_s')}, g_i={mp.get('g_i')}, "
+                f"gs_free={mp.get('gs_outside_adaptation')})"
+            )
+            return out
+        except Exception as exc:  # corrupt/partial cache: re-simulate
+            print(f"  [session cache] failed to load {blob_path.name}: {exc}; re-simulating")
+
+    print(f"  [session cache MISS] simulating -> {blob_path.name}")
+    session_dfs, steps_before_obs, session_meta = _simulate_condition_sessions_raw(
+        mp,
+        n_sessions,
+        blocks_per_session,
+        max_obs_per_trial,
+        rng_seed,
+        min_trials_per_session=min_trials_per_session,
+        constant_s0=constant_s0,
+    )
+    saved = _save_cached_sessions(
+        root, key, payload, session_dfs, steps_before_obs, session_meta
+    )
+    print(f"  [session cache] saved {saved}")
+    return session_dfs, steps_before_obs, session_meta
+
+
+def _simulate_condition_sessions_raw(
     mp,
     n_sessions,
     blocks_per_session,
@@ -5856,20 +7307,21 @@ def run_recovery_only(base_dir, alpha=0.01, s_prior_only=True):
                 },
             }
             continue
-        pop_features = load_population_features(res_dir)
-        pop_recovered, pop_class_df, pop_cm, pop_acc = classify_populations(pop_features)
+        _, af = run_analysis(res_dir)
+        bwm_recovered, bwm_metrics_df = classify_regions(res_dir, af)
+        bwm_class_df, bwm_cm, bwm_acc = recovery_classification_metrics(bwm_recovered)
         pop_prior_df = population_prior_tests(res_dir, alpha=alpha)
         _, regde_name, _ = _combined_names("act_block_duringstim")
         regde_path = res_dir / f"{regde_name}.npy"
         regde_stim = np.load(regde_path, allow_pickle=True).item() if regde_path.exists() else {}
         prior_df = prior_modulation_table(res_dir, {"S": ["S"], "I": ["I"], "M": ["M"]})
         plot_recovery_figures(
-            cond, res_dir, fig_dir, pop_class_df, pop_cm, prior_df, regde_stim,
-            pop_class_df=pop_class_df, pop_cm=pop_cm, s_prior=s_prior,
+            cond, res_dir, fig_dir, bwm_class_df, bwm_cm, prior_df, regde_stim,
+            bwm_metrics_df=bwm_metrics_df, s_prior=s_prior,
         )
         summaries[cond] = {
-            "classification_accuracy": pop_acc,
-            "recovered": pop_recovered,
+            "classification_accuracy": bwm_acc,
+            "recovered": bwm_recovered,
             "s_prior": {k: v for k, v in (s_prior or {}).items() if not isinstance(v, np.ndarray)},
             "population_prior_tests": pop_prior_df.to_dict(orient="records"),
         }
@@ -5950,6 +7402,32 @@ def main():
         help="Use unrestricted label shuffle nulls (default: contrast-matched nulls)",
     )
     parser.add_argument(
+        "--harris-unique-null",
+        action="store_true",
+        help=(
+            "Harris unique-null for S/I/M prior distance (act_block analog): "
+            "freeze each session's neural trials and transplant other-session "
+            "prior labels from the same stim×choice / stim-side / choice-side "
+            "stratum. "
+            "Writes separate hu_sprior / *_harris_unique outputs; does not "
+            "overwrite contrast-matched results. Incompatible with "
+            "--label-shuffle-null and --full-analysis. Long sessions / "
+            "nrand=2000 / extra donors: run on ORCD, not the laptop "
+            "(session_cache is multi-GB)."
+        ),
+    )
+    parser.add_argument(
+        "--harris-n-extra-donors",
+        type=int,
+        default=HARRIS_N_EXTRA_DONORS_DEFAULT,
+        help=(
+            "Extra simulated sessions used only as Harris donors "
+            f"(default: {HARRIS_N_EXTRA_DONORS_DEFAULT}; seed = --seed + "
+            f"{HARRIS_DONOR_SEED_OFFSET}). Observed sessions are still "
+            "leave-one-out donors. 0 = observed sessions only."
+        ),
+    )
+    parser.add_argument(
         "--null-compare",
         action="store_true",
         help=(
@@ -6027,13 +7505,15 @@ def main():
     parser.add_argument(
         "--unsplit-prior",
         nargs="+",
-        choices=["phase4", "absence", "all"],
+        choices=["phase4", "absence", "presence", "s_presence", "all"],
         metavar="CASE",
         help=(
             "Experiment A: unsplit prior distance (no f1/f2 splits). "
-            "Cases: phase4 (all g/d=0), absence (fitted I/M), or all. "
-            "Use --unsplit-mode fully for L+R pooled (diagnostic only). "
-            "E.g. --unsplit-prior phase4 absence"
+            "Cases: phase4 (all g/d=0), absence (fitted I/M, g_s=d_s=0), "
+            "presence (fitted I/M + --g-s-presence/--d-s-presence), s_presence "
+            "(P->S only; set --g-s-presence/--d-s-presence/--gs-outside-adaptation), "
+            "or all. Use --unsplit-mode fully for L+R pooled (diagnostic only). "
+            "E.g. --unsplit-prior phase4 absence s_presence --g-s-presence 1800"
         ),
     )
     parser.add_argument(
@@ -6041,8 +7521,21 @@ def main():
         choices=["stim_side", "fully"],
         default="stim_side",
         help=(
-            "Unsplit trial pooling: stim_side (default; stim_l + stim_r stacked) or "
-            "fully (all duringstim trials, L+R mixed — S artefact risk)"
+            "Unsplit trial pooling: stim_side (default; S/I stim-aligned stim "
+            "strata, M move-aligned choice strata) or fully (all duringstim "
+            "trials, L+R mixed — S artefact risk)"
+        ),
+    )
+    parser.add_argument(
+        "--run-experiment",
+        choices=["phase4", "absence", "s_presence"],
+        default=None,
+        help=(
+            "Unified single-condition run (Goal 1 matrix), cache-backed. "
+            "phase4 = all g/d=0; absence = fitted I/M, g_s=d_s=0; s_presence = P->S "
+            "only (set --g-s-presence/--d-s-presence/--gs-outside-adaptation). "
+            "Combine with --full-analysis (classification) and/or --label-shuffle-null. "
+            "Outputs under goal1/<experiment>/<null>_<mode>/."
         ),
     )
     parser.add_argument(
@@ -6086,16 +7579,48 @@ def main():
         ),
     )
     parser.add_argument(
+        "--presence-unsplit-sweep",
+        action="store_true",
+        help=(
+            "Goal 4: grid search g_s (0..--g-s-max) and d_s (0..fitted d_i) with "
+            "fitted I/M prior modulation, stim-side unsplit analysis; writes "
+            "presence_unsplit_sweep.csv"
+        ),
+    )
+    parser.add_argument(
+        "--presence-unsplit-plots",
+        action="store_true",
+        help=(
+            "Full plot suite for one presence case (fitted I/M, stim-side unsplit). "
+            "Set --g-s-presence and --d-s-presence (default d_s=0). Uses session cache."
+        ),
+    )
+    parser.add_argument(
+        "--g-s-max",
+        type=float,
+        default=2500.0,
+        help="Upper g_s for --presence-unsplit-sweep default grid (default: 2500)",
+    )
+    parser.add_argument(
+        "--d-s-max",
+        type=float,
+        default=None,
+        help=(
+            "Upper d_s for --presence-unsplit-sweep default grid "
+            "(default: fitted d_i from weights JSON)"
+        ),
+    )
+    parser.add_argument(
         "--g-s-grid",
         type=str,
         default=None,
-        help="Comma-separated g_s values for --gs-ds-tune (default: spaced around g_i_fitted)",
+        help="Comma-separated g_s values for --gs-ds-tune / --presence-unsplit-sweep",
     )
     parser.add_argument(
         "--d-s-grid",
         type=str,
         default=None,
-        help="Comma-separated d_s values for --gs-ds-tune (default: spaced around d_i_fitted)",
+        help="Comma-separated d_s values for --gs-ds-tune / --presence-unsplit-sweep",
     )
     parser.add_argument(
         "--stop-on-s-significant",
@@ -6165,11 +7690,33 @@ def main():
         help=(
             "Override the post-stim PRE_POST window (ms) for duringstim splits "
             f"(default: {IM_DURINGSTIM_WINDOW_S*1000:.0f} ms for I/M). "
-            f"S population always uses {S_DURINGSTIM_WINDOW_S*1000:.0f} ms via "
-            "S_DURINGSTIM_WINDOW_S in build_population_b_for_split."
+            "S still uses --s-window-ms (canonical 80) unless that is also set."
+        ),
+    )
+    parser.add_argument(
+        "--s-window-ms",
+        type=float,
+        default=None,
+        help=(
+            "Post-stim analysis window for S (ms). Default: canonical "
+            f"{S_DURINGSTIM_WINDOW_S*1000:.0f}. Pass 150 to save full duringstim "
+            "curves; 80 ms p-values can be sliced from those curves later."
+        ),
+    )
+    parser.add_argument(
+        "--no-session-cache",
+        action="store_true",
+        help=(
+            "Disable the simulate-once session cache (session_cache/). By default "
+            "deterministic session draws are cached and reused across analysis "
+            "variants (nulls, splits, classification). Long Harris unique-null "
+            "jobs belong on ORCD; do not refill a multi-GB cache on the laptop."
         ),
     )
     args = parser.parse_args()
+
+    global SESSION_CACHE_ENABLED
+    SESSION_CACHE_ENABLED = not args.no_session_cache
 
     # Apply optional window override before any analysis functions reference PRE_POST.
     if args.duringstim_window_ms is not None:
@@ -6177,12 +7724,19 @@ def main():
         for key in list(PRE_POST.keys()):
             if "duringstim" in key:
                 PRE_POST[key] = [0, win_s]
+    if args.s_window_ms is not None:
+        set_s_analysis_window_s(args.s_window_ms / 1000.0)
 
     base_dir = resolve_output_dir(args.output_dir, allow_repo_output=args.allow_repo_output)
     base_dir.mkdir(parents=True, exist_ok=True)
     n_jobs = args.n_jobs if args.n_jobs is not None else _default_n_jobs()
     s_prior_only = not args.full_analysis
     contrast_matched_null = not args.label_shuffle_null
+    harris_unique_null = bool(args.harris_unique_null)
+    if harris_unique_null and args.label_shuffle_null:
+        parser.error("Use only one of --harris-unique-null and --label-shuffle-null")
+    if harris_unique_null and args.full_analysis:
+        parser.error("Harris unique-null is for prior-distance only; omit --full-analysis")
 
     if args.null_compare:
         run_null_scheme_comparison(
@@ -6250,6 +7804,33 @@ def main():
         )
         return
 
+    if args.run_experiment:
+        weights_json = resolve_weights_json(args.weights_json)
+        if args.run_experiment == "s_presence" and args.g_s_presence is None:
+            parser.error("--run-experiment s_presence requires --g-s-presence")
+        print(f"ONE cache: {resolve_one_cache_dir()}")
+        print(f"Output: {base_dir}")
+        run_experiment_case(
+            base_dir,
+            case=args.run_experiment,
+            full_analysis=args.full_analysis,
+            contrast_matched_null=contrast_matched_null,
+            weights_json=weights_json,
+            n_sessions=args.n_sessions,
+            blocks_per_session=args.blocks_per_session,
+            max_obs_per_trial=args.max_obs_per_trial,
+            rng_seed=args.seed,
+            nrand=args.nrand,
+            n_jobs=n_jobs,
+            g_s=args.g_s_presence,
+            d_s=args.d_s_presence,
+            gs_outside_adaptation=args.gs_outside_adaptation,
+            min_trials_per_session=args.min_trials_per_session,
+            harris_unique_null=harris_unique_null,
+            n_extra_donors=args.harris_n_extra_donors,
+        )
+        return
+
     if args.phase4_no_prior_mod or args.phase4_constant_s0:
         weights_json = resolve_weights_json(args.weights_json)
         run_phase4_no_prior_mod_analysis(
@@ -6286,7 +7867,35 @@ def main():
                 n_jobs=n_jobs,
                 contrast_matched_null=contrast_matched_null,
                 unsplit_mode=args.unsplit_mode,
+                g_s=args.g_s_presence,
+                d_s=args.d_s_presence,
+                gs_outside_adaptation=args.gs_outside_adaptation,
+                harris_unique_null=harris_unique_null,
+                n_extra_donors=args.harris_n_extra_donors,
             )
+        return
+
+    if args.presence_unsplit_plots:
+        if args.g_s_presence is None:
+            parser.error("--presence-unsplit-plots requires --g-s-presence")
+        weights_json = resolve_weights_json(args.weights_json)
+        d_s = 0.0 if args.d_s_presence is None else args.d_s_presence
+        out_parent = base_dir / "presence_unsplit_sweep" / f"seed_{args.seed}" / "examples"
+        run_presence_unsplit_plots(
+            out_parent,
+            g_s=args.g_s_presence,
+            d_s=d_s,
+            weights_json=weights_json,
+            n_sessions=args.n_sessions,
+            blocks_per_session=args.blocks_per_session,
+            max_obs_per_trial=args.max_obs_per_trial,
+            rng_seed=args.seed,
+            nrand=args.nrand,
+            n_jobs=n_jobs,
+            contrast_matched_null=contrast_matched_null,
+            gs_outside_adaptation=args.gs_outside_adaptation,
+            unsplit_mode=args.unsplit_mode,
+        )
         return
 
     if args.s_presence_i_scaled_plots:
@@ -6368,6 +7977,33 @@ def main():
             stop_on_s_p_gain=args.stop_on_s_p_gain,
             stop_on_s_mean_and_gain=args.stop_on_s_mean_and_gain,
             gs_outside_adaptation=args.gs_outside_adaptation,
+        )
+        return
+
+    if args.presence_unsplit_sweep:
+        weights_json = resolve_weights_json(args.weights_json)
+        g_s_grid = _parse_float_list(args.g_s_grid) if args.g_s_grid else None
+        d_s_grid = _parse_float_list(args.d_s_grid) if args.d_s_grid else None
+        run_presence_unsplit_sweep(
+            base_dir / "presence_unsplit_sweep" / f"seed_{args.seed}",
+            weights_json=weights_json,
+            n_sessions=args.n_sessions,
+            blocks_per_session=args.blocks_per_session,
+            max_obs_per_trial=args.max_obs_per_trial,
+            rng_seed=args.seed,
+            nrand=args.nrand,
+            n_jobs=n_jobs,
+            contrast_matched_null=contrast_matched_null,
+            g_s_values=g_s_grid,
+            d_s_values=d_s_grid,
+            g_s_max=args.g_s_max,
+            d_s_max=args.d_s_max,
+            alpha=args.tune_alpha,
+            stop_on_s_significant=args.stop_on_s_significant,
+            stop_on_s_p_gain=args.stop_on_s_p_gain,
+            stop_on_s_mean_and_gain=args.stop_on_s_mean_and_gain,
+            gs_outside_adaptation=args.gs_outside_adaptation,
+            unsplit_mode=args.unsplit_mode,
         )
         return
 
