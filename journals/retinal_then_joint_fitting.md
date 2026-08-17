@@ -976,6 +976,26 @@ bash scripts/submit_simulate_unsplit_harris_orcd.sh
 bash scripts/submit_act_block_unsplit_orcd.sh
 ```
 
+### 2026-08-17 — ORCD unsplit Harris (choice-M, S curves 150 ms)
+
+Copied to local alyx `manifold_sim/stageB_bwm/unsplit_stim_choice/unsplit_prior/seed_123/`.
+nrand=1000, 40×40 blocks, 80 extra donors, `--s-window-ms 150`. Unique=1000
+on all four splits.
+
+| Model | S 150 ms | S p (150) | S t≤80 ms | S p (80) | I | I p | M (choice @ move) | M p |
+|-------|---------:|----------:|----------:|---------:|--:|----:|------------------:|----:|
+| regular s101 absence | 0.0012 | **0.003** | 0.00028 | **0.64** | 0.541 | **0** | 1.297 | **0** |
+| sensory s23 s_presence | 0.070 | **0** | 0.072 | **0** | 0.269 | **0** | 0.856 | **0** |
+
+Regular unsplit S is **null at the canonical 80 ms slice** (p=0.64, same
+as 13c/14 stim-side unsplit). The 150 ms combined p=0.003 is a **late-window**
+effect (80–150 ms): observed mean 0.0012 vs a tight Harris floor (null med
+0.00034). Sensory S stays significant in both windows (curve_mean ≈ 0.07).
+I/M stay p=0.
+
+Do **not** compare this M to 13c/13d/14 unsplit M (those were stim-aligned
+at stimOn). This M is `choice_l`+`choice_r` at firstMovement.
+
 ---
 
 ## To-do
@@ -992,9 +1012,8 @@ bash scripts/submit_act_block_unsplit_orcd.sh
    with 13c at both resolutions. **M unsplit now uses choice strata** (2026-08-14e);
    re-run on **ORCD** (`submit_simulate_unsplit_harris_orcd.sh`).
 
-4. **S p-values at both 150 ms and 80 ms.** This ORCD unsplit Harris run stores
-   full 0–150 ms S distance curves (not the canonical 80 ms cap). After the
-   run, compute p-values on the full curve **and** on the t≤80 ms slice.
+4. ~~**S p-values at both 150 ms and 80 ms.**~~ Done 2026-08-17. Regular
+   unsplit S: sig at 150 ms, **null at t≤80 ms**. Sensory S sig in both.
    Canonical default for other experiments remains 80 ms.
 
 5. **Do not compare this run’s unsplit M to 2026-08-13c/d / 2026-08-14

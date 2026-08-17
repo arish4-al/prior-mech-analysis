@@ -200,8 +200,9 @@ path now matches. Submit on ORCD (`nrand=1000`, **S curves 0–150 ms**):
 
 ## Open / follow-up items
 
-- **S p-values at 150 ms and 80 ms** from the saved 150 ms unsplit Harris
-  curves (canonical 80 ms slice still to-do).
+- ~~**S p-values at 150 ms and 80 ms**~~ Done 2026-08-17: regular unsplit S
+  is null at t≤80 ms (p=0.64) and only “sig” on the full 150 ms curve;
+  sensory S sig in both. See [retinal then joint](retinal_then_joint_fitting.md).
 - **Do not compare new unsplit M (choice / movement) to old unsplit M
   (stim-aligned).** Different analysis, not a bug.
 - Unsplit S-only canonical (`g_s=g_i_fitted`, `g_i=0`) — not run.

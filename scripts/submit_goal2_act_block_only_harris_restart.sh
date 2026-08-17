@@ -6,6 +6,11 @@
 # Finalize waits on those jobs, then merges all existing shards (including
 # finished 0 and 3).
 #
+# Keep N_SHARDS=4: shards 0/3 are done; changing N would re-slice insertions
+# and invalidate those checkpoints. Remaining work (shard 1 ~31 left, shard 2
+# ~13 left, ~1–3 min/insertion) fits in 6 h on two parallel jobs — extra
+# shards are not needed.
+#
 #   bash scripts/submit_goal2_act_block_only_harris_restart.sh
 #
 # Override:
@@ -28,7 +33,8 @@ MEM_SHARD="${MEM_SHARD:-24G}"
 MEM_FIN="${MEM_FIN:-32G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
-TIME_SHARD="${TIME_SHARD:-12:00:00}"
+TIME_SHARD="${TIME_SHARD:-6:00:00}"
+TIME_FIN="${TIME_FIN:-6:00:00}"
 JOB_PREFIX="${JOB_PREFIX:-g2abh}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
@@ -50,6 +56,7 @@ done
 ACC="$ONE_CACHE_DIR/manifold/res/_stream_acc/${SPLIT}_harris_unique"
 echo "NULL_SCHEME=harris_unique  SPLIT=$SPLIT  restart shards: ${SHARD_ARR[*]}/$N_SHARDS"
 echo "RESTART=$RESTART  MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  nrand=$NRAND"
+echo "TIME_SHARD=$TIME_SHARD  TIME_FIN=$TIME_FIN  N_SHARDS=$N_SHARDS (keep 4; do not re-slice)"
 echo "Will NOT clear stream_acc. Existing checkpoints:"
 ls -lh "${ACC}".shard*.npy 2>/dev/null || echo "  (none yet)"
 
@@ -73,7 +80,7 @@ done
 
 DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
 FID=$(sbatch --parsable \
-  --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time=2:00:00 \
+  --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time="$TIME_FIN" \
   --dependency=afterok:"$DEP" \
   --job-name="${JOB_PREFIX}_fin_${TAG}" \
   --export=ALL,SPLIT="$SPLIT",SESSION_SHUFFLE_NULL=1,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR= \
