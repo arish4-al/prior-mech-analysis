@@ -9,6 +9,8 @@
 #
 # Defaults: PRESET=choice_lr_session_null_all (8 act splits), N_SHARDS=4,
 # NRAND=2000, CLEAR_STREAM=1 (clears only plain {split} stream_acc + res).
+# PRESET=act_block_unsplit_duringchoice uses N_SHARDS=8 and TIME_SHARD=6:00:00
+# (denser splits; 4 shards can exceed 6 h at nrand=2000).
 #
 # After finalize, copy/symlink into res/new if that is your analysis folder, then:
 #   python scripts/plot_choice_null_comparison_table.py \
@@ -25,7 +27,6 @@ REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
 PRESET="${PRESET:-choice_lr_session_null_all}"
-N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
@@ -33,7 +34,15 @@ MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
-TIME_SHARD="${TIME_SHARD:-12:00:00}"
+if [[ "$PRESET" == "act_block_unsplit_duringchoice" ]]; then
+  # Two dense splits (choice stratum, no f1/f2). Full BWM × nrand=2000 is
+  # ~19 h unsharded; 8 shards → ~2.5–5 h, so TIME_SHARD=6:00:00 is enough.
+  N_SHARDS="${N_SHARDS:-8}"
+  TIME_SHARD="${TIME_SHARD:-6:00:00}"
+else
+  N_SHARDS="${N_SHARDS:-4}"
+  TIME_SHARD="${TIME_SHARD:-12:00:00}"
+fi
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
