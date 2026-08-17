@@ -661,6 +661,44 @@ Not added: true-block / bayes `duringchoice_l/r`.
 
 ---
 
+## 2026-08-17 — unsplit Harris unique in local `res/new`
+
+Copied into alyx `manifold/res/new/` (mtime 2026-08-16 10:53–10:54): the four
+`act_block_harris_unsplit` Harris unique files.
+
+| split | regions / cells | n_null min/med/max |
+| ----- | --------------: | -----------------: |
+| `act_block_duringstim_l_harris_unique` | 209 / 62,580 | 141 / 1947 / **2000** |
+| `act_block_duringstim_r_harris_unique` | 207 / 62,619 | 114 / 2000 / 2000 |
+| `act_block_duringchoice_l_harris_unique` | 207 / 62,376 | 119 / 2000 / 2000 |
+| `act_block_duringchoice_r_harris_unique` | 208 / 62,556 | 98 / 2000 / 2000 |
+
+Unique pools top out at 2000 (p-floor ≈ 1/2001), so this copy was **nrand=2000**,
+not the wrapper default 1000. Coverage matches shuffle duringstim (~99 % cells).
+**Duringchoice unsplit shuffle is still missing** (`act_block_duringchoice_{l,r}.npy`).
+
+2-split combine (`p_mean`, product-MC when U is ragged; combined `n_null` med 2000):
+
+| arm | window | uncorr ≤0.01 | uncorr ≤0.05 | BH-FDR @0.01 | BH-FDR @0.05 | median p | median amp |
+| --- | ------ | ---: | ---: | ---: | ---: | ---: | ---: |
+| shuffle (Jul 14 min5) | duringstim unsplit | 134 | 153 | **126** | 146 | 0.001 | 0.492 |
+| **harris unique** | duringstim unsplit | 16 | 28 | **0** | 9 | 0.388 | 0.485 |
+| **harris unique** | duringchoice unsplit | 2 | 6 | **0** | **0** | 0.585 | 0.429 |
+
+Duringstim Harris vs shuffle (209 shared): FDR@0.01 **126 → 0** (lost 126, gained 0).
+Observed `amp_euc` median ratio **1.00** — same curves, wider Harris null.
+FDR@0.05 Harris duringstim hits (p-floor 0.0005 unless noted): IRN, FOTU, GRN,
+CLA, RN, MRN, CP; VISa (0.001); SCm (0.0015). Duringchoice uncorr ≤0.01: FOTU, GRN.
+
+Same qualitative result as split-conditioned act_block Harris unique (08-14 /
+08-14b): **0 FDR @0.01**. Unsplit duringstim shuffle is *more* liberal than the
+four-split (126 vs 42) because there is no f1/f2 thinning; Harris still wipes
+the map at α=0.01. Duringchoice Harris is even quieter (0 FDR @0.05).
+
+Plot vs shuffle duringchoice still blocked on the missing shuffle pair.
+
+---
+
 ## 2026-08-14d — `act_block_only` shuffle in local `res/new`
 
 Copied into alyx `manifold/res/new/` (mtime 2026-08-14 16:23):
@@ -685,4 +723,4 @@ ITI window `[0.4, −0.1]`, act prior, no stim/choice stratum. Not part of the 4
 2. **Why strat null amplitudes stay below Harris** at matched coverage.
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
-5. **act_block Harris unique is a near-total null** (0 FDR @0.01/0.05). 08-14b: **not** the f2 donor-stratum skip — f1-only Harris (99 % cells, large U) is also 0 FDR; shuffle prior hits live in f1. Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? `act_block_only` **shuffle** is now in `res/new` (08-14d; already 0 FDR @0.01); **Harris unique** for that split is still missing.
+5. **act_block Harris unique is a near-total null** (0 FDR @0.01/0.05). 08-14b: **not** the f2 donor-stratum skip — f1-only Harris (99 % cells, large U) is also 0 FDR; shuffle prior hits live in f1. **2026-08-17 unsplit** (no f1/f2): same 0 FDR @0.01 (duringstim 9 at FDR@0.05; duringchoice 0 at FDR@0.05). Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? `act_block_only` **shuffle** is now in `res/new` (08-14d; already 0 FDR @0.01); **Harris unique** for that split is still missing. Duringchoice unsplit **shuffle** still missing.

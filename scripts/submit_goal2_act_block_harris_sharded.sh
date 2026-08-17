@@ -18,6 +18,9 @@
 # Unsplit-only wrapper:
 #   bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
 #
+# Restart OOM'd act_block_only shards (does not CLEAR finished 0/3):
+#   bash scripts/submit_goal2_act_block_only_harris_restart.sh
+#
 # Outputs: $ONE_CACHE_DIR/manifold/res/{split}_harris_unique.npy
 #   (plain shuffle stays at {split}.npy — never overwritten)
 # Rebuilds donor bank first (includes contrast_left/right for Goal-3).
