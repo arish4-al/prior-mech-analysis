@@ -25,7 +25,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Real-data pipeline efficiency](realdata_pipeline_efficiency.md) | Insertion cache, loop reorder, stream pooling, ORCD sharding, memory settings, `min_trials_per_side` |
 | [Prior definitions and label conventions](prior_definitions.md) | True block vs action kernel vs Bayes-optimal; split naming; the prior-type routing fix; drop-0.5 and fixed-α open questions |
 | [Prior modulation by contrast](prior_modulation_by_contrast.md) | Contrast-stratified during-trial splits, cell retention, FDR p-floor analysis, and the revised 0 %-contrast choice-conditioned result |
-| [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; fitted+copy-last (08-22b): most liberal on choice L–R (178/185 FDR); act_block duringstim 0 FDR @0.01 |
+| [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; option-1 + copy-last (`_pseudo_strat_sticky`) wired, FDR not yet run |
 | [Sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md) | Late 20 % ∪ perseveration-tail drop; choice FDR *expanded*; sticky tails not concentrated late; last 20 % slower not inaccurate / not more block-aligned; late `mean_run` is clumpiness not a rate shift; next: same trim on prior splits |
 | [Single-neuron variance partition](variance_partition_mixed_regions.md) | Mixed stim×choice target set, OLS variance partition, full BWM results, neuron- and region-level nulls |
 

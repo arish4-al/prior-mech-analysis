@@ -1,0 +1,33 @@
+---
+description: Confirm with the user when a request can mean more than one journal/CLI option
+alwaysApply: true
+---
+
+# Confirm when the ask is ambiguous across journal options
+
+If the latest message can mean **more than one named scheme** in
+`journals/` or the CLI (option 1 vs 2, strat vs fixedstim, Harris vs
+shuffle, split vs unsplit, true / act / bayes prior, …), **stop and
+ask** before implementing or submitting jobs. Do not pick the reading
+that is easiest to wire.
+
+## This repo (incident 2026-08-22)
+
+“Within each shuffle stratum” + fitted AK + copy-last was implemented
+as **option 2 (`fixedstim`)** — real stim, labels at real `elig_idx`.
+The user meant **option 1 (`strat`)** — new pseudo-session, remake
+stim×act-prior (choice) or stim×choice (act_block) on that draw.
+A full BWM FDR was run on the wrong arm.
+
+Journal source of truth: [structured_nulls_choice_lr.md](journals/structured_nulls_choice_lr.md)
+(option 1 = `_pseudo_strat`, option 2 = `_pseudo_fixed`).
+
+## What to do
+
+1. Name the candidate options in the user’s words (e.g. “option 1
+   stratified pseudo” vs “option 2 fixed real stim”).
+2. Ask which one. Do not submit ORCD / write the arm until they pick.
+3. After they pick, implement **only** that one.
+
+Do not treat “same stratum as shuffle” as approval for `fixedstim`.
+Option 1 remakes that stratum **on the pseudo**.

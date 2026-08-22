@@ -80,6 +80,19 @@ Long fitting/diagnosis threads accumulate menus of possible fixes. Agents must
 
 Cursor rule: `.cursor/rules/scope-latest-request.mdc` (always applied).
 
+### Confirm journal / CLI options (do not guess)
+
+If the latest ask can mean more than one named scheme in `journals/`
+(option 1 vs 2, strat vs fixedstim, Harris vs shuffle, split vs unsplit),
+**ask which one** before implementing or submitting jobs.
+
+**Incident (2026-08-22):** “within each shuffle stratum” + copy-last was
+wired as option 2 (`fixedstim`). The user meant option 1 (`strat` —
+remake stim×act-prior / stim×choice on the pseudo). A full BWM FDR ran
+on the wrong arm. See [structured nulls](journals/structured_nulls_choice_lr.md).
+
+Cursor rule: `.cursor/rules/confirm-journal-options.mdc` (always applied).
+
 ### Research journals (`journals/`) — develop only
 
 - Journals are organized **by topic, not by date**: one file per line of investigation (e.g. `journals/s_prior_artifacts_truncation.md`), each holding the goal, the implementation, all dated updates, results, and open questions. `journals/README.md` is the index.

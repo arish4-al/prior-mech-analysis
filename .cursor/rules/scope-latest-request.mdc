@@ -35,3 +35,7 @@ Prefer asking over “helpfully” softening a hard failure mode the user relies
 Conversation summaries and earlier proposals bias agents toward implementing the
 “root cause fix” instead of the narrow latest ask. When in doubt, re-read the
 **last user message** and treat anything else as context only.
+
+If that message is still ambiguous across **named journal/CLI options**
+(option 1 vs 2, strat vs fixedstim, …), ask — do not guess. See
+`.cursor/rules/confirm-journal-options.mdc`.

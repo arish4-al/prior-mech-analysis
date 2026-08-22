@@ -1,9 +1,9 @@
 #!/bin/bash
-# Fitted ActionKernel + copy-last, within each shuffle stratum (fixedstim).
+# Option 1 + copy-last: AK pseudo-sessions, remade stratum, sticky choices.
 #
-# Choice L–R (stim-aligned duringstim + move-aligned duringchoice, 8 act splits)
-# and act_block prior L–R (same two alignments, 8 splits). Prefit θ once per
-# eid so shards reuse manifold/actkernel_fits/.
+# Choice L–R: pseudo stim × that session's act-prior; labels = sticky choices.
+# Act_block:  pseudo stim × generated choices; labels = that session's act-prior.
+# Disk: {split}_pseudo_strat_sticky.npy  (does not overwrite _pseudo_strat).
 #
 #   bash scripts/submit_goal2_ak_sticky_orcd.sh
 #   PREFIT=0 bash scripts/submit_goal2_ak_sticky_orcd.sh   # skip prefit
@@ -34,7 +34,7 @@ if [[ "$PREFIT" == "1" ]]; then
 fi
 export PREFIT_JID
 
-export NULL_SCHEME=pseudo_fixed_sticky
+export NULL_SCHEME=pseudo_strat_sticky
 
 if [[ "$FAMILY" != "choice" && "$FAMILY" != "act_block" \
       && "$FAMILY" != "act_block_unsplit" && "$FAMILY" != "both" ]]; then
@@ -43,16 +43,16 @@ if [[ "$FAMILY" != "choice" && "$FAMILY" != "act_block" \
 fi
 
 if [[ "$FAMILY" == "choice" || "$FAMILY" == "both" ]]; then
-  echo "=== Choice L–R (stim + move) fitted+copy-last ==="
+  echo "=== Choice L–R (stim + move) option-1 + copy-last ==="
   PRESET=choice_lr_ak_sticky bash scripts/submit_goal2_choice_null_sharded.sh
 fi
 if [[ "$FAMILY" == "act_block" || "$FAMILY" == "both" ]]; then
-  echo "=== act_block prior L–R f1/f2 (stim + move) fitted+copy-last ==="
+  echo "=== act_block prior L–R f1/f2 + unsplit (stim + move) option-1 + copy-last ==="
   PRESET=act_block_ak_sticky bash scripts/submit_goal2_choice_null_sharded.sh
 fi
 if [[ "$FAMILY" == "act_block_unsplit" ]]; then
-  echo "=== act_block unsplit prior L–R (stim-side + choice-side) fitted+copy-last ==="
+  echo "=== act_block unsplit only (stim-side + choice-side) option-1 + copy-last ==="
   PRESET=act_block_ak_sticky_unsplit bash scripts/submit_goal2_choice_null_sharded.sh
 fi
 
-echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}_pseudo_fixed_sticky.npy"
+echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}_pseudo_strat_sticky.npy"

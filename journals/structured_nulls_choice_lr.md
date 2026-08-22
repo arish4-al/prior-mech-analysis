@@ -2,9 +2,9 @@
 
 **Scope:** the problem that an unrestricted label shuffle is too narrow a null when choice/prior labels are temporally autocorrelated and neural responses drift, and every null scheme built to address it — Harris session permutation and ActionKernel synthetic sessions (stratified pseudo and fixed-stim). Late-session / perseveration **trial exclusion** is [sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md), not a structured null.
 
-**Status:** five valid arms compared at α=0.01 over the full BWM. Choice L–R liberality: **Harris unique < AK strat ×3 < min5 shuffle < AK fixed-stim < fitted+copy-last**. Harris is the only structured null **stricter** than shuffle on choice; copy-last is the most liberal (178 / 185 FDR). On act_block duringstim, copy-last and Harris are both 0 FDR @0.01. `_harris_unique` remains the preferred file for claims. Two earlier arms (calendar-indexed Harris, unconstrained BWM pseudo-session) are **invalid**.
+**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim. Intended next arm: **option 1 + copy-last** (`_pseudo_strat_sticky`) — remake stim×act-prior (choice) or stim×choice (act_block) on each pseudo. **Not yet scored.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. `_harris_unique` remains the preferred file for claims.
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** fitted+copy-last matches BWM quintiles; wired as within-stratum null. **2026-08-22b:** full-BWM FDR in alyx `res/new` — choice sticky is the most *liberal* arm; act_block duringstim is 0 FDR @0.01 (Harris-like).
+Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`).
 
 ---
 
@@ -35,8 +35,8 @@ Label autocorrelation **alone** is not sufficient: if trial responses were indep
 | -------------------------------------------- | ----------------------------- | ------------------------------------- |
 | label shuffle (within stim×block)            | `{split}.npy`                 | baseline                              |
 | option 1 — AK stratified pseudo-session      | `{split}_pseudo_strat.npy`    | valid (needs `pseudo_len_factor ≥ 3`) |
-| option 2 — AK fixed real stim×block          | `{split}_pseudo_fixed.npy`    | valid                                 |
-| option 2 + copy-last                         | `{split}_pseudo_fixed_sticky.npy` | valid; **most liberal on choice**; act_block duringstim 0 FDR @0.01 |
+| option 2 — AK fixed real stim×block          | `{split}_pseudo_fixed.npy`    | valid, most liberal (stationary)      |
+| option 1 + copy-last                         | `{split}_pseudo_strat_sticky.npy` | wired; **FDR not yet run**        |
 | option 3 — Harris (legacy, with replacement) | `{split}_harris.npy`          | valid after donor re-stratification   |
 | option 3 — Harris **unique-null**            | `{split}_harris_unique.npy`   | **preferred**                         |
 | legacy unconstrained BWM index               | `{split}_pseudosession.npy`   | **invalid** — do not interpret        |
@@ -720,40 +720,35 @@ Option 1 (stratified pseudo + stationary AK θ) had **no** time-varying persever
 
 **Mechanism (copy-last mixture, not a new MCMC parameter).** After AK `.simulate` under fitted `[α, ζ, lapse±]`:
 
-1. Drop pLeft=0.5, split the rest into five equal-count quintiles (same masks as `analyze_perseveration_counts._quintile_masks`).
-2. Measure this draw's Q1 mean_run `μ0`. Target `μ_q = μ0 + (μ_BWM[q] − μ_BWM[0])` so Q1 stays at the kernel baseline and later quintiles pick up the empirical Δ.
-3. Convert with the geometric relation `p_repeat = 1 − 1/μ`. Copy-last probability `ρ_q = 1.27 × (p_q − p_Q1) / (1 − p_Q1)`, `ρ_0 = 0`. The 1.27 gain offsets copy-last no-ops (already-repeating trials). Peak `ρ_Q4 ≈ 0.09–0.11`.
-4. Walk the session: with probability `ρ[quintile(t)]`, replace choice `t` by the last valid ±1 choice. Recompute `feedbackType`. Act-prior strata for option 1 are then taken from these sticky choices.
+1. Drop true-block pLeft=0.5, split the rest into five equal-count quintiles (same masks as `analyze_perseveration_counts._quintile_masks`).
+2. Target each quintile’s **this real session** μ_q (not a cohort Δ). Signed mix: copy-last if the draw is under-sticky, break-repeat if over-sticky. `p_repeat = 1 − 1/μ`.
+3. Walk the **pseudo** calendar (true-block pLeft of that draw). Act-prior / stim×choice strata for option 1 are remade from these sticky choices.
 
 Does **not** change fitted θ, the pseudo stim/block stream, or neural `b`. Default **off** so existing `_pseudo_strat` files stay stationary-α.
 
 | Piece | Detail |
 | ----- | ------ |
 | Helper | `scripts/late_choice_stickiness.py` |
-| Hook | `late_sticky=` on `synthetic_sessions_from_trials` / `make_synthetic_session` / `synthetic_choices_fixed_stim` |
-| CLI | `--actkernel-late-sticky` (option 1 or 2) |
+| Hook | `late_sticky=` on `synthetic_sessions_from_trials` (option 1) |
+| CLI | `--actkernel-null-mode strat --actkernel-late-sticky` |
 | Disk | `{split}_pseudo_strat_sticky.npy` (does not overwrite `_pseudo_strat`) |
-| Tag | `null_scheme: synthetic_choice_pseudo_strat_sticky` |
+| Tag | `null_scheme: synthetic_choice_pseudo_strat_sticky` / `synthetic_prior_pseudo_strat_sticky` |
 | Smoke | `python scripts/test_late_stickiness.py` |
-
-Markov check (p_repeat from μ=2.91, 80 sessions): Q1 mean_run unchanged; Q4−Q1 rises by ~+0.22–0.25 (target +0.28); block-align shift < 0.03. That is the intended “clumpiness not a rate shift.”
 
 ```bash
 python scripts/test_late_stickiness.py
-# BWM arm (not yet run):
-python scripts/run_goal2_splits.py --preset choice_lr_session_null_all \
-  --actkernel-choice-null --actkernel-late-sticky --nrand 200
+PREFIT=0 FAMILY=both bash scripts/submit_goal2_ak_sticky_orcd.sh
 ```
 
-**Not done (08-21):** a full BWM choice L–R null with this flag. **2026-08-22** wired the fitted+copy-last arm (below); FDR not yet run.
+**Not done (08-21):** a full BWM option-1 + copy-last null. Still not scored (08-22c).
 
 ---
 
-## 2026-08-22 — fitted θ + copy-last vs BWM quintiles; within-stratum null
+## 2026-08-22 — fitted θ + copy-last on option 1 (stratified pseudo)
 
 Default demo θ `[0.2, 0.5, 0.05, 0.05]` is much stickier than the mouse (mean_run ~8 vs ~2.9) and near-chance. **Per-session MCMC** (what option 1 actually uses) is not: median fitted α=0.16, ζ=0.07.
 
-80 BWM sessions, fixed real stim, MCMC 200 steps, copy-last targeting that session's real μ_q (`scripts/compare_ak_late_stickiness.py --fit-ak --n-sess 80`):
+80 BWM sessions, MCMC 200 steps, copy-last targeting that session's real μ_q (`scripts/compare_ak_late_stickiness.py --fit-ak --n-sess 80`):
 
 | | Q1 | Q2 | Q3 | Q4 | Q5 | Q4−Q1 | acc | block | lag-1 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -761,64 +756,26 @@ Default demo θ `[0.2, 0.5, 0.05, 0.05]` is much stickier than the mouse (mean_r
 | fitted AK | 2.56 | 2.66 | 2.64 | 2.77 | 2.67 | +0.13 | 0.86 | 0.74 | 0.26 |
 | **fitted + copy-last** | **2.93** | **2.71** | **3.12** | **2.85** | **3.17** | −0.11 | 0.82 | 0.73 | 0.30 |
 
-Per-quintile (sticky − real) median is 0. Quintile MAE 0.58 → 0.38; closer in 69/80. Fitted-only matches rates; copy-last pins the quintile *levels*. Q4−Q1 is median of per-session deltas (this 80-session slice is a weaker late bump than the 459-session [sticky §8](sticky_end_of_session_exclusion.md) 2.91 → 3.19). CSV: `manifold/choice_epoch_diag/ak_late_sticky/fitted/`.
+Per-quintile (sticky − real) median is 0. Quintile MAE 0.58 → 0.38; closer in 69/80. Fitted-only matches rates; copy-last pins the quintile *levels*. CSV: `manifold/choice_epoch_diag/ak_late_sticky/fitted/`.
 
-**Fit once per eid, not per split.** θ is a property of the session's behaviour, not of the neural split. `get_actkernel_choice_fit` already pickles under `manifold/actkernel_fits/{eid8}/`. Prefit all BWM sessions, then every choice / act_block split and every probe of that eid reuses the pickle:
+**Fit once per eid.** `get_actkernel_choice_fit` pickles under `manifold/actkernel_fits/{eid8}/`.
 
-```bash
-python scripts/run_goal2_splits.py --prefit-actkernel
-# ORCD: sbatch scripts/run_goal2_ak_prefit_slurm.sh
-```
+**Neural null (option 1).** New pseudo stim/blocks; copy-last on synthetic choices; remake the stratum **on that draw**:
 
-Refitting every split would redo the same ~20 s MCMC × 16 splits × n insertions.
-
-**Within-stratum null (fixedstim + late-sticky).** Real `elig_idx` is the shuffle stratum; neural `b` stays put; only labels are AK+copy-last.
-
-| Family | Shuffle stratum | Null labels |
+| Family | Pseudo stratum | Null labels |
 |---|---|---|
-| choice L–R | stim × prior | synthetic **choices** at real `elig_idx` |
-| act_block prior L–R | stim × choice | synthetic **priors** (choices → analysis α=0.2 binary) at real `elig_idx` |
+| choice L–R | that draw’s stim × **its** act-prior | sticky **choices** |
+| act_block prior L–R | that draw’s stim × **generated** choices | that draw’s **act-prior** |
 
-Disk: `{split}_pseudo_fixed_sticky.npy`. Stim-aligned + move-aligned presets: `choice_lr_ak_sticky` (8), `act_block_ak_sticky` (8).
+Disk: `{split}_pseudo_strat_sticky.npy`. Copy-last targets use `true_priors` (true-block 0.5 drop), not the overwritten act-binary column.
 
 ```bash
-# laptop smoke
-python scripts/run_goal2_splits.py --preset choice_lr_ak_sticky_duringstim \
-  --actkernel-null-mode fixedstim --actkernel-late-sticky --nrand 20
-# ORCD both families:
-bash scripts/submit_goal2_ak_sticky_orcd.sh
-# or one family:
-PRESET=choice_lr_ak_sticky NULL_SCHEME=pseudo_fixed_sticky \
-  bash scripts/submit_goal2_choice_null_sharded.sh
-PRESET=act_block_ak_sticky NULL_SCHEME=pseudo_fixed_sticky \
-  bash scripts/submit_goal2_choice_null_sharded.sh
+PREFIT=0 FAMILY=both bash scripts/submit_goal2_ak_sticky_orcd.sh
 ```
 
-**2026-08-22b — full-BWM FDR** (alyx `res/new`, all 16 splits, `n_null=2000`). Four-split combine + BH as 07-27 / 08-14. Shuffle baseline: choice and act_block duringstim = alyx min5; act_block duringchoice = openalyx pre-min5 (same as Harris table).
+**Mistake (do not use).** A job was submitted as option 2 (`fixedstim` / `_pseudo_fixed_sticky`): real stim, labels at real `elig_idx`. That is not option 1. Those FDR tables are deleted. Files may still sit in alyx `res/new` under `_pseudo_fixed_sticky`; ignore them for claims.
 
-Choice coverage matches shuffle (~198–200 regions / 49–55 k cells). Observed `amp_euc` ratio sticky/shuffle = **1.00**. Copy-last did not change the data curves — only the null.
-
-| arm (choice L–R) | duringstim FDR @0.01 | duringchoice FDR @0.01 | median uncorr p (stim / move) |
-| --- | ---: | ---: | --- |
-| Harris unique | 21 | 58 | 0.133 / 0.046 |
-| AK strat ×3 | 75 | 105 | 0.021 / 0.0045 |
-| min5 shuffle | 88 | 122 | 0.011 / 0.0015 |
-| AK fixed-stim | 95 | 124 | 0.0087 / 0.0020 |
-| **fitted + copy-last** | **178** | **185** | **0.0005 / 0.0005** |
-
-Versus min5 shuffle (n=207): duringstim 88→178 (lost 0, gained 90); duringchoice 122→185 (lost 3, gained 66). BH @0.05: 192 / 194. Liberality on choice is now **Harris < strat < shuffle < fixed < sticky**. Matching session quintile mean_run made the within-stratum null *narrower* than stationary fixed-stim, not wider.
-
-Act_block f2 insertions thin like Harris (181–188 regions / 37–42 k cells vs shuffle 200–202 / 55–56 k) — here it is insertions that fail balanced *synthetic* priors at the real stim×choice `elig_idx`, not donor-stratum skip. Four-split observed amp ratio sticky/shuffle **0.71** (same as Harris).
-
-| arm (act_block prior L–R) | duringstim FDR @0.01 | duringchoice FDR @0.01 | median uncorr p (stim / move) |
-| --- | ---: | ---: | --- |
-| min5 / oa shuffle | 42 | 42 | 0.119 / 0.089 |
-| **fitted + copy-last** | **0** | **11** | 0.136 / 0.155 |
-| Harris unique | 0 | 0 | 0.725 / 0.695 |
-
-Duringstim: 42→0 (lost 42, gained 0), same 0 FDR @0.01 as Harris. Uncorr ≤0.01 is 41 (Harris was 2); BH @0.05 still **41**. Duringchoice BH @0.01 hits: CA1, DG, DP, FOTU, ILA, LP, LPO, LSr, VISa, VPL, ZI.
-
-Plots / CSV: `alyx.../meta/table_{choice,act_block}_sticky_vs_shuffle_{,duringchoice_}p_mean_c_0.01.png` + `.csv`.
+**Not done:** full-BWM option-1 + copy-last FDR vs Harris / min5 shuffle.
 
 ---
 
@@ -829,5 +786,5 @@ Plots / CSV: `alyx.../meta/table_{choice,act_block}_sticky_vs_shuffle_{,duringch
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
 5. **act_block Harris unique is a near-total null** (0 FDR @0.01). 08-14b: **not** the f2 donor-stratum skip. **2026-08-17 unsplit:** same 0 FDR @0.01. **2026-08-17b early-stim 80 ms:** shuffle FDR shrinks but unsplit stays liberal; Harris still 0 FDR @0.01. **2026-08-18 `act_block_only` ITI:** shuffle already 0 FDR @0.01 (5 at 0.05); Harris unique 0 FDR @0.01 **and** @0.05 (208 regions, 63k cells). Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? Duringchoice unsplit **shuffle** still missing.
-6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. **08-22b full BWM:** on choice L–R this arm is the *most liberal* (178 / 185 FDR @0.01 vs shuffle 88 / 122; amps unchanged). On act_block duringstim it is Harris-like (0 FDR @0.01) but duringchoice keeps 11 hits and uncorr p is much smaller than Harris (0.14 vs 0.72). Why does matching session mean_run *narrow* the choice null? Is the act_block f2 drop (same cell loss as Harris) the intended failure mode?
+6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. Option-1 + copy-last (`_pseudo_strat_sticky`) is wired; full-BWM FDR not yet run. An option-2 (`fixedstim`) job was run by mistake; those numbers are deleted.
 
