@@ -1,14 +1,15 @@
 #!/bin/bash
 # Submit sharded Goal 2 choice L–R jobs for one structured null scheme.
 #
-#   NULL_SCHEME=pseudo_strat|pseudo_fixed|harris \
+#   NULL_SCHEME=pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|harris \
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
-# Schemes (journal 2026-07-23b / 2026-07-24):
+# Schemes (journal 2026-07-23b / 2026-07-24 / 2026-08-22):
 #   pseudo_strat  — opt 1: AK + stim×block–stratified pseudo
 #                   default PSEUDO_LEN_FACTOR=3; adaptive bump to 16 if needed
 #                   always writes {split}_pseudo_strat*.npy (overwrites prior strat)
 #   pseudo_fixed  — opt 2: AK on exact real stim×block sequence
+#   pseudo_fixed_sticky / strat_sticky — fitted AK + copy-last (_sticky suffix)
 #   harris / harris_unique — opt 3 unique-null: writes {split}_harris_unique*
 #                   (does NOT overwrite legacy with-replacement _harris)
 #
@@ -55,6 +56,7 @@ export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbra
 SESSION_SHUFFLE_NULL=0
 ACTKERNEL_CHOICE_NULL=0
 ACTKERNEL_NULL_MODE=""
+ACTKERNEL_LATE_STICKY="${ACTKERNEL_LATE_STICKY:-0}"
 CASE_TAG=""
 SUFFIX=""
 JOB_PREFIX=""
@@ -81,6 +83,28 @@ case "$_ORIG_SCHEME" in
     PSEUDO_LEN_FACTOR=""
     CLEAR_STREAM="${CLEAR_STREAM:-0}"
     ;;
+  pseudo_fixed_sticky|fixed_sticky|fixedstim_sticky)
+    NULL_SCHEME=pseudo_fixed_sticky
+    ACTKERNEL_CHOICE_NULL=1
+    ACTKERNEL_NULL_MODE=fixedstim
+    ACTKERNEL_LATE_STICKY=1
+    CASE_TAG=fixed_sticky
+    SUFFIX=_pseudo_fixed_sticky
+    JOB_PREFIX=g2pfs
+    PSEUDO_LEN_FACTOR=""
+    CLEAR_STREAM="${CLEAR_STREAM:-0}"
+    ;;
+  pseudo_strat_sticky|strat_sticky)
+    NULL_SCHEME=pseudo_strat_sticky
+    ACTKERNEL_CHOICE_NULL=1
+    ACTKERNEL_NULL_MODE=strat
+    ACTKERNEL_LATE_STICKY=1
+    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-3}"
+    CASE_TAG=strat_sticky
+    SUFFIX=_pseudo_strat_sticky
+    JOB_PREFIX=g2pss
+    CLEAR_STREAM="${CLEAR_STREAM:-1}"
+    ;;
   harris|harris_unique|session)
     # Unique-null Harris → _harris_unique (legacy with-replacement _harris untouched)
     NULL_SCHEME=harris_unique
@@ -95,12 +119,13 @@ case "$_ORIG_SCHEME" in
     fi
     ;;
   *)
-    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|harris_unique (got $_ORIG_SCHEME)" >&2
+    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|pseudo_strat_sticky|harris_unique (got $_ORIG_SCHEME)" >&2
     exit 1
     ;;
 esac
 
 export SESSION_SHUFFLE_NULL ACTKERNEL_CHOICE_NULL ACTKERNEL_NULL_MODE NULL_SCHEME
+export ACTKERNEL_LATE_STICKY
 export ACTKERNEL_PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
 export PSEUDO_LEN_FACTOR
 
@@ -153,7 +178,7 @@ if [[ "$CLEAR_STREAM" == "1" && -n "$SUFFIX" ]]; then
 fi
 
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
-echo "NULL_SCHEME=$NULL_SCHEME  mode=$ACTKERNEL_NULL_MODE  harris=$SESSION_SHUFFLE_NULL"
+echo "NULL_SCHEME=$NULL_SCHEME  mode=$ACTKERNEL_NULL_MODE  late_sticky=$ACTKERNEL_LATE_STICKY  harris=$SESSION_SHUFFLE_NULL"
 echo "PSEUDO_LEN_FACTOR=${PSEUDO_LEN_FACTOR:-1}  ACTKERNEL_PSEUDO_LEN_FACTOR=${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
 echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
@@ -185,6 +210,15 @@ elif [[ "$SMOKE_FIRST" == "1" && "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
   echo "actkernel smoke ($ACTKERNEL_NULL_MODE factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}) -> $SMOKE_JID"
   DEP_AFTER="--dependency=afterok:${SMOKE_JID}"
 fi
+# Optional prefit JID from submit_goal2_ak_sticky_orcd.sh
+if [[ -n "${PREFIT_JID:-}" ]]; then
+  if [[ -n "$DEP_AFTER" ]]; then
+    DEP_AFTER="${DEP_AFTER}:${PREFIT_JID}"
+  else
+    DEP_AFTER="--dependency=afterok:${PREFIT_JID}"
+  fi
+  echo "also afterok prefit $PREFIT_JID"
+fi
 
 for sp in "${SPLITS[@]}"; do
   TAG=$(job_tag "$sp")
@@ -195,7 +229,7 @@ for sp in "${SPLITS[@]}"; do
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
       $DEP_AFTER \
-      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
+      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",ACTKERNEL_LATE_STICKY="$ACTKERNEL_LATE_STICKY",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
       scripts/run_goal2_shard_slurm.sh)
     SHARD_JOBS+=("$JID")
     echo "  $sp shard $k/$N_SHARDS -> $JID"
@@ -205,7 +239,7 @@ for sp in "${SPLITS[@]}"; do
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \
-    --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
+    --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",ACTKERNEL_LATE_STICKY="$ACTKERNEL_LATE_STICKY",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
     scripts/run_goal2_finalize_slurm.sh)
   echo "  $sp finalize -> $FID"
 done

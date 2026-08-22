@@ -28,13 +28,14 @@ SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
 ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
 ACTKERNEL_NULL_MODE="${ACTKERNEL_NULL_MODE:-}"
 ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
+ACTKERNEL_LATE_STICKY="${ACTKERNEL_LATE_STICKY:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
 echo "Host: $(hostname) Date: $(date) SPLIT=$SPLIT"
-echo "exclude_sticky=$EXCLUDE_STICKY_TRIALS session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-} pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
+echo "exclude_sticky=$EXCLUDE_STICKY_TRIALS session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-} late_sticky=$ACTKERNEL_LATE_STICKY pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 ARGS=(--finalize-only --splits "$SPLIT")
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && ARGS+=(--exclude-sticky-trials)
@@ -42,6 +43,7 @@ ARGS=(--finalize-only --splits "$SPLIT")
 [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]] && ARGS+=(--actkernel-choice-null)
 [[ -n "$ACTKERNEL_NULL_MODE" ]] && ARGS+=(--actkernel-null-mode "$ACTKERNEL_NULL_MODE")
 [[ -n "$ACTKERNEL_PSEUDO_LEN_FACTOR" ]] && ARGS+=(--actkernel-pseudo-len-factor "$ACTKERNEL_PSEUDO_LEN_FACTOR")
+[[ "$ACTKERNEL_LATE_STICKY" == "1" ]] && ARGS+=(--actkernel-late-sticky)
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
@@ -57,4 +59,5 @@ elif [[ "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
 elif [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
   SUFFIX=_harris_unique
 fi
+[[ "$ACTKERNEL_LATE_STICKY" == "1" && -n "$SUFFIX" ]] && SUFFIX="${SUFFIX}_sticky"
 ls -lh "$RES_ROOT/${SPLIT}${SUFFIX}"*.npy 2>/dev/null || true

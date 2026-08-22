@@ -159,6 +159,12 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    # Fitted AK + copy-last, within shuffle strata (fixedstim + late_sticky)
+    'choice_lr_ak_sticky': (
+        CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
+    ),
+    'choice_lr_ak_sticky_duringstim': list(CHOICE_DURINGSTIM_ACT),
+    'choice_lr_ak_sticky_duringchoice': list(CHOICE_DURINGCHOICE_ACT),
     # Act_block prior L–R (Harris unique-null via --session-shuffle-null)
     # Default set: 4 duringstim choice×f + 4 duringchoice + act_block_only
     # (no unconditioned duringstim_l/r; those stay in stimOn_times_act only).
@@ -176,6 +182,12 @@ PRESETS = {
     'act_block_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     'act_block_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     'act_block_harris_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    'act_block_ak_sticky': (
+        list(RUN_ALIGN['stimOn_times'])
+        + list(RUN_ALIGN['firstMovement_times'])
+    ),
+    'act_block_ak_sticky_duringstim': list(RUN_ALIGN['stimOn_times']),
+    'act_block_ak_sticky_duringchoice': list(RUN_ALIGN['firstMovement_times']),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)
     'choice_lr_excl_sticky_act': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
@@ -190,6 +202,37 @@ PRESETS = {
     'goal3_c0_choice': ba.GOAL3_C0_CHOICE_SPLITS,
     **_goal3_presets(),
 }
+
+
+def _prefit_actkernel_sessions(restart=True):
+    """MCMC-fit ActionKernel once per BWM eid; cache under actkernel_fits/."""
+    from pathlib import Path as _P
+    pqt = _P(ba.one.cache_dir) / 'bwm_tables' / 'trials.pqt'
+    if not pqt.exists():
+        raise SystemExit(f'Missing {pqt}')
+    import pandas as pd
+    df = pd.read_parquet(pqt)
+    eids = df['eid'].astype(str).unique()
+    n_ok = 0
+    n_skip = 0
+    for i, eid in enumerate(eids):
+        d = df[df['eid'] == eid]
+        if 'bwm_include' in d.columns:
+            d = d[d['bwm_include'].astype(bool)]
+        if len(d) < 10:
+            n_skip += 1
+            continue
+        try:
+            ba.get_actkernel_choice_fit(str(eid), d.reset_index(drop=True))
+            n_ok += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f'  skip {eid}: {exc}')
+            n_skip += 1
+        if (i + 1) % 10 == 0:
+            print(f'  prefit {i + 1}/{len(eids)}  ok={n_ok} skip={n_skip}',
+                  flush=True)
+    print(f'prefit done: ok={n_ok} skip={n_skip} / {len(eids)}')
+    return n_ok
 
 
 def _configure_one(cache_dir: str | None, base_url: str | None):
@@ -245,20 +288,30 @@ def main():
                         '{split}_harris_unique*.npy; does not overwrite '
                         'legacy {split}_harris*.npy')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,
-                   help='Enable ActionKernel synthetic-choice nulls for '
-                        'choice_stim*/choice_duringstim* (default mode: strat). '
-                        'Takes precedence over --session-shuffle-null')
+                   help='Enable ActionKernel synthetic nulls for choice L–R '
+                        '(labels=choices) and act_block prior L–R '
+                        '(labels=α=0.2 priors from synthetic choices). '
+                        'Default mode: strat. Takes precedence over Harris')
     p.add_argument('--actkernel-null-mode', default=None,
                    choices=['strat', 'fixedstim', 'unconstrained'],
-                   help='AK null variant: strat=stim×block–stratified pseudo '
-                        '(opt 1); fixedstim=real stim×block sequence (opt 2); '
-                        'unconstrained=legacy calendar-index pseudo. '
+                   help='AK null variant: strat=new pseudo + remade stratum '
+                        '(opt 1); fixedstim=real stim, labels at the real '
+                        'shuffle-stratum elig_idx (opt 2, within-stratum); '
+                        'unconstrained=legacy (choice only). '
                         'Implies AK null even without --actkernel-choice-null')
+    p.add_argument('--prefit-actkernel', action='store_true',
+                   help='MCMC-fit ActionKernel on all BWM sessions and cache '
+                        'under manifold/actkernel_fits/ (once per eid; '
+                        'splits reuse the pickle)')
     p.add_argument('--actkernel-pseudo-len-factor', type=float, default=None,
                    help='Strat only: BWM pseudo length = factor × real n_trials '
                         '(default 3, or env ACTKERNEL_PSEUDO_LEN_FACTOR). '
                         'On low accept rate doubles up to 16; always '
                         'writes _pseudo_strat outputs')
+    p.add_argument('--actkernel-late-sticky', action='store_true', default=False,
+                   help='On AK synthetic choices, signed copy-last so each '
+                        'draw\'s post-0.5 quintile mean_run matches that real '
+                        'session. Default off. Appends _sticky to the AK suffix')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -281,6 +334,8 @@ def main():
     p.add_argument('--list-splits', action='store_true',
                    help='Print resolved split names (one per line) and exit')
     args = p.parse_args()
+    if os.environ.get('ACTKERNEL_LATE_STICKY') == '1':
+        args.actkernel_late_sticky = True
 
     if (
         args.preset == 'goal3_c0_choice'
@@ -323,6 +378,13 @@ def main():
               Path(ba.one.cache_dir, 'manifold', 'insertion_cache'))
         return
 
+    if args.prefit_actkernel:
+        print('ONE cache:', ba.one.cache_dir)
+        n = _prefit_actkernel_sessions(restart=args.restart)
+        print(f'Done. {n} ActionKernel fits under',
+              ba._actkernel_model_dir())
+        return
+
     splits = _validate_splits(splits)
 
     if args.finalize_only:
@@ -337,6 +399,7 @@ def main():
                     args.actkernel_choice_null, ak_mode) is None),
             actkernel_null_mode=ak_mode,
             actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
+            actkernel_late_sticky=args.actkernel_late_sticky,
         )
         print('ONE cache:', ba.one.cache_dir)
         print('Finalize splits:', splits, 'res=', ba.pth_res,
@@ -368,6 +431,7 @@ def main():
           'actkernel_choice_null:', args.actkernel_choice_null,
           'actkernel_null_mode:', args.actkernel_null_mode,
           'actkernel_pseudo_len_factor:', args.actkernel_pseudo_len_factor,
+          'actkernel_late_sticky:', args.actkernel_late_sticky,
           'exclude_sticky_trials:', args.exclude_sticky_trials)
 
     if args.exclude_sticky_trials:
@@ -381,6 +445,7 @@ def main():
                 args.actkernel_choice_null, args.actkernel_null_mode) is None),
         actkernel_null_mode=args.actkernel_null_mode,
         actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
+        actkernel_late_sticky=args.actkernel_late_sticky,
     )
 
     # bycontrast=False: contrast is read from the split name (..._0.125).
@@ -401,6 +466,7 @@ def main():
         actkernel_choice_null=args.actkernel_choice_null,
         actkernel_null_mode=args.actkernel_null_mode,
         actkernel_pseudo_len_factor=args.actkernel_pseudo_len_factor,
+        actkernel_late_sticky=args.actkernel_late_sticky,
         exclude_sticky_trials=args.exclude_sticky_trials,
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,

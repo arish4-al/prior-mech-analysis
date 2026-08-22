@@ -44,6 +44,11 @@ Fixed-stim helper (still available; not the wired null):
   ``stim_side_from_trials(trials)`` — artificial choices on the *real*
   stim/side stream.
 
+Optional late stickiness (``late_sticky=True`` / ``--actkernel-late-sticky``):
+  after AK simulate, a copy-last mixture so each draw's post-0.5 quintile
+  mean_run matches **this real session's** quintile mean_run (not a cohort
+  median). Copy-last can only add repeats. Default off = stationary α.
+
 ``behavior_models`` is vendored as git submodule ``third_party/behavior_models``
 (path-prepended below). Remote jobs only need this checkout + ``torch`` in the
 conda env — no ``pip install behavior_models`` required. Init with::
@@ -67,6 +72,17 @@ if _BM_ROOT.is_dir() and str(_BM_ROOT) not in sys.path:
 
 from behavior_models.models import ActionKernel
 from behavior_models.utils import format_data, format_input as mut_format_input
+
+# Late stickiness lives next to this file (no torch / behavior_models dep).
+if str(_REPO_ROOT / 'scripts') not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / 'scripts'))
+from late_choice_stickiness import (  # noqa: E402
+    apply_late_stickiness_rows,
+    quintile_mean_run,
+)
+
+# Offset so stickiness RNG is independent of the pseudo-session / torch seeds.
+_LATE_STICKY_SEED_OFFSET = 10007
 
 
 # ActionKernel parameter order (single_zeta=True): see models.py::ActionKernel.simulate
@@ -124,6 +140,26 @@ def _sim_model():
     )
 
 
+def _real_mean_run_targets(trials_df):
+    """Post-0.5 quintile mean_run of the real session's choices."""
+    df = _as_trials_df(trials_df)
+    return quintile_mean_run(df['choice'].to_numpy(), df['probabilityLeft'].to_numpy())
+
+
+def _maybe_late_stickiness(choice, pleft, seed=None, late_sticky=False,
+                           target_mean_run=None):
+    """Copy-last mixture matching this real session's quintile mean_run."""
+    if not late_sticky:
+        return choice
+    if target_mean_run is None:
+        raise ValueError(
+            'late_sticky=True requires target_mean_run from the real session')
+    rng_seed = None if seed is None else int(seed) + _LATE_STICKY_SEED_OFFSET
+    rng = np.random.default_rng(rng_seed)
+    return apply_late_stickiness_rows(
+        choice, pleft, rng, target_mean_run=target_mean_run)
+
+
 def simulate_choices(stim, side, params, n_sim=1, seed=None, model=None):
     """Core simulator: run the action kernel forward over a stimulus stream.
 
@@ -149,7 +185,8 @@ def simulate_choices(stim, side, params, n_sim=1, seed=None, model=None):
     return act_sim
 
 
-def make_synthetic_session(trials_df, params, seed=None, n_trials=None):
+def make_synthetic_session(trials_df, params, seed=None, n_trials=None,
+                           late_sticky=False):
     """Reproduce generate_null_distribution_session: a pseudo-session whose choice &
     feedbackType are simulated by the action-kernel model. This is one draw of the
     paper's 'synthetic session' choice/feedback null.
@@ -177,6 +214,10 @@ def make_synthetic_session(trials_df, params, seed=None, n_trials=None):
         })
     choice = simulate_choices(pseudosess.signed_contrast.values,
                               pseudosess.stim_side.values, params, n_sim=1, seed=seed)
+    target = _real_mean_run_targets(trials_df) if late_sticky else None
+    choice = _maybe_late_stickiness(
+        choice, pseudosess['probabilityLeft'].values, seed=seed,
+        late_sticky=late_sticky, target_mean_run=target)
     pseudosess["choice"] = choice
     pseudosess["feedbackType"] = np.where(pseudosess["choice"] == pseudosess["stim_side"], 1, -1)
     return pseudosess
@@ -263,7 +304,7 @@ def _pseudo_sessions_vectorized(trials, n, seed=0, n_trials=None):
     return signed_contrast.astype(float), stim_side, pleft
 
 
-def _synthetic_fast(trials, params, n, seed=0, n_trials=None):
+def _synthetic_fast(trials, params, n, seed=0, n_trials=None, late_sticky=False):
     """Fast path: vectorized pseudo-sessions + a single batched simulate_parallel torch call."""
     signed_contrast, stim_side, pleft = _pseudo_sessions_vectorized(
         trials, n, seed=seed, n_trials=n_trials)
@@ -275,6 +316,11 @@ def _synthetic_fast(trials, params, n, seed=0, n_trials=None):
     # simulate_parallel runs all n sessions through the trial loop at once (nb_simul=1 each).
     act_sim, _, _ = model.simulate_parallel(arr_params, signed_contrast, stim_side, nb_simul=1)
     choice = np.asarray(act_sim.squeeze(-1), dtype=np.int64)   # (n, n_trials), {-1, +1}
+    target = _real_mean_run_targets(trials) if late_sticky else None
+    choice = _maybe_late_stickiness(
+        choice, pleft, seed=seed, late_sticky=late_sticky,
+        target_mean_run=target)
+    choice = np.asarray(choice, dtype=np.int64)
     feedback = np.where(choice == stim_side, 1, -1).astype(np.int64)
     return dict(choice=choice, feedbackType=feedback, signed_contrast=signed_contrast,
                 stim_side=stim_side, probabilityLeft=pleft)
@@ -283,7 +329,7 @@ def _synthetic_fast(trials, params, n, seed=0, n_trials=None):
 def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-000000000000",
                                    subject="synthetic_mouse", nb_steps=None, seed=0,
                                    model_dir=None, return_dataframes=False, params=None,
-                                   fast=True, n_trials=None):
+                                   fast=True, n_trials=None, late_sticky=False):
     """Standalone: from a trials DataFrame, build `n` synthetic sessions (choice/feedback null).
 
     Same as generate_synthetic_sessions but takes the trials object directly (no ONE lookup).
@@ -304,6 +350,9 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
                             Set fast=False for the exact upstream per-session loop (slow), e.g.
                             when you need return_dataframes or seed-for-seed parity with the paper.
     n_trials : int or None  length of each synthetic session. None → ``trials.shape[0]``.
+    late_sticky : bool      copy-last mixture so each draw's post-0.5 quintile
+                            mean_run matches this real session's quintile mean_run.
+                            Default False = stationary AK.
 
     Returns
     -------
@@ -321,7 +370,8 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
     n_out = int(n_real if n_trials is None else n_trials)
 
     if fast and not return_dataframes:
-        arrs = _synthetic_fast(trials, params, n, seed=seed, n_trials=n_out)
+        arrs = _synthetic_fast(
+            trials, params, n, seed=seed, n_trials=n_out, late_sticky=late_sticky)
         return dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_out, **arrs)
 
     # ---- slow loop (per-session DataFrame; needed for return_dataframes) ----
@@ -332,7 +382,8 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
 
     for i in range(n):
         ps = make_synthetic_session(
-            trials, params, seed=seed + i, n_trials=n_out)
+            trials, params, seed=seed + i, n_trials=n_out,
+            late_sticky=late_sticky)
         for k in arrs:
             arrs[k][i] = ps[k].values
         if return_dataframes:
@@ -370,7 +421,7 @@ def stim_side_from_trials(trials):
 def synthetic_choices_fixed_stim(
         trials, params=None, n=1, eid="0000face-0000-0000-0000-000000000000",
         subject="synthetic_mouse", nb_steps=None, seed=None, model_dir=None,
-        model=None):
+        model=None, late_sticky=False):
     """Generate ``n`` choice sequences with the real stim / block schedule fixed.
 
     Fits ActionKernel on ``trials`` (unless ``params`` given), then calls
@@ -396,6 +447,10 @@ def synthetic_choices_fixed_stim(
 
     choice = simulate_choices(
         stim, side, params, n_sim=n, seed=seed, model=model)
+    target = _real_mean_run_targets(trials) if late_sticky else None
+    choice = _maybe_late_stickiness(
+        choice, pLeft, seed=seed, late_sticky=late_sticky,
+        target_mean_run=target)
     return dict(
         choice=np.asarray(choice, dtype=np.int64),
         params=np.asarray(params, dtype=float),
