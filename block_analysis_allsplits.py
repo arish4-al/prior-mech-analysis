@@ -560,12 +560,15 @@ def _strat_pseudo_n_trials(trials, pseudo_len_factor=None):
 
 def configure_null_file_suffix(
         actkernel_choice_null=False, session_shuffle_null=False,
-        actkernel_null_mode=None, actkernel_pseudo_len_factor=None):
+        actkernel_null_mode=None, actkernel_pseudo_len_factor=None,
+        actkernel_late_sticky=False):
     '''Tag pooled / stream_acc filenames by null scheme; shuffle keeps plain names.
 
     - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (any len_factor)
     - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy``
     - AK ``unconstrained`` → ``{split}_pseudosession*.npy`` (legacy)
+    - AK + ``late_sticky`` → the same tags with ``_sticky`` appended
+      (does **not** overwrite stationary-α AK files)
     - ``--session-shuffle-null`` (Harris unique-null) → ``{split}_harris_unique*.npy``
       (does **not** overwrite legacy with-replacement ``{split}_harris*.npy``)
     - default label shuffle → ``{split}*.npy``
@@ -576,6 +579,8 @@ def configure_null_file_suffix(
         actkernel_choice_null, actkernel_null_mode)
     if mode is not None:
         RES_FILE_SUFFIX = _ACTKERNEL_MODE_SUFFIX[mode]
+        if actkernel_late_sticky:
+            RES_FILE_SUFFIX = f'{RES_FILE_SUFFIX}_sticky'
     elif session_shuffle_null:
         RES_FILE_SUFFIX = '_harris_unique'
     else:
@@ -970,7 +975,8 @@ def _donor_block_conditioning_mask(rec, split, keep=None):
 def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
                                 max_tries=HARRIS_MAX_TRIES,
                                 mode='unconstrained', split=None,
-                                actkernel_pseudo_len_factor=None):
+                                actkernel_pseudo_len_factor=None,
+                                actkernel_late_sticky=False):
     '''
     Draw one ActionKernel null label vector on eligible trials.
 
@@ -999,12 +1005,14 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
         seed = int(rng.integers(0, 2**31 - 1))
         if mode == 'fixedstim':
             out = syn.synthetic_choices_fixed_stim(
-                trials, params=theta, n=1, seed=seed, model=sim_model)
+                trials, params=theta, n=1, seed=seed, model=sim_model,
+                late_sticky=actkernel_late_sticky)
             ch = np.asarray(out['choice'], dtype=float).reshape(-1)
             ys = ch[elig_idx] == 1
         elif mode == 'strat':
             ps = syn.make_synthetic_session(
-                trials, theta, seed=seed, n_trials=n_pseudo)
+                trials, theta, seed=seed, n_trials=n_pseudo,
+                late_sticky=actkernel_late_sticky)
             ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
             side = np.asarray(ps['stim_side'], dtype=float).reshape(-1)
             mask = _stratum_mask_for_stream(
@@ -1012,7 +1020,8 @@ def _sample_actkernel_choice_ys(elig_idx, trials, fit, rng=None,
                 pleft_schedule=np.asarray(ps['probabilityLeft'], dtype=float))
             ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
         else:
-            ps = syn.make_synthetic_session(trials, theta, seed=seed)
+            ps = syn.make_synthetic_session(
+                trials, theta, seed=seed, late_sticky=actkernel_late_sticky)
             ch = np.asarray(ps['choice'], dtype=float).reshape(-1)
             ys = ch[elig_idx] == 1
         last_ys = ys
@@ -1830,10 +1839,34 @@ def _compute_control_D_harris_block(
     }
 
 
+def _act_prior_binary_from_choice(choice):
+    '''Analysis-kernel binary prior (α=0.2 → 0.8/0.2) from a choice sequence.'''
+    actions = list(np.asarray(choice, dtype=float).reshape(-1))
+    _, pbin = action_kernel_priors(alpha, actions)
+    return np.asarray(pbin, dtype=float)
+
+
+def _act_block_stream_mask(split, stim_side, choice, signed_contrast=None):
+    '''act_block stim×choice (±contrast) mask on a synthetic stream.'''
+    spec = _act_block_conditioning_spec(split)
+    stim_side = np.asarray(stim_side, dtype=float).reshape(-1)
+    stim_is_left = stim_side < 0
+    cl = cr = None
+    if spec.get('contrast') is not None and signed_contrast is not None:
+        signed = np.asarray(signed_contrast, dtype=float).reshape(-1)
+        cl = np.where(stim_is_left, np.abs(signed), np.nan)
+        cr = np.where(~stim_is_left, np.abs(signed), np.nan)
+    return _block_conditioning_mask(
+        spec, stim_is_left=stim_is_left, choice=choice,
+        contrast_left=cl, contrast_right=cr)
+
+
 def _get_d_vars_block_harris(
         split, trials, spikes, clusters, mapping, control, nrand,
-        null_batch_size, donor_bank, eid):
-    '''Prior L vs R (act_block_*) with Harris unique-null on conditioning stratum.'''
+        null_batch_size, donor_bank, eid,
+        actkernel_null_mode=None, actkernel_pseudo_len_factor=None,
+        actkernel_late_sticky=False):
+    '''Prior L vs R (act_block_*) with Harris or AK null on the conditioning stratum.'''
     alignment = align[split]
     spec = _act_block_conditioning_spec(split)
 
@@ -1863,7 +1896,9 @@ def _get_d_vars_block_harris(
     n_left = int(labels_true.sum())
     n_right = int((~labels_true).sum())
     print('#trials per condition: ', n_left, n_right,
-          f'(eligible={len(elig_idx)}, harris-block conditioning null)')
+          f'(eligible={len(elig_idx)}, '
+          f'{"actkernel-block" if actkernel_null_mode else "harris-block"} '
+          f'conditioning null)')
     if n_left < min_trials_per_side or n_right < min_trials_per_side:
         raise InsufficientTrials(
             f'need ≥{min_trials_per_side} trials/side, got {n_left}, {n_right}')
@@ -1889,6 +1924,15 @@ def _get_d_vars_block_harris(
     b = b[:, goodcells, :]
 
     if control:
+        if actkernel_null_mode is not None:
+            return _compute_control_D_actkernel_block(
+                b, acs, acs1, labels_true, half1, half2, ntr, nrand, split,
+                trials=trials, elig_idx=elig_idx, eid=eid,
+                null_batch_size=null_batch_size,
+                actkernel_null_mode=actkernel_null_mode,
+                actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+                actkernel_late_sticky=actkernel_late_sticky,
+            )
         if not donor_bank:
             raise InsufficientTrials(
                 f'harris-block-null [{split}]: empty donor_bank; '
@@ -1920,7 +1964,8 @@ def _get_d_vars_block_harris(
 def _compute_control_D_actkernel_choice(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
-        actkernel_null_mode='strat', actkernel_pseudo_len_factor=None):
+        actkernel_null_mode='strat', actkernel_pseudo_len_factor=None,
+        actkernel_late_sticky=False):
     '''
     ActionKernel synthetic-choice nulls (journal options 1–2 + legacy).
 
@@ -1975,6 +2020,7 @@ def _compute_control_D_actkernel_choice(
     print(f'actkernel-choice [{split}]: mode={mode}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
           f'(real={len(trials)}, n_elig={n_elig}); '
+          f'late_sticky={bool(actkernel_late_sticky)}; '
           f'fit mode={fit.get("mode")} '
           f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
 
@@ -1999,7 +2045,8 @@ def _compute_control_D_actkernel_choice(
         if mode == 'fixedstim':
             out = syn.synthetic_choices_fixed_stim(
                 trials, params=theta, n=n_gen,
-                seed=seed_base + gen_offset, model=sim_model)
+                seed=seed_base + gen_offset, model=sim_model,
+                late_sticky=actkernel_late_sticky)
             ch_mat = np.asarray(out['choice'], dtype=float)
             if ch_mat.ndim == 1:
                 ch_mat = ch_mat[None, :]
@@ -2008,7 +2055,8 @@ def _compute_control_D_actkernel_choice(
             out = syn.synthetic_sessions_from_trials(
                 trials, n=n_gen, eid=str(eid), subject='bwm',
                 params=theta, seed=seed_base + gen_offset, fast=True,
-                n_trials=(n_pseudo if mode == 'strat' else None))
+                n_trials=(n_pseudo if mode == 'strat' else None),
+                late_sticky=actkernel_late_sticky)
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
@@ -2067,6 +2115,8 @@ def _compute_control_D_actkernel_choice(
         'fixedstim': 'synthetic_choice_pseudo_fixed',
         'unconstrained': 'synthetic_choice_pseudosession',
     }[mode]
+    if actkernel_late_sticky:
+        scheme = f'{scheme}_sticky'
     return {
         'acs': acs,
         'acs1': acs1,
@@ -2081,6 +2131,179 @@ def _compute_control_D_actkernel_choice(
         'actkernel_params': np.asarray(fit['params'], dtype=float),
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
+        'actkernel_late_sticky': bool(actkernel_late_sticky),
+    }
+
+
+def _compute_control_D_actkernel_block(
+        b, acs, acs1, labels_true, half1, half2, ntr, nrand, split,
+        trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
+        actkernel_null_mode='fixedstim', actkernel_pseudo_len_factor=None,
+        actkernel_late_sticky=False):
+    '''AK synthetic-prior nulls for act_block (same shuffle strata as Harris).
+
+    Fit ActionKernel once on the real session. Simulate choices (± copy-last),
+    recompute analysis-kernel binary priors (α=0.2), use those as null labels:
+
+    - ``fixedstim``: real stim stream; priors at the real stim×choice
+      ``elig_idx`` (within-stratum).
+    - ``strat``: new pseudo stim/blocks; take priors from the pseudo's own
+      stim×choice stratum, length-matched to ``n_elig``.
+    '''
+    mode = _resolve_actkernel_null_mode(True, actkernel_null_mode)
+    if mode == 'unconstrained':
+        raise ValueError(
+            'act_block AK null does not support unconstrained; '
+            'use fixedstim (within-stratum) or strat')
+    len_factor = _actkernel_pseudo_len_factor(actkernel_pseudo_len_factor)
+    labels_true = np.asarray(labels_true, dtype=bool)
+    ys_true = labels_true
+    m0_true = b[ys_true].mean(axis=0)
+    m1_true = b[~ys_true].mean(axis=0)
+    v0_true = b[ys_true].var(axis=0)
+    v1_true = b[~ys_true].var(axis=0)
+
+    regs = list(Counter(acs).keys())
+    reg_masks = {reg: (acs == reg) for reg in regs}
+    D = {
+        reg: {
+            'nclus': int(np.sum(acs1 == reg)),
+            'd_vars': [],
+            'd_eucs': [],
+            'd_xnobis': [],
+        }
+        for reg in regs
+    }
+    label_perms = [ys_true]
+
+    def _append_perm(m0, m1, v0, v1, ys):
+        for reg in regs:
+            dv, de, dxn = _region_perm_metrics(
+                m0, m1, v0, v1, b, half1, half2, ys, reg_masks[reg])
+            D[reg]['d_vars'].append(dv)
+            D[reg]['d_eucs'].append(de)
+            D[reg]['d_xnobis'].append(dxn)
+
+    _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
+
+    fit = get_actkernel_choice_fit(eid, trials)
+    elig_idx = np.asarray(elig_idx, dtype=int)
+    n_elig = len(elig_idx)
+    n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
+                if mode == 'strat' else len(trials))
+    print(f'actkernel-block [{split}]: mode={mode}; '
+          f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
+          f'(real={len(trials)}, n_elig={n_elig}); '
+          f'late_sticky={bool(actkernel_late_sticky)}; '
+          f'fit mode={fit.get("mode")} '
+          f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
+
+    def _ok(ys):
+        return (ys is not None
+                and int(ys.sum()) >= min_trials_per_side
+                and int((~ys).sum()) >= min_trials_per_side)
+
+    syn = _syn()
+    rng = np.random.default_rng()
+    seed_base = int(rng.integers(0, 2**31 - 1))
+    n_done = 0
+    gen_offset = 0
+    gen_at_factor = 0
+    sim_model = fit.get('sim_model')
+    theta = fit['params']
+    max_factor = ACTKERNEL_PSEUDO_LEN_FACTOR_MAX
+
+    while n_done < nrand:
+        need = nrand - n_done
+        n_gen = max(need, min(null_batch_size, need + max(need // 5, 5)))
+        if mode == 'fixedstim':
+            out = syn.synthetic_choices_fixed_stim(
+                trials, params=theta, n=n_gen,
+                seed=seed_base + gen_offset, model=sim_model,
+                late_sticky=actkernel_late_sticky)
+            ch_mat = np.asarray(out['choice'], dtype=float)
+            if ch_mat.ndim == 1:
+                ch_mat = ch_mat[None, :]
+            side_mat = signed_mat = None
+        else:
+            out = syn.synthetic_sessions_from_trials(
+                trials, n=n_gen, eid=str(eid), subject='bwm',
+                params=theta, seed=seed_base + gen_offset, fast=True,
+                n_trials=(n_pseudo if mode == 'strat' else None),
+                late_sticky=actkernel_late_sticky)
+            ch_mat = np.asarray(out['choice'], dtype=float)
+            side_mat = np.asarray(out['stim_side'], dtype=float)
+            signed_mat = np.asarray(out['signed_contrast'], dtype=float)
+        gen_offset += n_gen
+        gen_at_factor += n_gen
+
+        for i in range(ch_mat.shape[0]):
+            pbin = _act_prior_binary_from_choice(ch_mat[i])
+            prior_l = np.isclose(pbin, 0.8)
+            if mode == 'strat':
+                mask = _act_block_stream_mask(
+                    split, side_mat[i], ch_mat[i],
+                    signed_contrast=signed_mat[i])
+                ys = _ys_from_stratum_labels(prior_l, mask, n_elig, rng)
+            else:
+                ys = prior_l[elig_idx]
+            if not _ok(ys):
+                continue
+            label_perms.append(ys)
+            _append_perm(
+                b[ys].mean(axis=0), b[~ys].mean(axis=0),
+                b[ys].var(axis=0), b[~ys].var(axis=0),
+                ys,
+            )
+            n_done += 1
+            if n_done >= nrand:
+                break
+
+        if (mode == 'strat' and n_done < nrand
+                and gen_at_factor > nrand * 20):
+            new_factor = min(len_factor * 2.0, max_factor)
+            if new_factor > len_factor + 1e-12:
+                print(f'WARNING: actkernel-block strat [{split}]: only '
+                      f'{n_done}/{nrand} after {gen_at_factor} draws at '
+                      f'factor={len_factor:g}; raising → {new_factor:g}')
+                len_factor = new_factor
+                n_pseudo = _strat_pseudo_n_trials(trials, len_factor)
+                gen_at_factor = 0
+                continue
+            raise InsufficientTrials(
+                f'actkernel-block strat null [{split}]: only {n_done}/{nrand} '
+                f'balanced draws after {gen_offset} synthetic sessions '
+                f'(pseudo_len_factor up to {len_factor:g}); skipping insertion')
+
+        if mode != 'strat' and n_done < nrand and gen_offset > nrand * 20:
+            raise InsufficientTrials(
+                f'actkernel-block {mode} null [{split}]: only {n_done}/{nrand} '
+                f'balanced draws after {gen_offset} synthetic sessions; '
+                f'skipping insertion')
+
+    d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
+    d_euc = (m0_true - m1_true) ** 2
+    scheme = {
+        'strat': 'synthetic_prior_pseudo_strat',
+        'fixedstim': 'synthetic_prior_pseudo_fixed',
+    }[mode]
+    if actkernel_late_sticky:
+        scheme = f'{scheme}_sticky'
+    return {
+        'acs': acs,
+        'acs1': acs1,
+        'd_vars': d_var,
+        'd_eucs': d_euc,
+        'ws': np.array([m0_true, m1_true])[:ntravis],
+        'uperms': len(np.unique([str(x.astype(int)) for x in label_perms])),
+        'D': D,
+        'null_scheme': scheme,
+        'actkernel_null_mode': mode,
+        'actkernel_fit_mode': fit.get('mode'),
+        'actkernel_params': np.asarray(fit['params'], dtype=float),
+        'actkernel_pseudo_len_factor': len_factor,
+        'actkernel_n_pseudo_trials': n_pseudo,
+        'actkernel_late_sticky': bool(actkernel_late_sticky),
     }
 
 
@@ -2107,7 +2330,8 @@ def _bin_spike_events(spikes, clusters, events, split):
 def _get_d_vars_session_shuffle(
         split, trials, spikes, clusters, mapping, control, nrand,
         null_batch_size, donor_bank, eid, actkernel_choice_null=False,
-        actkernel_null_mode=None, actkernel_pseudo_len_factor=None):
+        actkernel_null_mode=None, actkernel_pseudo_len_factor=None,
+        actkernel_late_sticky=False):
     '''
     Choice L vs R under fixed stim (± prior), with structured nulls.
 
@@ -2184,6 +2408,7 @@ def _get_d_vars_session_shuffle(
                 null_batch_size=null_batch_size,
                 actkernel_null_mode=ak_mode,
                 actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+                actkernel_late_sticky=actkernel_late_sticky,
             )
         if not donor_bank:
             raise InsufficientTrials(
@@ -2495,6 +2720,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                actkernel_choice_null=False,
                actkernel_null_mode=None,
                actkernel_pseudo_len_factor=None,
+               actkernel_late_sticky=False,
                exclude_sticky_trials=False,
                sticky_late_frac=STICKY_LATE_FRAC,
                sticky_min_run=STICKY_MIN_RUN):
@@ -2507,16 +2733,24 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     provided, spikes/clusters/trials are reused (no per-split reload), which is
     the time-efficient path. When None, loads from ONE as before (identical result).
 
-    ``actkernel_choice_null``: if True and split is choice_stim* /
-    choice_duringstim*, use ActionKernel synthetic-choice nulls. Mode via
-    ``actkernel_null_mode`` (default ``strat``: new pseudo + stim×prior
-    stratum labels; also ``fixedstim``, ``unconstrained``). Takes precedence
-    over session_shuffle_null.
+    ``actkernel_choice_null``: if True, use ActionKernel synthetic nulls.
+    Choice L–R (``choice_stim*`` / ``choice_duringstim*``): synthetic
+    **choices**. Act_block prior L–R: synthetic **priors** (choices →
+    analysis-kernel α=0.2 binary). Mode via ``actkernel_null_mode``
+    (default ``strat`` for choice; act_block prefers ``fixedstim`` =
+    within the real shuffle stratum). Takes precedence over
+    session_shuffle_null.
 
     ``actkernel_pseudo_len_factor``: strat only — multiply BWM pseudo length
     vs the real session (default 3; env ``ACTKERNEL_PSEUDO_LEN_FACTOR``).
     On low accept rate the control loop doubles up to
-    ``ACTKERNEL_PSEUDO_LEN_FACTOR_MAX``. Outputs always ``_pseudo_strat``.
+    ``ACTKERNEL_PSEUDO_LEN_FACTOR_MAX``. Outputs always ``_pseudo_strat``
+    (or ``_pseudo_strat_sticky`` if ``actkernel_late_sticky``).
+
+    ``actkernel_late_sticky``: copy-last mixture so synthetic post-0.5
+    quintile mean_run matches **this session's** real mean_run (not a
+    cohort median). Default False = stationary α. Does not overwrite
+    stationary AK files.
 
     ``session_shuffle_null``: if True and split is choice_stim* /
     choice_duringstim* **or** ``act_block_*``, use Harris unique-null session
@@ -2594,25 +2828,35 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         if len(trials) == 0:
             raise InsufficientTrials('no trials left after sticky exclusion')
 
-    # Structured nulls: choice L–R (Harris / AK) or act_block prior L–R (Harris).
-    ak_on = _resolve_actkernel_null_mode(
-        actkernel_choice_null, actkernel_null_mode) is not None
-    if ((ak_on or session_shuffle_null)
+    # Structured nulls: choice L–R (Harris / AK) or act_block prior L–R
+    # (Harris / AK). AK takes precedence over Harris for both families.
+    ak_mode = _resolve_actkernel_null_mode(
+        actkernel_choice_null, actkernel_null_mode)
+    if ak_mode is not None and is_act_block_prior_split(split):
+        D = _get_d_vars_block_harris(
+            split, trials, spikes, clusters, mapping, control, nrand,
+            null_batch_size, donor_bank, eid,
+            actkernel_null_mode=ak_mode,
+            actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+            actkernel_late_sticky=actkernel_late_sticky)
+        if excl_info is not None and isinstance(D, dict):
+            D = dict(D)
+            D['trial_exclusion'] = excl_info
+        return D
+    if ((ak_mode is not None or session_shuffle_null)
             and is_choice_lr_split(split)):
         D = _get_d_vars_session_shuffle(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid,
             actkernel_choice_null=bool(actkernel_choice_null),
             actkernel_null_mode=actkernel_null_mode,
-            actkernel_pseudo_len_factor=actkernel_pseudo_len_factor)
+            actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+            actkernel_late_sticky=actkernel_late_sticky)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
         return D
     if session_shuffle_null and is_act_block_prior_split(split):
-        if ak_on:
-            print(f'WARNING: actkernel null ignored for act_block split {split}; '
-                  f'using Harris unique-null')
         D = _get_d_vars_block_harris(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid)
@@ -3625,6 +3869,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              actkernel_choice_null=False,
                              actkernel_null_mode=None,
                              actkernel_pseudo_len_factor=None,
+                             actkernel_late_sticky=False,
                              exclude_sticky_trials=False,
                              sticky_late_frac=STICKY_LATE_FRAC,
                              sticky_min_run=STICKY_MIN_RUN):
@@ -3671,6 +3916,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
         session_shuffle_null=session_shuffle_null and ak_mode is None,
         actkernel_null_mode=actkernel_null_mode,
         actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+        actkernel_late_sticky=actkernel_late_sticky,
     )
     if save_per_insertion is None:
         save_per_insertion = not stream_pool
@@ -3696,6 +3942,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
           'actkernel_choice_null', actkernel_choice_null,
           'actkernel_null_mode', actkernel_null_mode,
           'actkernel_pseudo_len_factor', actkernel_pseudo_len_factor,
+          'actkernel_late_sticky', actkernel_late_sticky,
           'exclude_sticky_trials', exclude_sticky_trials)
 
     donor_bank = None
@@ -3712,7 +3959,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
             is_choice_lr_split(sp) for sp in splits_list):
         print(f'actkernel null mode={ak_mode} enabled for choice L–R splits'
               f' (pseudo_len_factor='
-              f'{_actkernel_pseudo_len_factor(actkernel_pseudo_len_factor):g})')
+              f'{_actkernel_pseudo_len_factor(actkernel_pseudo_len_factor):g}'
+              f', late_sticky={bool(actkernel_late_sticky)})')
     elif ak_mode is not None:
         print('WARNING: actkernel null set but no choice_stim*/'
               'choice_duringstim* splits in list')
@@ -3776,6 +4024,7 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                                 actkernel_choice_null=actkernel_choice_null,
                                 actkernel_null_mode=actkernel_null_mode,
                                 actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
+                                actkernel_late_sticky=actkernel_late_sticky,
                                 exclude_sticky_trials=exclude_sticky_trials,
                                 sticky_late_frac=sticky_late_frac,
                                 sticky_min_run=sticky_min_run)

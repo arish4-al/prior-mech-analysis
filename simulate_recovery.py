@@ -821,6 +821,144 @@ def apply_constant_s0_stimuli(stimuli, trial_strengths, trial_sides, steps_befor
     return stimuli
 
 
+def choice_lapse_eps(mp_or_eps):
+    """Lapse probability in [0, 1]; missing / None → 0."""
+    if isinstance(mp_or_eps, dict):
+        return float(mp_or_eps.get("choice_lapse", 0.0) or 0.0)
+    return float(mp_or_eps or 0.0)
+
+
+def choice_lapse_dir_tag(eps):
+    """Output-dir suffix; empty when ε=0 so canonical paths are unchanged."""
+    eps = choice_lapse_eps(eps)
+    if eps <= 0.0:
+        return ""
+    return f"_lapse{eps:g}"
+
+
+def attach_choice_lapse(mp, eps):
+    """Set ``mp['choice_lapse']`` only when ε>0 so ε=0 keeps the existing cache key.
+
+    ``choice_lapse_align_m`` marks the M-swap semantics so old lapse caches
+    (labels rewritten, M not) are not reused.
+    """
+    eps = float(eps or 0.0)
+    if not 0.0 <= eps <= 1.0:
+        raise ValueError(f"choice_lapse must be in [0, 1], got {eps}")
+    if eps > 0.0:
+        mp["choice_lapse"] = eps
+        mp["choice_lapse_align_m"] = True
+    else:
+        mp.pop("choice_lapse", None)
+        mp.pop("choice_lapse_align_m", None)
+    return mp
+
+
+def threshold_temp_value(mp_or_t):
+    """Soft-threshold temperature T≥0; missing / None → 0 (hard first-passage)."""
+    if isinstance(mp_or_t, dict):
+        return float(mp_or_t.get("threshold_temperature", 0.0) or 0.0)
+    return float(mp_or_t or 0.0)
+
+
+def threshold_temp_dir_tag(T):
+    """Output-dir suffix; empty when T=0 so canonical paths are unchanged."""
+    T = threshold_temp_value(T)
+    if T <= 0.0:
+        return ""
+    return f"_softthr{T:g}"
+
+
+def attach_threshold_temperature(mp, T):
+    """Set ``mp['threshold_temperature']`` only when T>0 so T=0 keeps the cache key."""
+    T = float(T or 0.0)
+    if T < 0.0:
+        raise ValueError(f"threshold_temperature must be ≥ 0, got {T}")
+    if T > 0.0:
+        mp["threshold_temperature"] = T
+    else:
+        mp.pop("threshold_temperature", None)
+    return mp
+
+
+def _choice_noise_dir_tag(choice_lapse=0.0, threshold_temperature=0.0):
+    return choice_lapse_dir_tag(choice_lapse) + threshold_temp_dir_tag(threshold_temperature)
+
+
+def _ode_model_params(mp):
+    """Strip analysis-only keys before create_stimuli / run_model."""
+    skip = {"choice_lapse", "choice_lapse_align_m"}
+    return {k: v for k, v in mp.items() if k not in skip}
+
+
+def apply_choice_lapse(results, rng, eps):
+    """Post-decision independent lapse on committed ±1 choices.
+
+    With probability ε, replace the race choice by an independent fair L/R
+    draw and recompute correctness from stim side. If the new side differs
+    from the race, swap that trial's M channels (and negate ``action_signal``)
+    so ``sign(M0−M1)`` still matches the label: left (−1) iff M0≥M1. Update
+    ``choice_sides``. S/I/P, RT, and action time are unchanged. Timeouts
+    (choice==0) are skipped. ε=0 is a no-op.
+    """
+    eps = float(eps or 0.0)
+    if eps <= 0.0:
+        return results
+    if not 0.0 < eps <= 1.0:
+        raise ValueError(f"choice_lapse must be in (0, 1], got {eps}")
+    choices = list(results["choices"])
+    correct = list(results["correct_action_taken"])
+    trial_sides = results["trial_sides"]
+    n_trials = len(trial_sides)
+    lens = [len(trial_sides[i]) for i in range(n_trials)]
+    M = results.get("M")
+    if M is not None and not isinstance(M, float):
+        M = np.array(M, dtype=float, copy=True)
+        if M.ndim != 2 or M.shape[1] != 2:
+            raise ValueError(f"expected M shape (steps, 2), got {M.shape}")
+    else:
+        M = None
+    asig = results.get("action_signal")
+    if asig is not None and not isinstance(asig, float):
+        asig = np.array(asig, dtype=float, copy=True)
+    else:
+        asig = None
+    choice_sides = list(results["choice_sides"]) if results.get("choice_sides") is not None else None
+    rand = rng.rand if hasattr(rng, "rand") else rng.random
+    off = 0
+    for i, ch in enumerate(choices):
+        m_i = lens[i] if i < n_trials else 0
+        sl = slice(off, off + m_i)
+        if ch not in (-1, 1):
+            off += m_i
+            continue
+        if float(rand()) >= eps:
+            off += m_i
+            continue
+        new_ch = int(rng.choice([-1, 1]))
+        if new_ch != ch and M is not None:
+            left = M[sl, 0].copy()
+            M[sl, 0] = M[sl, 1]
+            M[sl, 1] = left
+            if asig is not None:
+                asig[sl] = -asig[sl]
+        choices[i] = new_ch
+        tside = int(np.sign(trial_sides[i][0])) or 1
+        correct[i] = 1 if new_ch == tside else 0
+        if choice_sides is not None and i < len(choice_sides):
+            choice_sides[i] = np.full_like(np.asarray(choice_sides[i], dtype=float), float(new_ch))
+        off += m_i
+    results["choices"] = choices
+    results["correct_action_taken"] = correct
+    if M is not None:
+        results["M"] = M
+    if asig is not None:
+        results["action_signal"] = asig
+    if choice_sides is not None:
+        results["choice_sides"] = choice_sides
+    return results
+
+
 def simulate_session(
     model_params,
     blocks_per_session,
@@ -829,6 +967,7 @@ def simulate_session(
     constant_s0=False,
 ):
     steps_before_obs = int(mf.STEPS_BEFORE_OBS_DURATION_MS / DT_MS)
+    ode_mp = _ode_model_params(model_params)
     stimuli, trial_strengths, _, trial_sides, block_sides = mf.create_stimuli(
         blocks_per_session,
         mf.trials_per_block_param,
@@ -841,10 +980,13 @@ def simulate_session(
         max_obs_per_trial,
         steps_before_obs,
         rng=rng,
-        **model_params,
+        **ode_mp,
     )
     if constant_s0:
         apply_constant_s0_stimuli(stimuli, trial_strengths, trial_sides, steps_before_obs)
+    if threshold_temp_value(ode_mp) > 0.0:
+        # Per-session uniforms for the race; not part of the cache payload.
+        ode_mp["threshold_rng_seed"] = int(rng.randint(0, 2**31 - 1))
     results = mf.run_model(
         "data",
         stimuli,
@@ -855,8 +997,9 @@ def simulate_session(
         steps_before_obs=steps_before_obs,
         verbose=False,
         backend="auto",
-        **model_params,
+        **ode_mp,
     )
+    apply_choice_lapse(results, rng, choice_lapse_eps(model_params))
     return results, steps_before_obs
 
 
@@ -2523,7 +2666,16 @@ def _run_split_population_prior_distance(
 
 
 def _model_params_dict(mp):
-    return {k: mp[k] for k in ("g_s", "d_s", "g_i", "d_i", "g_m", "d_m")}
+    out = {k: mp[k] for k in ("g_s", "d_s", "g_i", "d_i", "g_m", "d_m")}
+    eps = choice_lapse_eps(mp)
+    if eps > 0.0:
+        out["choice_lapse"] = eps
+        if mp.get("choice_lapse_align_m"):
+            out["choice_lapse_align_m"] = True
+    T = threshold_temp_value(mp)
+    if T > 0.0:
+        out["threshold_temperature"] = T
+    return out
 
 
 def _experiment_case_spec(case, weights_json, g_s=None, d_s=None, gs_outside_adaptation=False):
@@ -2573,6 +2725,8 @@ def run_experiment_case(
     prior_column=None,
     harris_unique_null=False,
     n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
+    choice_lapse=0.0,
+    threshold_temperature=0.0,
 ):
     """
     Unified Goal-1 single-experiment runner (cache-backed).
@@ -2589,6 +2743,17 @@ def run_experiment_case(
     mp, exp_tag, cond_desc = _experiment_case_spec(
         case, weights_json, g_s=g_s, d_s=d_s, gs_outside_adaptation=gs_outside_adaptation
     )
+    attach_choice_lapse(mp, choice_lapse)
+    attach_threshold_temperature(mp, threshold_temperature)
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    if noise_tag:
+        exp_tag = f"{exp_tag}{noise_tag}"
+        extra = []
+        if choice_lapse_dir_tag(choice_lapse):
+            extra.append(f"choice_lapse={choice_lapse_eps(choice_lapse):g}")
+        if threshold_temp_dir_tag(threshold_temperature):
+            extra.append(f"threshold_temperature={threshold_temp_value(threshold_temperature):g}")
+        cond_desc = f"{cond_desc}, " + ", ".join(extra)
     if harris_unique_null:
         null_tag = "hu"
         null_name = "harris unique-null"
@@ -2627,6 +2792,8 @@ def run_experiment_case(
             zero_im_prior_mod=(case == "s_presence"),
             zero_all_prior_mod=(case == "phase4"),
             gs_outside_adaptation=gs_outside_adaptation,
+            choice_lapse=choice_lapse,
+            threshold_temperature=threshold_temperature,
         )
 
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
@@ -2671,6 +2838,8 @@ def run_experiment_case(
             "null": null_name,
             "canonical_analysis": CANONICAL_PRIOR_DISTANCE_ANALYSIS,
             "harris_n_extra_donors": int(n_extra_donors) if harris_unique_null else 0,
+            "choice_lapse": choice_lapse_eps(choice_lapse),
+            "threshold_temperature": threshold_temp_value(threshold_temperature),
         },
     )
 
@@ -2688,6 +2857,8 @@ def run_phase4_no_prior_mod_analysis(
     populations=None,
     prior_column=None,
     constant_s0=False,
+    choice_lapse=0.0,
+    threshold_temperature=0.0,
 ):
     """
     Phase 4 control: absence with all P→population modulations off (g_*=d_*=0).
@@ -2699,12 +2870,20 @@ def run_phase4_no_prior_mod_analysis(
     populations = tuple(populations or SIM_POPULATIONS)
     prior_column = prior_column or PRIOR_COLUMN
     mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
+    attach_choice_lapse(mp, choice_lapse)
+    attach_threshold_temperature(mp, threshold_temperature)
     s0_label = "constant S0=contrast" if constant_s0 else "stochastic S0"
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    noise_desc = ""
+    if choice_lapse_dir_tag(choice_lapse):
+        noise_desc += f", choice_lapse={choice_lapse_eps(choice_lapse):g}"
+    if threshold_temp_dir_tag(threshold_temperature):
+        noise_desc += f", threshold_temperature={threshold_temp_value(threshold_temperature):g}"
     log_canonical_analysis_banner()
     print(
         f"\n=== Phase 4 no prior modulation: absence "
         f"(g_s=d_s=g_i=d_i=g_m=d_m=0, {s0_label}, populations={populations}, "
-        f"seed={rng_seed}) ==="
+        f"seed={rng_seed}{noise_desc}) ==="
     )
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
         mp,
@@ -2715,6 +2894,7 @@ def run_phase4_no_prior_mod_analysis(
         constant_s0=constant_s0,
     )
     out_name = "phase4_no_prior_mod_constant_s0" if constant_s0 else "phase4_no_prior_mod"
+    out_name = f"{out_name}{noise_tag}"
     out_dir = base_dir / "absence" / "figs" / out_name
     return _run_split_population_prior_distance(
         session_dfs,
@@ -2730,7 +2910,11 @@ def run_phase4_no_prior_mod_analysis(
         prior_column=prior_column,
         contrast_matched_null=contrast_matched_null,
         n_jobs=n_jobs,
-        extra_summary={"constant_s0": constant_s0},
+        extra_summary={
+            "constant_s0": constant_s0,
+            "choice_lapse": choice_lapse_eps(choice_lapse),
+            "threshold_temperature": threshold_temp_value(threshold_temperature),
+        },
     )
 
 
@@ -2753,6 +2937,8 @@ def run_unsplit_prior_distance_analysis(
     gs_outside_adaptation=False,
     harris_unique_null=False,
     n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
+    choice_lapse=0.0,
+    threshold_temperature=0.0,
 ):
     """
     Experiment A: prior distance without f1/f2 choice×feedback splits.
@@ -2845,18 +3031,27 @@ def run_unsplit_prior_distance_analysis(
             "(expected 'phase4', 'absence', 'presence', or 's_presence')"
         )
 
-    model_params = {
-        "g_s": mp["g_s"],
-        "d_s": mp["d_s"],
-        "g_i": mp["g_i"],
-        "d_i": mp["d_i"],
-        "g_m": mp["g_m"],
-        "d_m": mp["d_m"],
-    }
+    attach_choice_lapse(mp, choice_lapse)
+    attach_threshold_temperature(mp, threshold_temperature)
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    noise_desc = ""
+    if choice_lapse_dir_tag(choice_lapse):
+        noise_desc += f", choice_lapse={choice_lapse_eps(choice_lapse):g}"
+        condition_name = f"{condition_name}, choice_lapse={choice_lapse_eps(choice_lapse):g}"
+    if threshold_temp_dir_tag(threshold_temperature):
+        noise_desc += f", threshold_temperature={threshold_temp_value(threshold_temperature):g}"
+        condition_name = (
+            f"{condition_name}, threshold_temperature="
+            f"{threshold_temp_value(threshold_temperature):g}"
+        )
+    if noise_tag:
+        out_name = f"{out_name}{noise_tag}"
+    model_params = _model_params_dict(mp)
     print(
         f"\n=== Unsplit prior distance: {case} "
         f"(mode={unsplit_mode}, populations={populations}, seed={rng_seed}"
-        f"{', harris unique-null' if harris_unique_null else ''}) ==="
+        f"{', harris unique-null' if harris_unique_null else ''}"
+        f"{noise_desc}) ==="
     )
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
         mp,
@@ -2943,6 +3138,8 @@ def run_unsplit_prior_distance_analysis(
     summary["harris_n_extra_donors"] = (
         int(n_extra_donors) if harris_unique_null else 0
     )
+    summary["choice_lapse"] = choice_lapse_eps(choice_lapse)
+    summary["threshold_temperature"] = threshold_temp_value(threshold_temperature)
     with open(out_root / f"{file_prefix}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved unsplit summary to {out_root / f'{file_prefix}_summary.json'}")
@@ -6220,6 +6417,8 @@ def process_condition(
     zero_im_prior_mod=False,
     zero_all_prior_mod=False,
     gs_outside_adaptation=False,
+    choice_lapse=0.0,
+    threshold_temperature=0.0,
 ):
     if zero_all_prior_mod:
         im_label = " (all g_*=d_*=0)"
@@ -6242,6 +6441,8 @@ def process_condition(
         json_path=weights_json,
         gs_outside_adaptation=gs_outside_adaptation,
     )
+    attach_choice_lapse(mp, choice_lapse)
+    attach_threshold_temperature(mp, threshold_temperature)
 
     cond_dir = base_dir / condition_name
     res_dir = cond_dir / "res"
@@ -7713,6 +7914,31 @@ def main():
             "jobs belong on ORCD; do not refill a multi-GB cache on the laptop."
         ),
     )
+    parser.add_argument(
+        "--choice-lapse",
+        type=float,
+        default=0.0,
+        help=(
+            "Post-decision independent lapse probability ε in [0, 1] (default 0). "
+            "With probability ε, replace a committed ±1 race choice by a fair L/R "
+            "draw, recompute feedback, and swap that trial's M channels so the "
+            "movement trace matches the new label. S/I/P and RT are unchanged. "
+            "ε=0 is the canonical path (existing session cache keys). "
+            "Lapse-on runs write to tagged dirs (e.g. absence_unsplit_lapse0.1)."
+        ),
+    )
+    parser.add_argument(
+        "--threshold-temperature",
+        type=float,
+        default=0.0,
+        help=(
+            "In-kernel stochastic/soft action threshold T≥0 (default 0 = hard "
+            "first-passage). At each post-stim step, commit with "
+            "P = sigmoid((|action|−θ)/T); choice still follows sign(action). "
+            "T=0 is the canonical path (existing session cache keys). "
+            "T>0 writes to tagged dirs (e.g. absence_unsplit_softthr0.05)."
+        ),
+    )
     args = parser.parse_args()
 
     global SESSION_CACHE_ENABLED
@@ -7737,6 +7963,10 @@ def main():
         parser.error("Use only one of --harris-unique-null and --label-shuffle-null")
     if harris_unique_null and args.full_analysis:
         parser.error("Harris unique-null is for prior-distance only; omit --full-analysis")
+    if not 0.0 <= float(args.choice_lapse) <= 1.0:
+        parser.error("--choice-lapse must be in [0, 1]")
+    if float(args.threshold_temperature) < 0.0:
+        parser.error("--threshold-temperature must be ≥ 0")
 
     if args.null_compare:
         run_null_scheme_comparison(
@@ -7828,6 +8058,8 @@ def main():
             min_trials_per_session=args.min_trials_per_session,
             harris_unique_null=harris_unique_null,
             n_extra_donors=args.harris_n_extra_donors,
+            choice_lapse=args.choice_lapse,
+            threshold_temperature=args.threshold_temperature,
         )
         return
 
@@ -7844,6 +8076,8 @@ def main():
             n_jobs=n_jobs,
             contrast_matched_null=contrast_matched_null,
             constant_s0=args.phase4_constant_s0,
+            choice_lapse=args.choice_lapse,
+            threshold_temperature=args.threshold_temperature,
         )
         return
 
@@ -7872,6 +8106,8 @@ def main():
                 gs_outside_adaptation=args.gs_outside_adaptation,
                 harris_unique_null=harris_unique_null,
                 n_extra_donors=args.harris_n_extra_donors,
+                choice_lapse=args.choice_lapse,
+                threshold_temperature=args.threshold_temperature,
             )
         return
 
@@ -8097,16 +8333,18 @@ def main():
         s_prior_only=s_prior_only,
         n_jobs=n_jobs,
         contrast_matched_null=contrast_matched_null,
+        choice_lapse=args.choice_lapse,
+        threshold_temperature=args.threshold_temperature,
     )
     process_condition(
-        "absence",
+        "absence" + _choice_noise_dir_tag(args.choice_lapse, args.threshold_temperature),
         g_s=0.0,
         d_s=0.0,
         rng_seed=args.seed,
         **common_kw,
     )
     process_condition(
-        "presence",
+        "presence" + _choice_noise_dir_tag(args.choice_lapse, args.threshold_temperature),
         g_s=g_s_presence,
         d_s=d_s_presence,
         rng_seed=args.seed,

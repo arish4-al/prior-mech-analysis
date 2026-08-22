@@ -4,7 +4,7 @@
 
 **Status:** decisive result in hand. Absence S prior distance collapses from **0.798 → 0.011 (n.s.)** when f1/f2 conditioning is dropped while stim side is preserved. I and M prior effects survive and grow. The split-conditioned S readout is therefore largely a composition artefact.
 
-Sources: dated entries 2026-06-29 (Goals 1–2, Experiment A), 2026-07-06h (Tables A–C).
+Sources: dated entries 2026-06-29 (Goals 1–2, Experiment A), 2026-07-06h (Tables A–C), 2026-08-13c–14e, 2026-08-18 (choice lapse), 2026-08-18b (soft threshold), 2026-08-18c (T+ε), 2026-08-21 (ε sweep), 2026-08-21b (M-aligned lapse).
 
 ---
 
@@ -198,6 +198,213 @@ path now matches. Submit on ORCD (`nrand=1000`, **S curves 0–150 ms**):
 
 ---
 
+## 2026-08-18 — post-decision choice lapse (ε=0.1)
+
+H3 test: if the split S artefact is S0 selection induced by a near-deterministic
+choice map, independent lapse should shrink split S at `g_s=0` without creating
+unsplit S at 80 ms.
+
+**Implementation (Option A):** `--choice-lapse ε` in `simulate_recovery.py`. After
+`run_model`, with probability ε replace a committed ±1 choice by an independent
+fair L/R draw and recompute feedback. Neural S/I/M/RT unchanged. ε=0 is a no-op
+(existing session-cache keys). Lapse-on writes to tagged dirs
+(`absence_unsplit_lapse0.1`, `goal1/absence_lapse0.1/…`). Smoke:
+`python scripts/test_choice_lapse.py`.
+
+Do **not** interpret unsplit **M** under this intervention: M traces still follow
+the race, labels do not.
+
+Canonical analysis, seed 123, 40 sessions, nrand=100, contrast-matched, 80 ms S.
+Weights `WEIGHTS_REL` (fitted I/M). Cache HIT on the split arms.
+
+| Pooling | Case | lapse | S curve_mean | S p | I | I p | M | M p |
+|---------|------|------:|-------------:|----:|--:|----:|--:|----:|
+| f1/f2 splits | Phase 4b | 0 | 0.012 | 0.78 | 0.004 | 0.60 | 0.004 | 0.81 |
+| f1/f2 splits | Phase 4b | **0.1** | 0.003 | 0.77 | 0.001 | 0.89 | 0.001 | 0.89 |
+| f1/f2 splits | Absence | 0 | 0.798 | 0.00 | 0.492 | 0.00 | 2.028 | 0.00 |
+| f1/f2 splits | Absence | **0.1** | **0.119** | **0.00** | 0.388 | 0.00 | 1.183 | 0.00 |
+| stim_side unsplit | Phase 4b | 0 | 0.003 | 0.64 | 0.003 | 0.17 | 0.004 | 0.20 |
+| stim_side unsplit | Phase 4b | **0.1** | 0.001 | 0.64 | 0.001 | 0.12 | 1.613† | 0.00 |
+| stim_side unsplit | Absence | 0 | 0.011 | 0.13 | 1.099 | 0.00 | 3.078 | 0.00 |
+| stim_side unsplit | Absence | **0.1** | 0.006 | 0.16 | 0.550 | 0.00 | 1.767† | 0.00 |
+
+† Unsplit M is **not** a valid readout here (label ≠ M). Phase 4b unsplit M
+blowing up is that mismatch, not a prior effect.
+
+**Outputs** (under `manifold_sim/`):
+- unsplit: `unsplit_prior/seed_123/{phase4_no_prior_mod,absence}_unsplit_lapse0.1/`
+- split absence: `goal1/absence_lapse0.1/cm_sprior/`
+- split Phase 4b: `absence/figs/phase4_no_prior_mod_lapse0.1/`
+
+**Interpretation**
+
+1. Split absence S **shrinks ~7×** (0.798 → 0.119) but **stays significant**.
+   Independent 10% lapse weakens the collider; it does not remove it. A larger
+   ε (0.2) was not run.
+2. Unsplit absence S stays **n.s.** (0.006, p=0.16), same as ε=0. Unsplit I
+   remains large (0.55, p=0).
+3. Split Phase 4b stays null (S p=0.77), matching the ε=0 regression.
+4. So H3 is partly right: making choice a weaker function of S0 reduces the
+   split S artefact. Residual split S at ε=0.1 is still I/M-mediated composition
+   (RT / remaining S0 selection on the 90% non-lapsed trials). Option B
+   (in-kernel stochastic threshold) is 2026-08-18b.
+
+---
+
+## 2026-08-18b — stochastic/soft action threshold (T=0.05)
+
+H3, in-kernel: if the split S artefact is S0 selection from a near-deterministic
+race, a sigmoid first-passage should shrink split S at `g_s=0` without creating
+unsplit S at 80 ms. Unlike Option A, **choice and M stay consistent** (commit
+still follows `sign(action)`); RT can change.
+
+**Implementation (Option B):** `--threshold-temperature T` in
+`simulate_recovery.py`. Numpy/numba race: T=0 is the hard first-passage
+(`|action| ≥ θ+1e-6`, bit-exact vs previous). T>0 commits with
+`P = sigmoid((|action|−θ)/T)` using pre-drawn uniforms `u[tr,k]` from a
+per-session seed taken after `create_stimuli` (not stored in the cache
+payload). T=0 omits the key so existing session-cache hashes are unchanged.
+T>0 writes to tagged dirs (`absence_unsplit_softthr0.05`,
+`goal1/absence_softthr0.05/…`). Smoke: `python scripts/test_soft_threshold.py`
+(T=0 numpy=numba; T>0 changes RT; backends match; choice follows action).
+
+T=0.05 is a first experimental scale (torch fitting uses 0.01 only for
+`continue_prob` gradients; discrete torch choice is still hard). At the
+boundary, p=0.5; 0.1 below/above θ is p≈0.12/0.88. Did **not** refit θ.
+`--choice-lapse` left at 0.
+
+Canonical analysis, seed 123, 40 sessions, nrand=100, contrast-matched, 80 ms S.
+Weights `WEIGHTS_REL` (fitted I/M). Session-cache HIT on the split arms.
+
+| Pooling | Case | T | S curve_mean | S p | I | I p | M | M p |
+|---------|------|--:|-------------:|----:|--:|----:|--:|----:|
+| f1/f2 splits | Phase 4b | 0 | 0.012 | 0.78 | 0.004 | 0.60 | 0.004 | 0.81 |
+| f1/f2 splits | Phase 4b | **0.05** | 0.003 | 0.53 | 0.002 | 0.04 | 0.003 | 0.02 |
+| f1/f2 splits | Absence | 0 | 0.798 | 0.00 | 0.492 | 0.00 | 2.028 | 0.00 |
+| f1/f2 splits | Absence | **0.05** | **0.143** | **0.00** | 0.090 | 0.00 | 0.368 | 0.00 |
+| stim_side unsplit | Phase 4b | 0 | 0.003 | 0.64 | 0.003 | 0.17 | 0.004 | 0.20 |
+| stim_side unsplit | Phase 4b | **0.05** | 0.002 | 0.32 | 0.003 | 0.01 | 0.706 | 0.00 |
+| stim_side unsplit | Absence | 0 | 0.011 | 0.13 | 1.099 | 0.00 | 3.078 | 0.00 |
+| stim_side unsplit | Absence | **0.05** | 0.005 | 0.11 | 0.383 | 0.00 | 0.812 | 0.00 |
+
+**Outputs** (under `manifold_sim/`):
+- unsplit: `unsplit_prior/seed_123/{phase4_no_prior_mod,absence}_unsplit_softthr0.05/`
+- split absence: `goal1/absence_softthr0.05/cm_sprior/`
+- split Phase 4b: `absence/figs/phase4_no_prior_mod_softthr0.05/`
+
+**Interpretation**
+
+1. Split absence S **shrinks ~5.6×** (0.798 → 0.143) but **stays significant**,
+   similar to Option A ε=0.1 (0.119, p=0). Early/noisy commits weaken the
+   collider; they do not remove it.
+2. Unsplit absence S stays **n.s.** (0.005, p=0.11). Unsplit I remains large
+   (0.383, p=0) but smaller than T=0 (1.099).
+3. Split Phase 4b **S** stays null (p=0.53). I/M p-values dip to 0.04/0.02 with
+   tiny curve_means (~0.002–0.003) — nrand=100 noise, not a recovered prior.
+4. Unsplit **M is a valid readout** here (labels = M). Absence unsplit M
+   shrinks 3.078 → 0.812 but stays p=0. Phase 4b unsplit M **blows up**
+   (0.004 → 0.706, p=0): move-aligned choice strata plus a soft boundary
+   let commit-margin / RT differ by 80/20 stim composition even with
+   `g_*=d_*=0`. That is a B side-effect, not a label/trace mismatch.
+5. H3 again partly right: a less deterministic mapping from S0 to choice
+   shrinks split S. Residual split S is still I/M-mediated composition.
+   T=0.02 was not run.
+
+---
+
+## 2026-08-18c — T=0.05 and ε=0.1 together (split absence only)
+
+Same canonical analysis as 2026-08-18 / 18b, split absence only
+(`--run-experiment absence --threshold-temperature 0.05 --choice-lapse 0.1`).
+Soft threshold in the race, then post-decision lapse on committed ±1 choices.
+Dir tag `absence_lapse0.1_softthr0.05`. Session-cache MISS (mp has both keys).
+
+| Split absence | T | ε | S | S p | I | I p | M | M p |
+|---------------|--:|--:|--:|----:|--:|----:|--:|----:|
+| neither | 0 | 0 | 0.798 | 0 | 0.492 | 0 | 2.028 | 0 |
+| A only | 0 | 0.1 | 0.119 | 0 | 0.388 | 0 | 1.183† | 0 |
+| B only | 0.05 | 0 | 0.143 | 0 | 0.090 | 0 | 0.368 | 0 |
+| **A+B** | **0.05** | **0.1** | **0.081** | **0** | 0.185 | 0 | 0.635† | 0 |
+
+† M (and to a lesser extent I composition) is label≠trace wherever ε>0.
+
+**Output:** `goal1/absence_lapse0.1_softthr0.05/cm_sprior/`
+
+**Interpretation.** Combined S (0.081) is below either intervention alone, so
+they are not fully redundant — extra label noise on top of a soft first-passage
+mixes f1/f2 a bit more. They are also not independent
+(0.798 × 0.119/0.798 × 0.143/0.798 ≈ 0.021, much smaller than 0.081). Residual
+split S is still p=0. Combined M sits between A-only and B-only because lapse
+re-inflates the M readout after the in-kernel shrink.
+
+---
+
+## 2026-08-21 — ε sweep at T=0 (split absence)
+
+Goal: push split S to n.s. while keeping I (and, if valid, M) significant.
+T=0; `--run-experiment absence --choice-lapse {0.2,0.3,0.5}`. Canonical
+seed 123, 40 sessions, nrand=100, 80 ms S. Each ε is its own session-cache
+key (MISS). ε=0 and ε=0.1 from 2026-08-18 included for the series.
+
+| ε | S | S p | I | I p | M | M p | S vs null med |
+|--:|--:|----:|--:|----:|--:|----:|---|
+| 0 | 0.798 | 0 | 0.492 | 0 | 2.028 | 0 | — |
+| 0.1 | 0.119 | 0 | 0.388 | 0 | 1.183† | 0 | — |
+| 0.2 | 0.157 | 0 | 0.552 | 0 | 1.533† | 0 | 0.157 vs 0.073 |
+| 0.3 | 0.111 | 0 | 0.581 | 0 | 1.572† | 0 | 0.111 vs 0.071 |
+| **0.5** | **0.063** | **0.01** | **0.591** | **0** | 1.604† | 0 | 0.063 vs 0.034 |
+
+† M invalid (label ≠ M). Do not read M p as a generative prior.
+
+**Outputs:** `goal1/absence_lapse{0.2,0.3,0.5}/cm_sprior/`
+
+**Interpretation**
+
+1. S falls overall (0.798 → 0.063) but is **still significant at ε=0.5**
+   (p=0.01). The 0.1→0.2 bump (0.119→0.157) is non-monotone split-membership
+   noise; 0.2→0.5 is down.
+2. **I stays large and even grows** (0.388 → 0.59). Mixing choice labels
+   makes f1/f2 less of a collider on S0 and more like a looser pool, so
+   fitted P→I is easier to see. That is the intended absence pattern on I.
+3. The S-n.s. / I-sig window is **not reached yet**. Next ε would be ~0.6–0.8
+   if we keep pushing this lever; at ε→1 split I should also collapse.
+4. M curve_mean **rises** with ε (1.18 → 1.60). That is the mismatch
+   artefact, not more prior in M. **Superseded** by 2026-08-21b (M swapped
+   to match the lapsed label).
+
+---
+
+## 2026-08-21b — post-decision lapse with M aligned (split absence)
+
+Same ε sweep as 08-21, but lapse now **swaps that trial's M channels** when
+the fair L/R draw differs from the race, so `sign(M0−M1)` matches the new
+choice. S/I/P and RT unchanged. `choice_lapse_align_m` is on the session-cache
+key so old (unaligned) lapse pickles are not reused. Dir tags still
+`absence_lapse{ε}` (overwrites 08-18 / 08-21 summaries). Smoke:
+`python scripts/test_choice_lapse.py`.
+
+Canonical split absence, T=0, seed 123, 40 sessions, nrand=100, 80 ms S.
+
+| ε | S | S p | I | I p | M | M p |
+|--:|--:|----:|--:|----:|--:|----:|
+| 0 | 0.798 | 0 | 0.492 | 0 | 2.028 | 0 |
+| 0.1 | 0.119 | 0 | 0.388 | 0 | **0.323** | 0 |
+| 0.2 | 0.157 | 0 | 0.552 | 0 | **0.367** | 0 |
+| 0.3 | 0.111 | 0 | 0.581 | 0 | **0.419** | 0 |
+| **0.5** | **0.063** | **0.01** | **0.591** | **0** | **0.530** | **0** |
+
+S/I match 08-21 (labels and S/I traces unchanged). M is now a valid
+choice-conditioned readout: 2.028 → 0.32 at ε=0.1 (was 1.18 when misaligned),
+then rises slowly with ε like I, all p=0.
+
+**Output:** `goal1/absence_lapse{0.1,0.2,0.3,0.5}/cm_sprior/`
+
+**Interpretation.** Split M is usable. I and M stay significant across the
+sweep; S is still p=0.01 at ε=0.5. The intended S-n.s. / I/M-sig window is
+not reached. M no longer inflates with ε.
+
+---
+
 ## Open / follow-up items
 
 - ~~**S p-values at 150 ms and 80 ms**~~ Done 2026-08-17: regular unsplit S
@@ -209,3 +416,7 @@ path now matches. Submit on ORCD (`nrand=1000`, **S curves 0–150 ms**):
 - Unsplit I-sig diagnostic (`g_s=10, d_s=d_i`) — not run.
 - **Experiment B — concordance-grouped trajectories:** plot S (and I) trajectories grouped by (1) P-block-L vs P-block-R over all trials and (2) trial-level concordance `(S[0]−S[1])·(P[0]−P[1])` at stim onset, which matches the `g_s` boost logic. This addresses the persistent visual failure of `p_block_s_trajectory` under split conditioning. Not run.
 - **Experiment C (optional):** at `d_s=0`, sweep `g_s ∈ {850, 900, 2025}` with and without `gs_outside_adaptation`, unsplit only, to confirm whether significance thresholds change once the selection reversal is removed. Partially superseded by the presence unsplit sweep in [direct sensory prior coupling](direct_sensory_prior_coupling.md).
+- ~~**Choice lapse ε=0.2 / Option B (in-kernel M noise)**~~ Option B at T=0.05
+  is 2026-08-18b; T+ε is 2026-08-18c; ε sweep is 2026-08-21; M-aligned lapse
+  is 2026-08-21b (ε=0.5 split S p=0.01, I/M p=0, M now valid). T=0.02 not run.
+  Option C (sticky ActionKernel) not run.

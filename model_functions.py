@@ -834,6 +834,12 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
         return {k: np.nan for k in keys}
 
     dt = float(_get_dt_from_model_params(model_params))
+    n_tr = 0
+    L_steps = int(np.asarray(stimuli[0]).shape[1]) if len(stimuli) else 1
+    for _bi in range(int(blocks_per_session)):
+        n_tr += len(stimuli[_bi])
+    thr_temp, u_commit = _prepare_threshold_noise(model_params, n_tr, L_steps)
+    tr_idx = 0
 
     d_s, d_i, d_m, g_s, g_i, g_m = set_model_parameters(model_type, **model_params)
     if verbose:
@@ -976,7 +982,8 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                     
                 elif k > steps_before_obs:
                     # action = M[0]-M[1]
-                    if np.abs(action) >= (action_threshold+1e-6): # action taken
+                    u_k = u_commit[tr_idx, k] if thr_temp > 0.0 else 0.0
+                    if _should_commit(action, action_threshold, thr_temp, u_k): # action taken
                         if trial_rt==0:
                             if debug:
                                 m_diff = action
@@ -1027,6 +1034,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
             choice_sides_for_plot.append(np.tile(choices[-1], k))
             trial_strengths_for_plot.append(np.tile(trial_strengths[i][j][0], k))
             sub_prior.append(np.tile(np.mean(trial_sub_prior), k))
+            tr_idx += 1
 
             # break if any core state becomes non-finite
             if (not np.isfinite(S).all()) or (not np.isfinite(I).all()) \
@@ -1176,6 +1184,39 @@ def _si_input(W_is, g_i, del_P, S):
 
 
 @_njit(cache=True)
+def _logistic_commit_p(action_mag, theta, temp):
+    """P(commit) = sigmoid((|action| − θ) / T). Stable for ±x."""
+    x = (action_mag - theta) / temp
+    if x >= 0.0:
+        return 1.0 / (1.0 + np.exp(-x))
+    e = np.exp(x)
+    return e / (1.0 + e)
+
+
+def _prepare_threshold_noise(model_params, n_trials, n_steps):
+    """Uniforms for stochastic/soft threshold; T≤0 → unused dummy array."""
+    T = float(model_params.get('threshold_temperature', 0.0) or 0.0)
+    if T <= 0.0:
+        return 0.0, np.zeros((1, 1), dtype=np.float64)
+    seed = model_params.get('threshold_rng_seed')
+    if seed is None:
+        raise ValueError(
+            'threshold_temperature > 0 requires threshold_rng_seed '
+            '(set in simulate_session from the session RNG)'
+        )
+    rng = np.random.RandomState(int(seed))
+    return T, np.ascontiguousarray(rng.rand(int(n_trials), int(n_steps)), dtype=np.float64)
+
+
+def _should_commit(action, action_threshold, thr_temp, u):
+    """Hard first-passage when T≤0; else Bernoulli-sigmoid with uniform u."""
+    mag = abs(action)
+    if thr_temp <= 0.0:
+        return mag >= (action_threshold + 1e-6)
+    return u < _logistic_commit_p(mag, action_threshold, thr_temp)
+
+
+@_njit(cache=True)
 def _run_model_kernel(
     stim, contrast_mag, trial_side, theta_c_tr, theta_d_tr,
     L, steps_before_obs, min_trial_steps_unused,
@@ -1186,6 +1227,8 @@ def _run_model_kernel(
     baseline, stim_adap, direct_offset, nonlin_code,
     prestim_offset_start, post_action_steps,
     gs_outside_adap,
+    thr_temp,
+    u_commit,
 ):
     Ntr = stim.shape[0]
     Ntot = Ntr * L
@@ -1324,7 +1367,12 @@ def _run_model_kernel(
             if (trial_rt > 0) and (k > (trial_rt + steps_before_obs + post_action_steps - 1)):
                 trial_complete = 1
             elif k > steps_before_obs:
-                if abs(action) >= (action_threshold + 1e-6):
+                if thr_temp <= 0.0:
+                    do_commit = abs(action) >= (action_threshold + 1e-6)
+                else:
+                    p_c = _logistic_commit_p(abs(action), action_threshold, thr_temp)
+                    do_commit = u_commit[tr, k] < p_c
+                if do_commit:
                     if trial_rt == 0:
                         if action < 0.0:  # right
                             ch = 1
@@ -1435,6 +1483,8 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
     except Exception as exc:
         raise _NumbaUnsupported(f"cannot build trial arrays: {exc}")
 
+    thr_temp, u_commit = _prepare_threshold_noise(model_params, Ntr, L)
+
     (Sout, Iout, Pout, Mout, aout, perceived, actionsig,
      trial_len, choice_arr, correct_arr, rt_arr, atime_arr, subprior_mean,
      finite_ok, ntot) = _run_model_kernel(
@@ -1453,6 +1503,7 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         bool(model_params['direct_offset']), int(nonlin_code),
         int(model_params['prestim_offset_start']), int(model_params['post_action_steps']),
         bool(model_params.get('gs_outside_adaptation', False)),
+        float(thr_temp), u_commit,
     )
 
     if not finite_ok:
