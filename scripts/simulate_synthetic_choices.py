@@ -141,9 +141,15 @@ def _sim_model():
 
 
 def _real_mean_run_targets(trials_df):
-    """Post-0.5 quintile mean_run of the real session's choices."""
+    """Post-0.5 quintile mean_run of the real session's choices.
+
+    Use true-block ``probabilityLeft`` (``true_priors`` if ``get_d_vars``
+    already overwrote the column with act-binary 0.8/0.2). Quintiles are
+    equal-count on drop-0.5 trials — act-binary has no 0.5 marker.
+    """
     df = _as_trials_df(trials_df)
-    return quintile_mean_run(df['choice'].to_numpy(), df['probabilityLeft'].to_numpy())
+    pleft = df['true_priors'] if 'true_priors' in df.columns else df['probabilityLeft']
+    return quintile_mean_run(df['choice'].to_numpy(), np.asarray(pleft, dtype=float))
 
 
 def _maybe_late_stickiness(choice, pleft, seed=None, late_sticky=False,

@@ -159,7 +159,8 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
-    # Fitted AK + copy-last, within shuffle strata (fixedstim + late_sticky)
+    # Fitted AK + copy-last on option-1 *pseudo-sessions* (strat + late_sticky).
+    # Choice: remake stim×act-prior on the pseudo. Act_block: remake stim×choice.
     'choice_lr_ak_sticky': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
     ),
@@ -185,9 +186,14 @@ PRESETS = {
     'act_block_ak_sticky': (
         list(RUN_ALIGN['stimOn_times'])
         + list(RUN_ALIGN['firstMovement_times'])
+        + list(ba.ACT_BLOCK_UNSPLIT_SPLITS)
     ),
-    'act_block_ak_sticky_duringstim': list(RUN_ALIGN['stimOn_times']),
-    'act_block_ak_sticky_duringchoice': list(RUN_ALIGN['firstMovement_times']),
+    'act_block_ak_sticky_duringstim': (
+        list(RUN_ALIGN['stimOn_times']) + list(ba.ACT_BLOCK_UNSPLIT_STIM)
+    ),
+    'act_block_ak_sticky_duringchoice': (
+        list(RUN_ALIGN['firstMovement_times']) + list(ba.ACT_BLOCK_UNSPLIT_CHOICE)
+    ),
     # Unsplit prior L–R + fitted AK + copy-last (stim-side / choice-side only)
     'act_block_ak_sticky_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
     'act_block_ak_sticky_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
