@@ -7,7 +7,8 @@
 #
 #   bash scripts/submit_goal2_ak_sticky_orcd.sh
 #   PREFIT=0 bash scripts/submit_goal2_ak_sticky_orcd.sh   # skip prefit
-#   FAMILY=choice|act_block|both  (default both)
+#   FAMILY=choice|act_block|act_block_unsplit|both  (default both)
+#   PREFIT=0 FAMILY=act_block_unsplit bash scripts/submit_goal2_ak_sticky_orcd.sh
 #
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
@@ -35,13 +36,23 @@ export PREFIT_JID
 
 export NULL_SCHEME=pseudo_fixed_sticky
 
+if [[ "$FAMILY" != "choice" && "$FAMILY" != "act_block" \
+      && "$FAMILY" != "act_block_unsplit" && "$FAMILY" != "both" ]]; then
+  echo "ERROR: FAMILY must be choice|act_block|act_block_unsplit|both (got $FAMILY)" >&2
+  exit 1
+fi
+
 if [[ "$FAMILY" == "choice" || "$FAMILY" == "both" ]]; then
   echo "=== Choice L–R (stim + move) fitted+copy-last ==="
   PRESET=choice_lr_ak_sticky bash scripts/submit_goal2_choice_null_sharded.sh
 fi
 if [[ "$FAMILY" == "act_block" || "$FAMILY" == "both" ]]; then
-  echo "=== act_block prior L–R (stim + move) fitted+copy-last ==="
+  echo "=== act_block prior L–R f1/f2 (stim + move) fitted+copy-last ==="
   PRESET=act_block_ak_sticky bash scripts/submit_goal2_choice_null_sharded.sh
+fi
+if [[ "$FAMILY" == "act_block_unsplit" ]]; then
+  echo "=== act_block unsplit prior L–R (stim-side + choice-side) fitted+copy-last ==="
+  PRESET=act_block_ak_sticky_unsplit bash scripts/submit_goal2_choice_null_sharded.sh
 fi
 
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}_pseudo_fixed_sticky.npy"

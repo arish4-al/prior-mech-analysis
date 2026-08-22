@@ -188,6 +188,10 @@ PRESETS = {
     ),
     'act_block_ak_sticky_duringstim': list(RUN_ALIGN['stimOn_times']),
     'act_block_ak_sticky_duringchoice': list(RUN_ALIGN['firstMovement_times']),
+    # Unsplit prior L–R + fitted AK + copy-last (stim-side / choice-side only)
+    'act_block_ak_sticky_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    'act_block_ak_sticky_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
+    'act_block_ak_sticky_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)
     'choice_lr_excl_sticky_act': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT

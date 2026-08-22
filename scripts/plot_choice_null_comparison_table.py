@@ -574,6 +574,9 @@ def main():
         'strat': '_pseudo_strat',
         'pseudo_fixed': '_pseudo_fixed',
         'fixedstim': '_pseudo_fixed',
+        'pseudo_fixed_sticky': '_pseudo_fixed_sticky',
+        'fixed_sticky': '_pseudo_fixed_sticky',
+        'sticky': '_pseudo_fixed_sticky',
         'harris': '_harris',  # legacy with-replacement (2026-07-24e)
         'harris_unique': '_harris_unique',
         'harris_u': '_harris_unique',

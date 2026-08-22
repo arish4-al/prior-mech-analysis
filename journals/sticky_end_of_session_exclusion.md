@@ -356,6 +356,8 @@ Stationary AK has no time-varying perseveration. Copy-last after simulate matche
 
 **2026-08-22 — fitted θ + copy-last vs this table's metric (80 sessions).** Demo ζ=0.5 is far stickier than the mouse. Per-session MCMC (median α=0.16, ζ=0.07) matches accuracy / block-align and is slightly *under*-sticky. Adding copy-last pins quintile mean_run (MAE 0.58 → 0.38; per-quintile Δ median 0). Small acc cost (0.87 → 0.82). This 80-session slice has a weaker Q4−Q1 than the 459-session row above. Wired as the within-stratum choice / act_block null.
 
+**2026-08-22b — BWM FDR.** All 16 splits in alyx `res/new`. Choice L–R: copy-last is the most liberal arm (FDR @0.01 duringstim 178 / duringchoice 185 vs min5 shuffle 88 / 122; observed amps unchanged). Act_block duringstim: 0 FDR @0.01 (Harris-like); duringchoice 11 hits. Details: [structured nulls](structured_nulls_choice_lr.md) 2026-08-22b.
+
 ---
 
 ## Next investigations
