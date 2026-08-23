@@ -310,8 +310,9 @@ def is_choice_lr_split(split):
 
 
 def is_act_block_prior_split(split):
-    '''Prior L vs R under action-kernel prior: ``act_block_*`` (any window/contrast).'''
-    return (split or '').startswith('act_block')
+    '''Prior L vs R under act or Bayes prior: ``act_block_*`` / ``bayes_block_*``.'''
+    name = split or ''
+    return name.startswith('act_block') or name.startswith('bayes_block')
 
 
 # Stim-side unsplit: prior L vs R within one stim side (no choice / f1/f2).
@@ -1846,6 +1847,21 @@ def _act_prior_binary_from_choice(choice):
     return np.asarray(pbin, dtype=float)
 
 
+def _block_null_prior_left(split, choice, stim_side):
+    '''Boolean prior-L labels on a synthetic stream (act or Bayes).
+
+    Matches ``get_d_vars`` overwrite: ``bayes_block_*`` uses Bayes-optimal
+    binary from stim history; ``act_block_*`` uses the action-kernel binary
+    from the (sticky) choice sequence.
+    '''
+    if _split_uses_bayes_prior(split):
+        stim_is_left = np.asarray(stim_side, dtype=float).reshape(-1) < 0
+        _, pbin = bayesian_priors(stim_is_left)
+        return np.isclose(np.asarray(pbin, dtype=float), 0.8)
+    pbin = _act_prior_binary_from_choice(choice)
+    return np.isclose(pbin, 0.8)
+
+
 def _act_block_stream_mask(split, stim_side, choice, signed_contrast=None):
     '''act_block stim×choice (±contrast) mask on a synthetic stream.'''
     spec = _act_block_conditioning_spec(split)
@@ -2140,10 +2156,11 @@ def _compute_control_D_actkernel_block(
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
         actkernel_null_mode='fixedstim', actkernel_pseudo_len_factor=None,
         actkernel_late_sticky=False):
-    '''AK synthetic-prior nulls for act_block (same shuffle strata as Harris).
+    '''AK synthetic-prior nulls for act_block / bayes_block (same strata as Harris).
 
     Fit ActionKernel once on the real session. Simulate choices (± copy-last),
-    recompute analysis-kernel binary priors (α=0.2), use those as null labels:
+    remake the stim×choice stratum, and use that draw's prior as null labels
+    (act-binary from choices, or Bayes-binary from stim history):
 
     - ``fixedstim``: real stim stream; priors at the real stim×choice
       ``elig_idx`` (within-stratum).
@@ -2238,14 +2255,16 @@ def _compute_control_D_actkernel_block(
         gen_at_factor += n_gen
 
         for i in range(ch_mat.shape[0]):
-            pbin = _act_prior_binary_from_choice(ch_mat[i])
-            prior_l = np.isclose(pbin, 0.8)
             if mode == 'strat':
+                prior_l = _block_null_prior_left(split, ch_mat[i], side_mat[i])
                 mask = _act_block_stream_mask(
                     split, side_mat[i], ch_mat[i],
                     signed_contrast=signed_mat[i])
                 ys = _ys_from_stratum_labels(prior_l, mask, n_elig, rng)
             else:
+                side_i = (side_mat[i] if side_mat is not None
+                          else _trials_stim_side(trials))
+                prior_l = _block_null_prior_left(split, ch_mat[i], side_i)
                 ys = prior_l[elig_idx]
             if not _ok(ys):
                 continue
