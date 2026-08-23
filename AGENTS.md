@@ -32,10 +32,15 @@ Do **not** re-run `--harris-unique-null` with long sessions (`--blocks-per-sessi
 campaign was **~12 GB** of new pickles; the whole cache hit **42 GB**). After that
 run the entire `session_cache/` was deleted.
 
-Submit those jobs on **ORCD** (`mit_normal`). Laptop is fine for the default
+Those jobs belong on **ORCD** (`mit_normal`); laptop is only for the default
 6-block / `nrand=100` / contrast-matched path (Phase 4b check, small unsplit).
 See [simulation infrastructure](journals/simulation_infrastructure.md) 2026-08-14
 and [retinal then joint](journals/retinal_then_joint_fitting.md) 2026-08-14.
+
+**Agents must not touch ORCD.** No `ssh`, Slurm (`sbatch`/`squeue`/`sacct`/`scancel`),
+or writes under `/orcd/...`. Diagnose from local copies (`res/new`, `res/new_logs`).
+If a submit/restart command is needed, print it for the user — never run it.
+Cursor rule: `.cursor/rules/no-orcd-access.mdc`.
 
 ### Phase 4b sanity check
 

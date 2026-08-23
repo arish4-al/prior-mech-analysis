@@ -4,7 +4,7 @@
 
 **Status:** decisive result in hand. Absence S prior distance collapses from **0.798 → 0.011 (n.s.)** when f1/f2 conditioning is dropped while stim side is preserved. I and M prior effects survive and grow. The split-conditioned S readout is therefore largely a composition artefact.
 
-Sources: dated entries 2026-06-29 (Goals 1–2, Experiment A), 2026-07-06h (Tables A–C), 2026-08-13c–14e, 2026-08-18 (choice lapse), 2026-08-18b (soft threshold), 2026-08-18c (T+ε), 2026-08-21 (ε sweep), 2026-08-21b (M-aligned lapse).
+Sources: dated entries 2026-06-29 (Goals 1–2, Experiment A), 2026-07-06h (Tables A–C), 2026-08-13c–14e, 2026-08-18 (choice lapse), 2026-08-18b (soft threshold), 2026-08-18c (T+ε), 2026-08-21 (ε sweep), 2026-08-21b (M-aligned lapse), 2026-08-22 (M-ODE σ_M).
 
 ---
 
@@ -405,6 +405,44 @@ not reached. M no longer inflates with ε.
 
 ---
 
+## 2026-08-22 — M-ODE diffusion σ_M=0.1 (T=0, ε=0)
+
+In-kernel motor noise: after each M update,
+`M += σ_M √dt z` with `z ~ N(0,1)` iid per channel. I/S/P deterministic.
+σ_M=0 is bit-exact vs the old race. Per-session `m_sigma_rng_seed` is not
+in the cache payload. CLI `--m-sigma`. Tag `_msig0.1`. Smoke:
+`python scripts/test_m_sigma.py`.
+
+First scale σ_M=0.1 (dt=2 ms): stationary std of M0−M1 is roughly ~0.45,
+comparable to a fraction of θ. Did not refit.
+
+Canonical split, seed 123, 40 sessions, nrand=100, 80 ms S.
+
+| Split | σ_M | S | S p | I | I p | M | M p |
+|-------|----:|--:|----:|--:|----:|--:|----:|
+| Absence | 0 | 0.798 | 0 | 0.492 | 0 | 2.028 | 0 |
+| Absence | **0.1** | **0.014** | **0.01** | **0.062** | **0** | **0.108** | **0** |
+| Phase 4b | 0 | 0.012 | 0.78 | 0.004 | 0.60 | 0.004 | 0.81 |
+| Phase 4b | **0.1** | 0.010 | 0.01 | 0.006 | 0 | 0.074 | 0 |
+
+**Outputs:** `goal1/absence_msig0.1/cm_sprior/`,
+`absence/figs/phase4_no_prior_mod_msig0.1/`
+
+**Interpretation**
+
+1. Absence split S collapses **0.798 → 0.014** (p=0.01) — closest yet to
+   n.s. while I (0.062) and M (0.108) stay p=0 and **valid** (labels = M).
+   I is much smaller than under ε=0.5 (0.59) because noisy M changes RT /
+   split membership, not because I is directly noised.
+2. Phase 4b is **no longer a null**. I and M (and S at p=0.01) pick up
+   80/20 stim-composition × noisy-commit structure with `g_*=d_*=0`.
+   σ_M=0.1 is too large if we need the Phase 4b regression to stay dead.
+3. So this lever hits the absence target harder than ε or T, at the cost
+   of a false I/M prior when there is none. Next would be a smaller σ_M
+   (0.03–0.05) to sit between “S still 0.8” and “Phase 4b I/M p=0”.
+
+---
+
 ## Open / follow-up items
 
 - ~~**S p-values at 150 ms and 80 ms**~~ Done 2026-08-17: regular unsplit S
@@ -418,5 +456,6 @@ not reached. M no longer inflates with ε.
 - **Experiment C (optional):** at `d_s=0`, sweep `g_s ∈ {850, 900, 2025}` with and without `gs_outside_adaptation`, unsplit only, to confirm whether significance thresholds change once the selection reversal is removed. Partially superseded by the presence unsplit sweep in [direct sensory prior coupling](direct_sensory_prior_coupling.md).
 - ~~**Choice lapse ε=0.2 / Option B (in-kernel M noise)**~~ Option B at T=0.05
   is 2026-08-18b; T+ε is 2026-08-18c; ε sweep is 2026-08-21; M-aligned lapse
-  is 2026-08-21b (ε=0.5 split S p=0.01, I/M p=0, M now valid). T=0.02 not run.
-  Option C (sticky ActionKernel) not run.
+  is 2026-08-21b (ε=0.5 split S p=0.01, I/M p=0, M now valid). M-ODE σ_M=0.1
+  is 2026-08-22 (absence S 0.798→0.014 p=0.01; Phase 4b I/M no longer null).
+  Smaller σ_M not run. Option C (sticky ActionKernel) not run.

@@ -1,0 +1,16 @@
+---
+description: Agents must never SSH, submit, or modify anything on ORCD
+alwaysApply: true
+---
+
+# No ORCD access
+
+Agents have **no permission** on ORCD. Do **not**:
+
+- `ssh` to `orcd-login`, login nodes, or compute nodes
+- `sbatch` / `squeue` / `sacct` / `scancel`, or any Slurm command
+- write, delete, or `mv` files under `/orcd/...` or remote `ONE/alyx`
+- submit, restart, or "helpfully" kick jobs
+
+Diagnose from **local** copies only (`res/new`, `res/new_logs`, repo). If a
+restart command is needed, print it for the user to paste. Never run it.

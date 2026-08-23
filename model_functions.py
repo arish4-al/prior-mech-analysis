@@ -839,6 +839,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
     for _bi in range(int(blocks_per_session)):
         n_tr += len(stimuli[_bi])
     thr_temp, u_commit = _prepare_threshold_noise(model_params, n_tr, L_steps)
+    m_sigma, z_m = _prepare_m_diffusion(model_params, n_tr, L_steps)
     tr_idx = 0
 
     d_s, d_i, d_m, g_s, g_i, g_m = set_model_parameters(model_type, **model_params)
@@ -961,6 +962,16 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                                             + (W_mi * J + g_m * P_gain) @ I,
                                             nonlin_type)
                     M_ = M
+                if m_sigma > 0.0:
+                    _ms = m_sigma * np.sqrt(dt)
+                    if direct_offset:
+                        M_[0] += _ms * z_m[tr_idx, k, 0]
+                        M_[1] += _ms * z_m[tr_idx, k, 1]
+                        M = M_ + d_m * P_offset
+                    else:
+                        M[0] += _ms * z_m[tr_idx, k, 0]
+                        M[1] += _ms * z_m[tr_idx, k, 1]
+                        M_ = M
                 # print(d_i, d_i * P_offset)
                 P = P + dt/tau_p * nonlin(-P + W_pp * J @ P + W_pi * J @ I, nonlin_type)
 
@@ -1208,6 +1219,23 @@ def _prepare_threshold_noise(model_params, n_trials, n_steps):
     return T, np.ascontiguousarray(rng.rand(int(n_trials), int(n_steps)), dtype=np.float64)
 
 
+def _prepare_m_diffusion(model_params, n_trials, n_steps):
+    """iid N(0,1) increments for M; σ_M≤0 → unused dummy array."""
+    sig = float(model_params.get('m_sigma', 0.0) or 0.0)
+    if sig <= 0.0:
+        return 0.0, np.zeros((1, 1, 2), dtype=np.float64)
+    seed = model_params.get('m_sigma_rng_seed')
+    if seed is None:
+        raise ValueError(
+            'm_sigma > 0 requires m_sigma_rng_seed '
+            '(set in simulate_session from the session RNG)'
+        )
+    rng = np.random.RandomState(int(seed))
+    return sig, np.ascontiguousarray(
+        rng.randn(int(n_trials), int(n_steps), 2), dtype=np.float64
+    )
+
+
 def _should_commit(action, action_threshold, thr_temp, u):
     """Hard first-passage when T≤0; else Bernoulli-sigmoid with uniform u."""
     mag = abs(action)
@@ -1229,6 +1257,8 @@ def _run_model_kernel(
     gs_outside_adap,
     thr_temp,
     u_commit,
+    m_sigma,
+    z_m,
 ):
     Ntr = stim.shape[0]
     Ntot = Ntr * L
@@ -1347,6 +1377,17 @@ def _run_model_kernel(
                 M = M + (dt / tau_m) * _nl_vec(
                     -M + W_mm * _j_apply(M) + d_m * P_offset + MI, nonlin_code)
                 M_ = M
+
+            if m_sigma > 0.0:
+                _ms = m_sigma * np.sqrt(dt)
+                if direct_offset:
+                    M_[0] += _ms * z_m[tr, k, 0]
+                    M_[1] += _ms * z_m[tr, k, 1]
+                    M = M_ + d_m * P_offset
+                else:
+                    M[0] += _ms * z_m[tr, k, 0]
+                    M[1] += _ms * z_m[tr, k, 1]
+                    M_ = M
 
             jI = _j_apply(I)
             P = P + (dt / tau_p) * _nl_vec(-P + W_pp * _j_apply(P) + W_pi * jI, nonlin_code)
@@ -1484,6 +1525,7 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         raise _NumbaUnsupported(f"cannot build trial arrays: {exc}")
 
     thr_temp, u_commit = _prepare_threshold_noise(model_params, Ntr, L)
+    m_sigma, z_m = _prepare_m_diffusion(model_params, Ntr, L)
 
     (Sout, Iout, Pout, Mout, aout, perceived, actionsig,
      trial_len, choice_arr, correct_arr, rt_arr, atime_arr, subprior_mean,
@@ -1504,6 +1546,7 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         int(model_params['prestim_offset_start']), int(model_params['post_action_steps']),
         bool(model_params.get('gs_outside_adaptation', False)),
         float(thr_temp), u_commit,
+        float(m_sigma), z_m,
     )
 
     if not finite_ok:

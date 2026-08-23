@@ -881,8 +881,39 @@ def attach_threshold_temperature(mp, T):
     return mp
 
 
-def _choice_noise_dir_tag(choice_lapse=0.0, threshold_temperature=0.0):
-    return choice_lapse_dir_tag(choice_lapse) + threshold_temp_dir_tag(threshold_temperature)
+def m_sigma_value(mp_or_s):
+    """M-ODE diffusion σ_M≥0; missing / None → 0 (deterministic M)."""
+    if isinstance(mp_or_s, dict):
+        return float(mp_or_s.get("m_sigma", 0.0) or 0.0)
+    return float(mp_or_s or 0.0)
+
+
+def m_sigma_dir_tag(s):
+    """Output-dir suffix; empty when σ_M=0 so canonical paths are unchanged."""
+    s = m_sigma_value(s)
+    if s <= 0.0:
+        return ""
+    return f"_msig{s:g}"
+
+
+def attach_m_sigma(mp, s):
+    """Set ``mp['m_sigma']`` only when σ_M>0 so σ_M=0 keeps the cache key."""
+    s = float(s or 0.0)
+    if s < 0.0:
+        raise ValueError(f"m_sigma must be ≥ 0, got {s}")
+    if s > 0.0:
+        mp["m_sigma"] = s
+    else:
+        mp.pop("m_sigma", None)
+    return mp
+
+
+def _choice_noise_dir_tag(choice_lapse=0.0, threshold_temperature=0.0, m_sigma=0.0):
+    return (
+        choice_lapse_dir_tag(choice_lapse)
+        + threshold_temp_dir_tag(threshold_temperature)
+        + m_sigma_dir_tag(m_sigma)
+    )
 
 
 def _ode_model_params(mp):
@@ -987,6 +1018,8 @@ def simulate_session(
     if threshold_temp_value(ode_mp) > 0.0:
         # Per-session uniforms for the race; not part of the cache payload.
         ode_mp["threshold_rng_seed"] = int(rng.randint(0, 2**31 - 1))
+    if m_sigma_value(ode_mp) > 0.0:
+        ode_mp["m_sigma_rng_seed"] = int(rng.randint(0, 2**31 - 1))
     results = mf.run_model(
         "data",
         stimuli,
@@ -2675,6 +2708,9 @@ def _model_params_dict(mp):
     T = threshold_temp_value(mp)
     if T > 0.0:
         out["threshold_temperature"] = T
+    sig = m_sigma_value(mp)
+    if sig > 0.0:
+        out["m_sigma"] = sig
     return out
 
 
@@ -2727,6 +2763,7 @@ def run_experiment_case(
     n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
     choice_lapse=0.0,
     threshold_temperature=0.0,
+    m_sigma=0.0,
 ):
     """
     Unified Goal-1 single-experiment runner (cache-backed).
@@ -2745,7 +2782,8 @@ def run_experiment_case(
     )
     attach_choice_lapse(mp, choice_lapse)
     attach_threshold_temperature(mp, threshold_temperature)
-    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    attach_m_sigma(mp, m_sigma)
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature, m_sigma)
     if noise_tag:
         exp_tag = f"{exp_tag}{noise_tag}"
         extra = []
@@ -2753,6 +2791,8 @@ def run_experiment_case(
             extra.append(f"choice_lapse={choice_lapse_eps(choice_lapse):g}")
         if threshold_temp_dir_tag(threshold_temperature):
             extra.append(f"threshold_temperature={threshold_temp_value(threshold_temperature):g}")
+        if m_sigma_dir_tag(m_sigma):
+            extra.append(f"m_sigma={m_sigma_value(m_sigma):g}")
         cond_desc = f"{cond_desc}, " + ", ".join(extra)
     if harris_unique_null:
         null_tag = "hu"
@@ -2794,6 +2834,7 @@ def run_experiment_case(
             gs_outside_adaptation=gs_outside_adaptation,
             choice_lapse=choice_lapse,
             threshold_temperature=threshold_temperature,
+            m_sigma=m_sigma,
         )
 
     session_dfs, steps_before_obs, _ = simulate_condition_sessions(
@@ -2840,6 +2881,7 @@ def run_experiment_case(
             "harris_n_extra_donors": int(n_extra_donors) if harris_unique_null else 0,
             "choice_lapse": choice_lapse_eps(choice_lapse),
             "threshold_temperature": threshold_temp_value(threshold_temperature),
+            "m_sigma": m_sigma_value(m_sigma),
         },
     )
 
@@ -2859,6 +2901,7 @@ def run_phase4_no_prior_mod_analysis(
     constant_s0=False,
     choice_lapse=0.0,
     threshold_temperature=0.0,
+    m_sigma=0.0,
 ):
     """
     Phase 4 control: absence with all P→population modulations off (g_*=d_*=0).
@@ -2872,13 +2915,16 @@ def run_phase4_no_prior_mod_analysis(
     mp, _ = load_fitted_model(zero_all_prior_mod=True, json_path=weights_json)
     attach_choice_lapse(mp, choice_lapse)
     attach_threshold_temperature(mp, threshold_temperature)
+    attach_m_sigma(mp, m_sigma)
     s0_label = "constant S0=contrast" if constant_s0 else "stochastic S0"
-    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature, m_sigma)
     noise_desc = ""
     if choice_lapse_dir_tag(choice_lapse):
         noise_desc += f", choice_lapse={choice_lapse_eps(choice_lapse):g}"
     if threshold_temp_dir_tag(threshold_temperature):
         noise_desc += f", threshold_temperature={threshold_temp_value(threshold_temperature):g}"
+    if m_sigma_dir_tag(m_sigma):
+        noise_desc += f", m_sigma={m_sigma_value(m_sigma):g}"
     log_canonical_analysis_banner()
     print(
         f"\n=== Phase 4 no prior modulation: absence "
@@ -2914,6 +2960,7 @@ def run_phase4_no_prior_mod_analysis(
             "constant_s0": constant_s0,
             "choice_lapse": choice_lapse_eps(choice_lapse),
             "threshold_temperature": threshold_temp_value(threshold_temperature),
+            "m_sigma": m_sigma_value(m_sigma),
         },
     )
 
@@ -2939,6 +2986,7 @@ def run_unsplit_prior_distance_analysis(
     n_extra_donors=HARRIS_N_EXTRA_DONORS_DEFAULT,
     choice_lapse=0.0,
     threshold_temperature=0.0,
+    m_sigma=0.0,
 ):
     """
     Experiment A: prior distance without f1/f2 choice×feedback splits.
@@ -3033,7 +3081,8 @@ def run_unsplit_prior_distance_analysis(
 
     attach_choice_lapse(mp, choice_lapse)
     attach_threshold_temperature(mp, threshold_temperature)
-    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature)
+    attach_m_sigma(mp, m_sigma)
+    noise_tag = _choice_noise_dir_tag(choice_lapse, threshold_temperature, m_sigma)
     noise_desc = ""
     if choice_lapse_dir_tag(choice_lapse):
         noise_desc += f", choice_lapse={choice_lapse_eps(choice_lapse):g}"
@@ -3044,6 +3093,9 @@ def run_unsplit_prior_distance_analysis(
             f"{condition_name}, threshold_temperature="
             f"{threshold_temp_value(threshold_temperature):g}"
         )
+    if m_sigma_dir_tag(m_sigma):
+        noise_desc += f", m_sigma={m_sigma_value(m_sigma):g}"
+        condition_name = f"{condition_name}, m_sigma={m_sigma_value(m_sigma):g}"
     if noise_tag:
         out_name = f"{out_name}{noise_tag}"
     model_params = _model_params_dict(mp)
@@ -3140,6 +3192,7 @@ def run_unsplit_prior_distance_analysis(
     )
     summary["choice_lapse"] = choice_lapse_eps(choice_lapse)
     summary["threshold_temperature"] = threshold_temp_value(threshold_temperature)
+    summary["m_sigma"] = m_sigma_value(m_sigma)
     with open(out_root / f"{file_prefix}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved unsplit summary to {out_root / f'{file_prefix}_summary.json'}")
@@ -6419,6 +6472,7 @@ def process_condition(
     gs_outside_adaptation=False,
     choice_lapse=0.0,
     threshold_temperature=0.0,
+    m_sigma=0.0,
 ):
     if zero_all_prior_mod:
         im_label = " (all g_*=d_*=0)"
@@ -6443,6 +6497,7 @@ def process_condition(
     )
     attach_choice_lapse(mp, choice_lapse)
     attach_threshold_temperature(mp, threshold_temperature)
+    attach_m_sigma(mp, m_sigma)
 
     cond_dir = base_dir / condition_name
     res_dir = cond_dir / "res"
@@ -7939,6 +7994,17 @@ def main():
             "T>0 writes to tagged dirs (e.g. absence_unsplit_softthr0.05)."
         ),
     )
+    parser.add_argument(
+        "--m-sigma",
+        type=float,
+        default=0.0,
+        help=(
+            "Euler–Maruyama diffusion on the M ODE, σ_M≥0 (default 0). "
+            "Each step: M += σ_M * sqrt(dt) * z, z~N(0,1) iid per channel. "
+            "I/S/P unchanged. σ_M=0 is the canonical path. "
+            "σ_M>0 writes to tagged dirs (e.g. absence_msig0.1)."
+        ),
+    )
     args = parser.parse_args()
 
     global SESSION_CACHE_ENABLED
@@ -7967,6 +8033,8 @@ def main():
         parser.error("--choice-lapse must be in [0, 1]")
     if float(args.threshold_temperature) < 0.0:
         parser.error("--threshold-temperature must be ≥ 0")
+    if float(args.m_sigma) < 0.0:
+        parser.error("--m-sigma must be ≥ 0")
 
     if args.null_compare:
         run_null_scheme_comparison(
@@ -8060,6 +8128,7 @@ def main():
             n_extra_donors=args.harris_n_extra_donors,
             choice_lapse=args.choice_lapse,
             threshold_temperature=args.threshold_temperature,
+            m_sigma=args.m_sigma,
         )
         return
 
@@ -8078,6 +8147,7 @@ def main():
             constant_s0=args.phase4_constant_s0,
             choice_lapse=args.choice_lapse,
             threshold_temperature=args.threshold_temperature,
+            m_sigma=args.m_sigma,
         )
         return
 
@@ -8108,6 +8178,7 @@ def main():
                 n_extra_donors=args.harris_n_extra_donors,
                 choice_lapse=args.choice_lapse,
                 threshold_temperature=args.threshold_temperature,
+                m_sigma=args.m_sigma,
             )
         return
 
@@ -8335,16 +8406,21 @@ def main():
         contrast_matched_null=contrast_matched_null,
         choice_lapse=args.choice_lapse,
         threshold_temperature=args.threshold_temperature,
+        m_sigma=args.m_sigma,
     )
     process_condition(
-        "absence" + _choice_noise_dir_tag(args.choice_lapse, args.threshold_temperature),
+        "absence" + _choice_noise_dir_tag(
+            args.choice_lapse, args.threshold_temperature, args.m_sigma
+        ),
         g_s=0.0,
         d_s=0.0,
         rng_seed=args.seed,
         **common_kw,
     )
     process_condition(
-        "presence" + _choice_noise_dir_tag(args.choice_lapse, args.threshold_temperature),
+        "presence" + _choice_noise_dir_tag(
+            args.choice_lapse, args.threshold_temperature, args.m_sigma
+        ),
         g_s=g_s_presence,
         d_s=d_s_presence,
         rng_seed=args.seed,
