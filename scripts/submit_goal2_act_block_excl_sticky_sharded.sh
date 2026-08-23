@@ -33,7 +33,6 @@ CLEAR_STREAM="${CLEAR_STREAM:-1}"
 EXCLUDE_STICKY_TRIALS="${EXCLUDE_STICKY_TRIALS:-1}"
 STICKY_LATE_FRAC="${STICKY_LATE_FRAC:-0.2}"
 STICKY_MIN_RUN="${STICKY_MIN_RUN:-10}"
-SESSION_SHUFFLE_NULL="${SESSION_SHUFFLE_NULL:-0}"
 MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
@@ -42,7 +41,14 @@ TIME_SHARD="${TIME_SHARD:-12:00:00}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export EXCLUDE_STICKY_TRIALS STICKY_LATE_FRAC STICKY_MIN_RUN
-export SESSION_SHUFFLE_NULL
+# Pin shuffle-after-trim. --export=ALL would otherwise leak AK/Harris flags
+# from a prior submit in this shell and write _pseudo_* / _harris into
+# res_excl_sticky.
+export SESSION_SHUFFLE_NULL=0
+export ACTKERNEL_CHOICE_NULL=0
+export ACTKERNEL_NULL_MODE=""
+export ACTKERNEL_PSEUDO_LEN_FACTOR=""
+export ACTKERNEL_LATE_STICKY=0
 
 JOB_PREFIX="${JOB_PREFIX:-g2abx}"
 
@@ -108,7 +114,7 @@ for sp in "${SPLITS[@]}"; do
     JID=$(sbatch --parsable \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
-      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
+      --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR=,ACTKERNEL_LATE_STICKY=0 \
       scripts/run_goal2_shard_slurm.sh)
     SHARD_JOBS+=("$JID")
     echo "  $sp shard $k/$N_SHARDS -> $JID"
@@ -118,7 +124,7 @@ for sp in "${SPLITS[@]}"; do
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \
-    --export=ALL,SPLIT="$sp",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS" \
+    --export=ALL,SPLIT="$sp",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR=,ACTKERNEL_LATE_STICKY=0 \
     scripts/run_goal2_finalize_slurm.sh)
   echo "  $sp finalize -> $FID (after $DEP)"
 done
