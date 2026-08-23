@@ -196,6 +196,13 @@ PRESETS = {
     ),
     # Unsplit prior L–R + fitted AK + copy-last (stim-side / choice-side only)
     'act_block_ak_sticky_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    # Same-side f1 only, Bayes prior labels (stratum still stim×choice).
+    'bayes_block_ak_sticky_f1': [
+        'bayes_block_duringstim_r_choice_r_f1',
+        'bayes_block_duringstim_l_choice_l_f1',
+        'bayes_block_stim_r_duringchoice_r_f1',
+        'bayes_block_stim_l_duringchoice_l_f1',
+    ],
     'act_block_ak_sticky_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     'act_block_ak_sticky_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)

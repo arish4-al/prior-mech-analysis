@@ -32,7 +32,7 @@ Do **not** re-run `--harris-unique-null` with long sessions (`--blocks-per-sessi
 campaign was **~12 GB** of new pickles; the whole cache hit **42 GB**). After that
 run the entire `session_cache/` was deleted.
 
-Those jobs belong on **ORCD** (`mit_normal`); laptop is only for the default
+Those jobs belong on **ORCD** (`pi_fiete`); laptop is only for the default
 6-block / `nrand=100` / contrast-matched path (Phase 4b check, small unsplit).
 See [simulation infrastructure](journals/simulation_infrastructure.md) 2026-08-14
 and [retinal then joint](journals/retinal_then_joint_fitting.md) 2026-08-14.

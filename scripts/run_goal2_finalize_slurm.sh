@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=10G
-#SBATCH -p mit_normal
+#SBATCH -p pi_fiete
 #SBATCH --time=2:00:00
 #SBATCH --mail-user=arily
 #SBATCH --mail-type=FAIL
