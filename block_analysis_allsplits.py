@@ -141,6 +141,8 @@ align_old = {
          'bayes_block_only':'stimOn_times',
          'bayes_block_duringstim_l':'stimOn_times',
          'bayes_block_duringstim_r':'stimOn_times',
+         'bayes_block_duringchoice_l':'firstMovement_times',
+         'bayes_block_duringchoice_r':'firstMovement_times',
         }
 
 # Choicestim family (stim L–R or choice L–R contrasts). Windows set below —
@@ -326,6 +328,15 @@ ACT_BLOCK_UNSPLIT_CHOICE = (
     'act_block_duringchoice_r',
 )
 ACT_BLOCK_UNSPLIT_SPLITS = ACT_BLOCK_UNSPLIT_STIM + ACT_BLOCK_UNSPLIT_CHOICE
+BAYES_BLOCK_UNSPLIT_STIM = (
+    'bayes_block_duringstim_l',
+    'bayes_block_duringstim_r',
+)
+BAYES_BLOCK_UNSPLIT_CHOICE = (
+    'bayes_block_duringchoice_l',
+    'bayes_block_duringchoice_r',
+)
+BAYES_BLOCK_UNSPLIT_SPLITS = BAYES_BLOCK_UNSPLIT_STIM + BAYES_BLOCK_UNSPLIT_CHOICE
 
 
 def is_act_block_unsplit_split(split):
@@ -333,7 +344,7 @@ def is_act_block_unsplit_split(split):
     name = split or ''
     if contrast_from_split(name) is not None:
         name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', name)
-    return name in ACT_BLOCK_UNSPLIT_SPLITS
+    return name in ACT_BLOCK_UNSPLIT_SPLITS or name in BAYES_BLOCK_UNSPLIT_SPLITS
 
 
 def is_harris_eligible_split(split):
@@ -707,13 +718,51 @@ def _choice_lr_stratum_targets(split):
     return stim_is_left, pleft
 
 
+def _null_choice_model(split):
+    '''Choice generator for structured nulls: Bayes mouse vs fitted AK.'''
+    return 'bayes' if _split_uses_bayes_prior(split) else 'actkernel'
+
+
+def _null_choice_fit(split, eid, trials):
+    '''AK MCMC pickle, or fixed OptimalBayesian [ζ, lapse] (no AK).'''
+    if _null_choice_model(split) == 'bayes':
+        syn = _syn()
+        return {
+            'eid': str(eid),
+            'params': np.array(
+                [syn.BAYES_CHOICE_ZETA, syn.BAYES_CHOICE_LAPSE], dtype=float),
+            'mode': 'optimal_bayes',
+            'choice_model': 'bayes',
+            'sim_model': None,
+        }
+    fit = dict(get_actkernel_choice_fit(eid, trials))
+    fit['choice_model'] = 'actkernel'
+    return fit
+
+
+def _null_scheme_name(base, late_sticky, choice_model='actkernel'):
+    '''Disk/metadata tag: AK vs Bayes-agent, ± copy-last.'''
+    scheme = str(base)
+    if choice_model == 'bayes':
+        scheme = scheme.replace('synthetic_choice', 'synthetic_bayes_choice', 1)
+        scheme = scheme.replace('synthetic_prior', 'synthetic_bayes_prior', 1)
+    if late_sticky:
+        scheme = f'{scheme}_sticky'
+    return scheme
+
+
 def _split_uses_act_prior(split):
     '''True when analysis prior is action-kernel binary (0.8/0.2).
 
     Matches historical ``'act' in split`` (covers ``act_block_*`` and ``*_act``).
     Does **not** match bare ``duringstim`` / ``block_*`` / ``bayes_*``.
+    Bayes is excluded first so a future ``bayes_*act*`` name cannot steal
+    the act overwrite (``'act' in 'bayes_block'`` is already False).
     '''
-    return 'act' in (split or '')
+    name = split or ''
+    if 'bayes' in name:
+        return False
+    return 'act' in name
 
 
 def _split_uses_bayes_prior(split):
@@ -829,7 +878,7 @@ def _act_block_conditioning_spec(split):
     name = split
     if contrast is not None:
         name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', split)
-    if name == 'act_block_only':
+    if name in ('act_block_only', 'bayes_block_only', 'block_only'):
         return {
             'stim_is_left': None, 'choice': None, 'contrast': contrast,
         }
@@ -839,9 +888,9 @@ def _act_block_conditioning_spec(split):
     if name in ('act_block_duringstim_r', 'block_duringstim_r',
                 'bayes_block_duringstim_r'):
         return {'stim_is_left': False, 'choice': None, 'contrast': contrast}
-    if name == 'act_block_duringchoice_l':
+    if name in ('act_block_duringchoice_l', 'bayes_block_duringchoice_l'):
         return {'stim_is_left': None, 'choice': 1.0, 'contrast': contrast}
-    if name == 'act_block_duringchoice_r':
+    if name in ('act_block_duringchoice_r', 'bayes_block_duringchoice_r'):
         return {'stim_is_left': None, 'choice': -1.0, 'contrast': contrast}
 
     stim_is_left = None
@@ -1983,16 +2032,18 @@ def _compute_control_D_actkernel_choice(
         actkernel_null_mode='strat', actkernel_pseudo_len_factor=None,
         actkernel_late_sticky=False):
     '''
-    ActionKernel synthetic-choice nulls (journal options 1–2 + legacy).
+    Synthetic-choice nulls (journal options 1–2 + legacy).
 
-    Fit ActionKernel once on the real session. Null labels for neural ``b``:
+    ``*_act`` / default: fit ActionKernel once, simulate under θ.
+    ``*bayes*``: IBL OptimalBayesian policy (fixed τ, γ, ζ, lapse) — no AK.
 
-    - ``strat``: new pseudo stim/blocks + AK choices; take choices from the
-      pseudo's stim×prior stratum via ``_stratum_mask_for_stream`` (same
-      act/bayes/true prior rules as real ``elig_idx``), length-matched to
-      ``n_elig``. ``actkernel_pseudo_len_factor`` > 1 draws longer BWM
-      pseudos so strata are large enough (congruent act splits).
-    - ``fixedstim``: AK choices on the real stim/side stream; labels at
+    Then optional copy-last. Null labels for neural ``b``:
+
+    - ``strat``: new pseudo stim/blocks + generated choices; take choices
+      from the pseudo's stim×prior stratum via ``_stratum_mask_for_stream``
+      (same act/bayes/true prior rules as real ``elig_idx``), length-matched
+      to ``n_elig``.
+    - ``fixedstim``: choices on the real stim/side stream; labels at
       ``elig_idx``.
     - ``unconstrained``: legacy — pseudo choices at calendar ``elig_idx``.
     '''
@@ -2028,12 +2079,14 @@ def _compute_control_D_actkernel_choice(
 
     _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
 
-    fit = get_actkernel_choice_fit(eid, trials)
+    fit = _null_choice_fit(split, eid, trials)
+    choice_model = fit.get('choice_model', 'actkernel')
     elig_idx = np.asarray(elig_idx, dtype=int)
     n_elig = len(elig_idx)
     n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
                 if mode == 'strat' else len(trials))
     print(f'actkernel-choice [{split}]: mode={mode}; '
+          f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
           f'(real={len(trials)}, n_elig={n_elig}); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
@@ -2062,7 +2115,8 @@ def _compute_control_D_actkernel_choice(
             out = syn.synthetic_choices_fixed_stim(
                 trials, params=theta, n=n_gen,
                 seed=seed_base + gen_offset, model=sim_model,
-                late_sticky=actkernel_late_sticky)
+                late_sticky=actkernel_late_sticky,
+                choice_model=choice_model)
             ch_mat = np.asarray(out['choice'], dtype=float)
             if ch_mat.ndim == 1:
                 ch_mat = ch_mat[None, :]
@@ -2072,7 +2126,8 @@ def _compute_control_D_actkernel_choice(
                 trials, n=n_gen, eid=str(eid), subject='bwm',
                 params=theta, seed=seed_base + gen_offset, fast=True,
                 n_trials=(n_pseudo if mode == 'strat' else None),
-                late_sticky=actkernel_late_sticky)
+                late_sticky=actkernel_late_sticky,
+                choice_model=choice_model)
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
@@ -2126,13 +2181,11 @@ def _compute_control_D_actkernel_choice(
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
-    scheme = {
+    scheme = _null_scheme_name({
         'strat': 'synthetic_choice_pseudo_strat',
         'fixedstim': 'synthetic_choice_pseudo_fixed',
         'unconstrained': 'synthetic_choice_pseudosession',
-    }[mode]
-    if actkernel_late_sticky:
-        scheme = f'{scheme}_sticky'
+    }[mode], actkernel_late_sticky, choice_model)
     return {
         'acs': acs,
         'acs1': acs1,
@@ -2148,6 +2201,7 @@ def _compute_control_D_actkernel_choice(
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
         'actkernel_late_sticky': bool(actkernel_late_sticky),
+        'null_choice_model': choice_model,
     }
 
 
@@ -2156,11 +2210,11 @@ def _compute_control_D_actkernel_block(
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
         actkernel_null_mode='fixedstim', actkernel_pseudo_len_factor=None,
         actkernel_late_sticky=False):
-    '''AK synthetic-prior nulls for act_block / bayes_block (same strata as Harris).
+    '''Synthetic-prior nulls for act_block / bayes_block (same strata as Harris).
 
-    Fit ActionKernel once on the real session. Simulate choices (± copy-last),
-    remake the stim×choice stratum, and use that draw's prior as null labels
-    (act-binary from choices, or Bayes-binary from stim history):
+    ``act_block_*``: fit ActionKernel, simulate under θ, labels = act-binary.
+    ``bayes_block_*``: OptimalBayesian choices (no AK); labels = Bayes-binary
+    from stim history. Then optional copy-last.
 
     - ``fixedstim``: real stim stream; priors at the real stim×choice
       ``elig_idx`` (within-stratum).
@@ -2203,12 +2257,14 @@ def _compute_control_D_actkernel_block(
 
     _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
 
-    fit = get_actkernel_choice_fit(eid, trials)
+    fit = _null_choice_fit(split, eid, trials)
+    choice_model = fit.get('choice_model', 'actkernel')
     elig_idx = np.asarray(elig_idx, dtype=int)
     n_elig = len(elig_idx)
     n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
                 if mode == 'strat' else len(trials))
     print(f'actkernel-block [{split}]: mode={mode}; '
+          f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
           f'(real={len(trials)}, n_elig={n_elig}); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
@@ -2237,7 +2293,8 @@ def _compute_control_D_actkernel_block(
             out = syn.synthetic_choices_fixed_stim(
                 trials, params=theta, n=n_gen,
                 seed=seed_base + gen_offset, model=sim_model,
-                late_sticky=actkernel_late_sticky)
+                late_sticky=actkernel_late_sticky,
+                choice_model=choice_model)
             ch_mat = np.asarray(out['choice'], dtype=float)
             if ch_mat.ndim == 1:
                 ch_mat = ch_mat[None, :]
@@ -2247,7 +2304,8 @@ def _compute_control_D_actkernel_block(
                 trials, n=n_gen, eid=str(eid), subject='bwm',
                 params=theta, seed=seed_base + gen_offset, fast=True,
                 n_trials=(n_pseudo if mode == 'strat' else None),
-                late_sticky=actkernel_late_sticky)
+                late_sticky=actkernel_late_sticky,
+                choice_model=choice_model)
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             signed_mat = np.asarray(out['signed_contrast'], dtype=float)
@@ -2302,12 +2360,10 @@ def _compute_control_D_actkernel_block(
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
-    scheme = {
+    scheme = _null_scheme_name({
         'strat': 'synthetic_prior_pseudo_strat',
         'fixedstim': 'synthetic_prior_pseudo_fixed',
-    }[mode]
-    if actkernel_late_sticky:
-        scheme = f'{scheme}_sticky'
+    }[mode], actkernel_late_sticky, choice_model)
     return {
         'acs': acs,
         'acs1': acs1,
@@ -2323,6 +2379,7 @@ def _compute_control_D_actkernel_block(
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
         'actkernel_late_sticky': bool(actkernel_late_sticky),
+        'null_choice_model': choice_model,
     }
 
 
@@ -2752,13 +2809,12 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     provided, spikes/clusters/trials are reused (no per-split reload), which is
     the time-efficient path. When None, loads from ONE as before (identical result).
 
-    ``actkernel_choice_null``: if True, use ActionKernel synthetic nulls.
-    Choice L–R (``choice_stim*`` / ``choice_duringstim*``): synthetic
-    **choices**. Act_block prior L–R: synthetic **priors** (choices →
-    analysis-kernel α=0.2 binary). Mode via ``actkernel_null_mode``
-    (default ``strat`` for choice; act_block prefers ``fixedstim`` =
-    within the real shuffle stratum). Takes precedence over
-    session_shuffle_null.
+    ``actkernel_choice_null``: if True, use synthetic-choice / synthetic-prior
+    nulls. ``*_act`` / ``act_block_*``: fitted ActionKernel choices.
+    ``*bayes*``: IBL OptimalBayesian choices (no AK). Choice L–R: synthetic
+    **choices**. Act/Bayes_block prior L–R: synthetic **priors** (act-binary
+    from choices, or Bayes-binary from stim). Mode via ``actkernel_null_mode``
+    (default ``strat``). Takes precedence over session_shuffle_null.
 
     ``actkernel_pseudo_len_factor``: strat only — multiply BWM pseudo length
     vs the real session (default 3; env ``ACTKERNEL_PSEUDO_LEN_FACTOR``).
@@ -3016,7 +3072,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             events.append(trials[align[split]][sel])
             trn.append(np.arange(len(trials['choice']))[sel])
 
-    elif split in ACT_BLOCK_UNSPLIT_CHOICE:
+    elif split in ACT_BLOCK_UNSPLIT_CHOICE or split in BAYES_BLOCK_UNSPLIT_CHOICE:
         # Prior L vs R within one choice side; firstMovement window; no stim/f1/f2.
         ch = 1 if split.endswith('_l') else -1
         trials = trials[trials['choice'] == ch]
