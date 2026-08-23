@@ -2,9 +2,9 @@
 
 **Scope:** the problem that an unrestricted label shuffle is too narrow a null when choice/prior labels are temporally autocorrelated and neural responses drift, and every null scheme built to address it — Harris session permutation and ActionKernel synthetic sessions (stratified pseudo and fixed-stim). Late-session / perseveration **trial exclusion** is [sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md), not a structured null.
 
-**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim. Intended next arm: **option 1 + copy-last** (`_pseudo_strat_sticky`) — remake stim×act-prior (choice) or stim×choice (act_block) on each pseudo. **Not yet scored.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. `_harris_unique` remains the preferred file for claims.
+**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim. Intended next act arm: **option 1 + copy-last** (`_pseudo_strat_sticky`) — remake stim×act-prior (choice) or stim×choice (act_block) on each pseudo. **Not yet scored.** Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. `_harris_unique` remains the preferred file for claims.
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`).
+Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits.
 
 ---
 
@@ -36,7 +36,8 @@ Label autocorrelation **alone** is not sufficient: if trial responses were indep
 | label shuffle (within stim×block)            | `{split}.npy`                 | baseline                              |
 | option 1 — AK stratified pseudo-session      | `{split}_pseudo_strat.npy`    | valid (needs `pseudo_len_factor ≥ 3`) |
 | option 2 — AK fixed real stim×block          | `{split}_pseudo_fixed.npy`    | valid, most liberal (stationary)      |
-| option 1 + copy-last                         | `{split}_pseudo_strat_sticky.npy` | wired; **FDR not yet run**        |
+| option 1 + copy-last (AK mouse)              | `{split}_pseudo_strat_sticky.npy` | wired for `*_act` / `act_block_*`; **FDR not yet run** |
+| option 1 + copy-last (Bayes mouse)           | `{split}_pseudo_strat_sticky.npy` | wired for `*_bayes` / `bayes_block_*`; **FDR not yet run** |
 | option 3 — Harris (legacy, with replacement) | `{split}_harris.npy`          | valid after donor re-stratification   |
 | option 3 — Harris **unique-null**            | `{split}_harris_unique.npy`   | **preferred**                         |
 | legacy unconstrained BWM index               | `{split}_pseudosession.npy`   | **invalid** — do not interpret        |
@@ -779,6 +780,46 @@ PREFIT=0 FAMILY=both bash scripts/submit_goal2_ak_sticky_orcd.sh
 
 ---
 
+## 2026-08-23 — Bayes-agent option 1 + copy-last (not AK)
+
+The Bayes campaign is **not** “AK mouse, Bayes analysis labels.” Choices are sampled from the IBL **OptimalBayesian** policy, then copy-last. Fitted ActionKernel is not loaded.
+
+**Why.** On choice L–R the null labels *are* the sampled choices, so AK vs Bayes is a different null. On `bayes_block_*` Bayes labels already come from stim only; the choice model still changes which stim×choice slots are remade.
+
+**Choice generator (fixed, not a per-session MCMC fit).**
+
+1. New BWM stim/blocks (`synthetic_sessions_from_trials`, same as option 1).
+2. Infer P(stim left | past sides) with `bayesian_priors` (τ=60, γ=0.8, length 20–100 — same as analysis labels).
+3. Combine prior with current contrast via `combine_lkd_prior` (Findling / `behavior_models.OptimalBayesian`; σ=0.49).
+4. Fixed sensory noise **ζ=0.1**, lapse **0.05** (not fitted). Copy-last supplies mouse stickiness.
+5. Copy-last on the **pseudo’s** true-block post-0.5 quintiles, targeting this real session’s μ_q (`true_priors`).
+
+**Remake (unchanged option-1 geometry).**
+
+| Family | Pseudo stratum | Null labels |
+|---|---|---|
+| choice L–R `*_bayes` | that draw’s stim × **its** Bayes-prior | sticky **Bayes-agent choices** |
+| `bayes_block_*` | that draw’s stim × **those** choices | that draw’s **Bayes-binary** (stim history) |
+
+**Not used:** fitted AK θ; option 2 (`fixedstim`); a per-session OptimalBayesian MCMC fit (lapse/ζ).
+
+| Piece | Detail |
+|---|---|
+| Sampler | `simulate_bayes_choices` in `scripts/simulate_synthetic_choices.py` (`choice_model='bayes'`) |
+| Routing | `_null_choice_model` / `_null_choice_fit` — `'bayes' in split` → no AK pickle |
+| Metadata | `null_scheme`: `synthetic_bayes_choice_pseudo_strat_sticky` / `synthetic_bayes_prior_pseudo_strat_sticky` |
+| Disk | still `{split}_pseudo_strat_sticky.npy` (split names already have `bayes`; does not touch `*_act` / `act_block_*`) |
+| Submit | `bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh` |
+| Smoke | `python scripts/test_bayes_choice_null.py` |
+
+```bash
+PREFIT=0 bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh
+```
+
+**Not done:** full-BWM Bayes-agent FDR vs Harris / AK-sticky / min5 shuffle.
+
+---
+
 ## Open questions
 
 1. **Primary null choice for choice L–R claims** — Harris (empirical sticky structure within stratum) vs AK stratified pseudo (BWM-like new world with matched bias context). Min5 shuffle (08-14) is more liberal than openalyx, which widens the Harris–shuffle gap but does not change Harris FDR counts.
@@ -786,5 +827,6 @@ PREFIT=0 FAMILY=both bash scripts/submit_goal2_ak_sticky_orcd.sh
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
 5. **act_block Harris unique is a near-total null** (0 FDR @0.01). 08-14b: **not** the f2 donor-stratum skip. **2026-08-17 unsplit:** same 0 FDR @0.01. **2026-08-17b early-stim 80 ms:** shuffle FDR shrinks but unsplit stays liberal; Harris still 0 FDR @0.01. **2026-08-18 `act_block_only` ITI:** shuffle already 0 FDR @0.01 (5 at 0.05); Harris unique 0 FDR @0.01 **and** @0.05 (208 regions, 63k cells). Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? Duringchoice unsplit **shuffle** still missing.
-6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. Option-1 + copy-last (`_pseudo_strat_sticky`) is wired; full-BWM FDR not yet run. An option-2 (`fixedstim`) job was run by mistake; those numbers are deleted.
+6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. Option-1 + copy-last (`_pseudo_strat_sticky`) is wired for the AK mouse; full-BWM FDR not yet run. An option-2 (`fixedstim`) job was run by mistake; those numbers are deleted.
+7. **Bayes mouse vs fitted OptimalBayesian** — 08-23 uses fixed ζ=0.1 / lapse=0.05 (same τ/γ as analysis priors). A per-session OptimalBayesian MCMC fit was not implemented.
 

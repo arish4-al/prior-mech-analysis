@@ -2,9 +2,9 @@
 
 **Scope:** dropping late-session and perseveration-tail trials before label-shuffle neural distances — originally as a robustness arm against drift × sticky-label false positives, now also as a possible SNR filter if the end of session is zoned-out noise. Choice L–R has been run; prior L–R has not.
 
-**Status:** implemented and compared for **choice L–R only**. Exclusion **widens** the FDR map. Late behaviour: not zoned-out, not more block-aligned. Post-0.5 quintiles (08-21): stickiness peaks in **Q4**, not the last 20 % (Q5); only RT is a Q5 outlier. Next: same trim on prior splits.
+**Status:** implemented and compared for **choice L–R only**. Exclusion **widens** the FDR map. Late behaviour: not zoned-out, not more block-aligned. Post-0.5 quintiles (08-21): stickiness peaks in **Q4**, not the last 20 % (Q5); only RT is a Q5 outlier. Prior L–R excl-sticky is **wired** (2026-08-23) but not yet run.
 
-Sources: dated entries in [structured nulls](structured_nulls_choice_lr.md) 07-20 (exclusion API), 07-20b (BWM counts), 07-21 (choice FDR comparison), 07-21b (SC regtype); choice-epoch stickiness 07-13 / 07-13b **in this file**; 2026-08-18 / 08-18b–g / **08-21** (quintiles) / **08-21 AK late-sticky**.
+Sources: dated entries in [structured nulls](structured_nulls_choice_lr.md) 07-20 (exclusion API), 07-20b (BWM counts), 07-21 (choice FDR comparison), 07-21b (SC regtype); choice-epoch stickiness 07-13 / 07-13b **in this file**; 2026-08-18 / 08-18b–g / **08-21** (quintiles) / **08-21 AK late-sticky**; **08-23** (prior L–R submitter).
 
 ---
 
@@ -38,19 +38,20 @@ This arm is **not** a complete replacement for a temporally structured null (Har
 | Constants | `STICKY_LATE_FRAC = 0.20`, `STICKY_MIN_RUN = 10`                 |
 | Outputs | `manifold/res_excl_sticky/` (avoids overwriting the main `res/`)   |
 | Tag     | `null_scheme: label_shuffle_excl_sticky` + `trial_exclusion` stats |
-| Presets | `choice_lr_excl_sticky_{act,true,bayes}` **only** — no prior preset |
-| Submit  | `bash scripts/submit_goal2_choice_excl_sticky_sharded.sh`          |
+| Presets | choice: `choice_lr_excl_sticky_{act,true,bayes}`; prior: `act_block_excl_sticky` (8 split-cond + 2 unsplit duringstim) and subsets |
+| Submit  | choice: `bash scripts/submit_goal2_choice_excl_sticky_sharded.sh`; prior: `bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh` |
 | Smoke   | `python scripts/smoke_excl_sticky_trials.py`                       |
 | Counts  | `python scripts/analyze_perseveration_counts.py`                   |
 
 
-The flag is applied in `get_d_vars` **before** stim×prior (or stim×choice) stratification, so it is not choice-L–R-specific. Prior splits can reuse it; they just need a preset / submitter pointing at `act_block_*` and still writing to `res_excl_sticky/` (or a sibling folder so choice and prior caches do not collide).
+The flag is applied in `get_d_vars` **before** stim×prior (or stim×choice) stratification, so it is not choice-L–R-specific. Prior L–R reuses it (`act_block_excl_sticky*`) and writes to the same `res_excl_sticky/` folder; the prior submitter CLEARs only the listed `act_block_*` names.
 
 ```bash
 python scripts/run_goal2_splits.py --preset choice_lr_excl_sticky_act \
   --exclude-sticky-trials --nrand 2000
 bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 PRESET=choice_lr_excl_sticky_true bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
+bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
 ```
 
 `info` already records the overlap the next count analysis needs:
@@ -358,16 +359,38 @@ Stationary AK has no time-varying perseveration. Copy-last after simulate matche
 
 ---
 
+## 2026-08-23 — prior L–R excl-sticky wired (not run)
+
+Local alyx `manifold/res/new` and `res_excl_sticky` checked before adding jobs. **No** `act_block_*` excl-sticky files exist. `res_excl_sticky` is still choice L–R only (`choice_{duringstim,stim}_*_act`).
+
+Plain shuffle already in `res/new` (baselines, not this arm):
+
+| Split set | In `res/new` `{split}.npy` |
+| --------- | -------------------------- |
+| split-cond duringstim (4) | yes (~70–74 MB) |
+| split-cond duringchoice (4) | **no** (Harris unique + `_pseudo_*` only; shuffle still the openalyx pre-min5 copy) |
+| unsplit duringstim (2) | yes (~74 MB) |
+
+Added presets in `scripts/run_goal2_splits.py` and submitter `scripts/submit_goal2_act_block_excl_sticky_sharded.sh`. Default = 10 splits (8 split-cond + unsplit duringstim). Writes `manifold/res_excl_sticky/{split}.npy`. `CLEAR_STREAM=1` removes only those `act_block_*` names (refuses any non-`act_block_` split). Not submitted.
+
+```bash
+bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
+PRESET=act_block_excl_sticky_duringstim bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
+PRESET=act_block_excl_sticky_duringchoice bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
+PRESET=act_block_excl_sticky_unsplit_duringstim bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
+```
+
+---
+
 ## Next investigations
 
 ### 3. Same exclusion on prior L–R splits
 
-`--exclude-sticky-trials` already runs before stratification. Missing pieces: a preset (e.g. `act_block_excl_sticky_all` matching `act_block_harris_all` / unsplit), a submitter that does not `CLEAR` the choice `res_excl_sticky` files, and a combine table vs the existing min5 shuffle (and vs Harris unique).
+Wired **2026-08-23** (not yet submitted). Default preset is the 8 split-conditioned + unsplit duringstim only. Still missing: a combine table vs the existing min5 shuffle (and vs Harris unique); `act_block_only` and unsplit duringchoice were left out.
 
-Priority order:
-
-1. Split-conditioned duringstim / duringchoice `act_block_*` (the 8, then `act_block_only` if cheap).
-2. Unsplit `act_block_duringstim_{l,r}` (shuffle exists); duringchoice unsplit shuffle is still missing ([structured nulls](structured_nulls_choice_lr.md) 08-17).
+```bash
+bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
+```
 
 **What would change our mind**
 
@@ -383,6 +406,6 @@ Do **not** treat excl-sticky as a replacement for Harris. If both are run, they 
 1. **Overlap (answered 08-18b):** sticky tails are spread through the session (median 19 % in the last 20 %). The pers rule is an extra ~5 % cut, not redundant with late.
 2. **Behaviour in the last 20 % (answered 08-18b–g / 08-21):** not zoned-out inaccurate; not more true-block-aligned. Calendar mean run vs pooled early 80 % is longer (08-18f), but quintiles of the post-0.5 sequence show that bump **peaks in Q4**, not Q5. RT is the only Q5 outlier vs Q1–Q4. Last 10 % is slower and *less* autocorrelated (08-18g).
 3. **Why choice FDR expands:** not because late trials are behavioural failures. Still open: late neural variability (RT slowing), n_L/n_R / trial-count, or a real choice signal diluted by late trials for another reason.
-4. **Prior L–R under the same trim:** does the map shrink, grow, or stay Harris-null? The zoned-out-SNR prediction is weaker now; this is still the clean test of whether the trim moves prior maps the same way as choice.
+4. **Prior L–R under the same trim:** jobs are wired (08-23) but not yet run. Does the map shrink, grow, or stay Harris-null? The zoned-out-SNR prediction is weaker now; this is still the clean test of whether the trim moves prior maps the same way as choice.
 5. Re-plot choice excl-sticky against the **min5** shuffle baseline (08-14), not only pre-min5 openalyx.
 6. This remains a robustness arm next to Harris, not the primary structured null ([structured nulls](structured_nulls_choice_lr.md) open question 1).

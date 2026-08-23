@@ -36,6 +36,8 @@ Findling et al., Nature 2025, SI §1.1.1. Wired the same way when `'bayes' in sp
 
 **Smoke (priors only):** 80 left stimuli → P(left) ≈ 0.77 (→ γ); 80 right → ≈ 0.23; a mid-session switch flips the binary label 0.8 → 0.2.
 
+**Null choices (2026-08-23):** `*bayes*` structured nulls sample choices from this same prior via the IBL OptimalBayesian policy (fixed ζ=0.1, lapse=0.05) + copy-last — not from fitted ActionKernel. See [structured nulls](structured_nulls_choice_lr.md) 2026-08-23.
+
 ### Encoding-model prior (variance partition)
 
 `get_var_partition` defaults to `prior_type='act'`: `action_kernel_priors` computed on the full choice sequence, using the **continuous** EMA − 0.5 as the regressor. True-block 0.5 trials are **kept** (the kernel needs them). Override with `--prior-type block` for comparison. See [variance partition](variance_partition_mixed_regions.md).

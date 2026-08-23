@@ -4,6 +4,7 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
 
   python scripts/run_goal2_splits.py --preset stimOn_times_act
   python scripts/run_goal2_splits.py --preset act_block_harris_unsplit --list-splits
+  python scripts/run_goal2_splits.py --preset act_block_excl_sticky --list-splits
   python scripts/run_goal2_splits.py --preset goal3_c0_choice
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --list-splits
@@ -50,6 +51,21 @@ RUN_ALIGN = {
         'block_stim_l_duringchoice_l_f1',
         'block_stim_l_duringchoice_r_f2',
         'block_stim_r_duringchoice_l_f2',
+    ],
+}
+
+BAYES_ALIGN = {
+    'stimOn_times': [
+        'bayes_block_duringstim_r_choice_r_f1',
+        'bayes_block_duringstim_l_choice_l_f1',
+        'bayes_block_duringstim_l_choice_r_f2',
+        'bayes_block_duringstim_r_choice_l_f2',
+    ],
+    'firstMovement_times': [
+        'bayes_block_stim_r_duringchoice_r_f1',
+        'bayes_block_stim_l_duringchoice_l_f1',
+        'bayes_block_stim_l_duringchoice_r_f2',
+        'bayes_block_stim_r_duringchoice_l_f2',
     ],
 }
 
@@ -196,13 +212,30 @@ PRESETS = {
     ),
     # Unsplit prior L–R + fitted AK + copy-last (stim-side / choice-side only)
     'act_block_ak_sticky_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
-    # Same-side f1 only, Bayes prior labels (stratum still stim×choice).
+    # Bayes *mouse* + copy-last (not fitted AK). Same remake as option 1:
+    # Choice: remake stim×Bayes-prior; labels = sticky OptimalBayesian choices.
+    # Bayes_block: remake stim×choice; labels = that draw's Bayes-binary.
+    'choice_lr_ak_sticky_bayes': (
+        CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
+    ),
     'bayes_block_ak_sticky_f1': [
         'bayes_block_duringstim_r_choice_r_f1',
         'bayes_block_duringstim_l_choice_l_f1',
         'bayes_block_stim_r_duringchoice_r_f1',
         'bayes_block_stim_l_duringchoice_l_f1',
     ],
+    'bayes_block_ak_sticky_f2': [
+        'bayes_block_duringstim_l_choice_r_f2',
+        'bayes_block_duringstim_r_choice_l_f2',
+        'bayes_block_stim_l_duringchoice_r_f2',
+        'bayes_block_stim_r_duringchoice_l_f2',
+    ],
+    'bayes_block_ak_sticky_unsplit': list(ba.BAYES_BLOCK_UNSPLIT_SPLITS),
+    'bayes_block_ak_sticky': (
+        list(BAYES_ALIGN['stimOn_times'])
+        + list(BAYES_ALIGN['firstMovement_times'])
+        + list(ba.BAYES_BLOCK_UNSPLIT_SPLITS)
+    ),
     'act_block_ak_sticky_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     'act_block_ak_sticky_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     # Late+perseveration exclusion + label-shuffle null (stim×block splits)
@@ -215,6 +248,16 @@ PRESETS = {
     'choice_lr_excl_sticky_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    # Same trim on act-prior L–R (split-conditioned 8 + unsplit duringstim 2).
+    # No unsplit duringchoice / act_block_only. Writes res_excl_sticky/.
+    'act_block_excl_sticky': (
+        list(RUN_ALIGN['stimOn_times'])
+        + list(RUN_ALIGN['firstMovement_times'])
+        + list(ba.ACT_BLOCK_UNSPLIT_STIM)
+    ),
+    'act_block_excl_sticky_duringstim': list(RUN_ALIGN['stimOn_times']),
+    'act_block_excl_sticky_duringchoice': list(RUN_ALIGN['firstMovement_times']),
+    'act_block_excl_sticky_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     # Revised Goal 3: true block L vs R at 0% contrast, separately by choice.
     'goal3_c0_choice': ba.GOAL3_C0_CHOICE_SPLITS,
     **_goal3_presets(),
