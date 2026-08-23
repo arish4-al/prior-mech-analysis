@@ -10,7 +10,8 @@
 #   Peak RSS stream_pool nrand=2000 ≈ 1.5–2.5 GB (journal 07-10b).
 #   Defaults: MEM_SHARD=6G, MEM_FIN=10G (~2–4× headroom).
 #   Concurrent if all shards pend/run: 8×4×6G = 192G (was 12G → 384G).
-# Override: N_SHARDS=3 MEM_SHARD=8G bash scripts/submit_goal2_stimOn_act_sharded.sh
+# Override: N_SHARDS=3 MEM_SHARD=8G PARTITION=mit_normal \
+#   bash scripts/submit_goal2_stimOn_act_sharded.sh
 
 set -euo pipefail
 
@@ -22,6 +23,7 @@ MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
+PARTITION="${PARTITION:-pi_fiete}"
 SPLITS=(
   # act: stim-side only (no choice×feedback), post-stim [0, 0.15]
   act_block_duringstim_l
@@ -38,13 +40,14 @@ SPLITS=(
 
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "N_SHARDS=$N_SHARDS  splits=${#SPLITS[@]}  shard_jobs=$n_shard_jobs"
-echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  CPUS_SHARD=$CPUS_SHARD  CPUS_FIN=$CPUS_FIN"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  CPUS_SHARD=$CPUS_SHARD  CPUS_FIN=$CPUS_FIN"
 echo "Concurrent mem if all shards run: ${n_shard_jobs} × $MEM_SHARD"
 
 for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2_${sp}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS" \
@@ -55,6 +58,7 @@ for sp in "${SPLITS[@]}"; do
   # finalize after all shards for this split
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2_fin_${sp}" \

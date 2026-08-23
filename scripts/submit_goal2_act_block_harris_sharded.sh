@@ -42,6 +42,7 @@ CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
@@ -90,7 +91,7 @@ n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=harris_unique (act_block prior L–R)"
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS"
-echo "MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}${SUFFIX}.npy"
 printf '  %s\n' "${SPLITS[@]}"
 
@@ -104,6 +105,7 @@ DEP_AFTER=""
 if [[ "$REBUILD_DONORS" == "1" ]]; then
   # Force rebuild so contrast_left/right are present for Goal-3 / contrast splits.
   DONOR_JID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
     --job-name="g2_choice_donors" \
     --export=ALL,FORCE_REBUILD=1 \
@@ -118,6 +120,7 @@ for sp in "${SPLITS[@]}"; do
   for ((k=0; k<N_SHARDS; k++)); do
     # shellcheck disable=SC2086
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
       $DEP_AFTER \
@@ -128,6 +131,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \

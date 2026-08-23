@@ -13,7 +13,8 @@
 # Memory (override with MEM_SHARD / MEM_FIN):
 #   Peak RSS stream_pool nrand=2000 ≈ 1.5–2.5 GB (journal 07-10b).
 #   Defaults: MEM_SHARD=6G, MEM_FIN=10G.
-# Override: N_SHARDS=3 MEM_SHARD=8G bash scripts/submit_goal2_stim_lr_bayes_sharded.sh
+# Override: N_SHARDS=3 MEM_SHARD=8G PARTITION=mit_normal \
+#   bash scripts/submit_goal2_stim_lr_bayes_sharded.sh
 
 set -euo pipefail
 
@@ -27,6 +28,7 @@ MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
+PARTITION="${PARTITION:-pi_fiete}"
 
 SPLITS=(
   # stim L vs R | fixed choice + Bayes prior | [0, 0.15]
@@ -41,7 +43,7 @@ SPLITS=(
 
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "preset=stim_lr_bayes_all  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
-echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  CPUS_SHARD=$CPUS_SHARD  CPUS_FIN=$CPUS_FIN"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  CPUS_SHARD=$CPUS_SHARD  CPUS_FIN=$CPUS_FIN"
 echo "shard_jobs=$n_shard_jobs  Concurrent mem if all shards run: ${n_shard_jobs} × $MEM_SHARD"
 
 job_tag() {
@@ -55,6 +57,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART" \
@@ -64,6 +67,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2_fin_${TAG}" \

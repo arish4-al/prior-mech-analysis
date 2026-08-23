@@ -9,6 +9,7 @@
 # the act f1 jobs that died at factor 3). Prefit pickles reused (PREFIT=0).
 #
 #   bash scripts/submit_goal2_ak_sticky_bayes_f1_orcd.sh
+#   PARTITION=mit_normal bash scripts/submit_goal2_ak_sticky_bayes_f1_orcd.sh
 #
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"

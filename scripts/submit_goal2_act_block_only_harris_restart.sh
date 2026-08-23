@@ -17,6 +17,7 @@
 #   SHARDS="1 2" MEM_SHARD=24G MEM_FIN=32G \
 #     bash scripts/submit_goal2_act_block_only_harris_restart.sh
 #   SHARDS="0 1 2 3" …   # redo every shard (still no CLEAR)
+#   PARTITION=mit_normal bash scripts/submit_goal2_act_block_only_harris_restart.sh
 
 set -euo pipefail
 
@@ -36,6 +37,7 @@ CPUS_FIN="${CPUS_FIN:-2}"
 TIME_SHARD="${TIME_SHARD:-6:00:00}"
 TIME_FIN="${TIME_FIN:-6:00:00}"
 JOB_PREFIX="${JOB_PREFIX:-g2abh}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export SESSION_SHUFFLE_NULL=1 ACTKERNEL_CHOICE_NULL=0
@@ -70,6 +72,7 @@ TAG=$(job_tag "$SPLIT")
 SHARD_JOBS=()
 for k in "${SHARD_ARR[@]}"; do
   JID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
     --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
     --export=ALL,SPLIT="$SPLIT",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",SESSION_SHUFFLE_NULL=1,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR= \
@@ -80,6 +83,7 @@ done
 
 DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
 FID=$(sbatch --parsable \
+  --partition="$PARTITION" \
   --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time="$TIME_FIN" \
   --dependency=afterok:"$DEP" \
   --job-name="${JOB_PREFIX}_fin_${TAG}" \
