@@ -9,9 +9,9 @@ ablate them and decide what to keep.
 fit *speed* ([simulation_fit_speedups.md](simulation_fit_speedups.md)).
 Fit *quality* after each ablation is in scope.
 
-**Status:** tests 1–2 wired (2026-08-24b). Flags default **off** (gated
-`P_offset` + ITI penalty still on). Stage B refits with the 15
-`stageB_hold_s89` seeds are ready to submit — not run yet.
+**Status:** tests 1–2 wired (2026-08-24b). **Regular only** (P→I/M;
+`g_s`/`d_s` frozen). Flags default **off**. 8 best regular Stage B
+seeds ready to submit — not run yet.
 
 **Code:** dynamics in [`model_functions.py`](../model_functions.py)
 (`run_model`, `prestim_offset_start`, `p_offset_always_on`,
@@ -140,10 +140,14 @@ trajectories to the two-threshold baseline. The scalar branch in
 
 ## Shared protocol notes
 
-- Compare against the current weights (and, if relevant, joint) baseline
-  at the same `bps`, seeds, and freeze mask. Do not mix retinal-only
-  `L_S` into these ablations unless the change is in S dynamics (test 1
-  with `d_s`/`g_s` free).
+- **Variant: regular only** (`--mtype regular --freeze 12,13`). Prior
+  into I/M; `g_s`/`d_s` frozen ≈0. Do **not** run sensory unless
+  explicitly asked. Baseline: Stage B `stageB_hold_s89` regular
+  (winner **s101**).
+- **Seeds (default):** `7 12 34 45 89 101 303 333` — 8 best regular
+  shared-stim fair \(L_w+L_S\) from 2026-08-13.
+- Compare at the same `bps` / freeze mask. Do not mix retinal-only
+  `L_S` into these ablations unless the change is in S dynamics.
 - Sticky without an explicit ask: S-bucket `<10` → NaN, fail-closed SSE,
   canonical prior-distance settings. These tests are about **model /
   loss terms**, not the BWM distance pipeline.
@@ -190,21 +194,19 @@ Loky CMA workers re-import `model_params` at defaults, so the flags ride
 records both.
 
 **Compare to** [retinal then joint](retinal_then_joint_fitting.md)
-2026-08-12g + 2026-08-13: hybrid WEIGHTS_REL ∪ retinal s89,
-`--stage1-hold-retinal`, regular `12\|13` + sensory `6\|7\|8\|9`,
-`bps=20/20`, `OUT_TAG=stageB_hold_s89`. Winners regular **s101**,
-sensory **s23**.
+2026-08-12g + 2026-08-13 **regular** only (`12|13`, `g_s`/`d_s` frozen).
+Winner **s101**. Sensory is not in this journal’s default.
 
-**Seeds (15):** `7 12 23 34 42 45 56 67 78 89 101 111 202 303 333`
-(batch-1 `56 34 78 89 202` ∪ batch-2 `7 12 23 42 45 67 101 111 303 333`).
+**Seeds (8 best regular fair, 2026-08-13):**
+`7 12 34 45 89 101 303 333`.
 
-**Run dirs** (vs `weights_run_fj_stageB_hold_s89_<mtype>_mask<slug>_s<seed>/`):
+**Run dirs** (vs `weights_run_fj_stageB_hold_s89_regular_mask12-13_s<seed>/`):
 
-- test 1: `…_fj_stageB_hold_s89_poffset_<mtype>_mask<slug>_s<seed>/`
-- test 2: `…_fj_stageB_hold_s89_noiti_<mtype>_mask<slug>_s<seed>/`
+- test 1: `…_fj_stageB_hold_s89_poffset_regular_mask12-13_s<seed>/`
+- test 2: `…_fj_stageB_hold_s89_noiti_regular_mask12-13_s<seed>/`
 
-30 jobs per ablation (15 seeds × 2 variants). Paste on ORCD (do not
-sbatch from the laptop):
+8 jobs per ablation. Both tests = **16 jobs**.
+Paste on ORCD (do not sbatch from the laptop):
 
 ```bash
 # smoke one seed / one ablation
@@ -213,7 +215,7 @@ SEEDS=999 ABLATIONS=poffset OUT_TAG=stageB_ablate_poffset_smoke \
   PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 TIME=1:00:00 \
   bash scripts/submit_fit_stage_b_model_ablations.sh
 
-# production — test 1 then test 2 (60 jobs)
+# production — test 1 then test 2 (16 jobs, regular only)
 bash scripts/submit_fit_stage_b_model_ablations.sh
 
 # or one arm
@@ -223,4 +225,11 @@ ABLATIONS=noiti bash scripts/submit_fit_stage_b_model_ablations.sh
 
 Fair compare later: same `bps=20` stim seed **12345** protocol as 12g/13
 (`plot_best_fit_results.py` / shared-stim `L_w+L_S`). Tests 3–4 not wired.
+
+### 2026-08-24c — regular only; recut seeds
+
+Sensory dropped from this journal’s default (tests 1–2 and later).
+Seeds recut to the 8 best **regular** fairs (dropped s23 / s56, which
+were in the list for sensory; added s7 / s45). Driver default
+`VARIANTS=regular:12|13`.
 

@@ -1,13 +1,13 @@
 #!/bin/bash
-# Stage B modeling-detail ablations (tests 1–2), same protocol/seeds as
-# journals/retinal_then_joint_fitting.md 2026-08-12g + 2026-08-13:
-#   hybrid WEIGHTS_REL ∪ retinal s89, --stage1-hold-retinal,
-#   regular 12|13 + sensory 6|7|8|9, bps1=bps2=20.
+# Stage B modeling-detail ablations. Regular only (P→I/M; g_s/d_s frozen).
+# Same protocol as journals/retinal_then_joint_fitting.md stageB_hold_s89:
+#   hybrid WEIGHTS_REL ∪ retinal s89, --stage1-hold-retinal, bps1=bps2=20.
+# Sensory is not a default for this journal.
 #
-# Compare to OUT_TAG=stageB_hold_s89 (15 seeds below).
+# Default seeds: 8 best regular shared-stim fair L_w+L_S (2026-08-13).
 #
-# Usage (print-only for the user to paste on ORCD; agents must not sbatch):
-#   # Both ablations (30 jobs × 2):
+# Usage:
+#   # Tests 1–2 (8 seeds × 1 variant × 2 = 16 jobs):
 #   bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 #   # Test 1 only (P offset always on):
@@ -29,10 +29,12 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
-# Combined Stage B production seeds (batch-1 2026-08-12g + batch-2 2026-08-13).
-SEEDS="${SEEDS:-7 12 23 34 42 45 56 67 78 89 101 111 202 303 333}"
+# Top-8 regular Stage B seeds by shared-stim fair L_w+L_S (2026-08-13):
+#   101 1.001, 333 1.017, 34 1.023, 12 1.027,
+#   303 1.045, 45 1.072, 7 1.076, 89 1.094.
+SEEDS="${SEEDS:-7 12 34 45 89 101 303 333}"
 ABLATIONS="${ABLATIONS:-poffset noiti}"
-VARIANTS="${VARIANTS:-regular:12|13 sensory:6|7|8|9}"
+VARIANTS="${VARIANTS:-regular:12|13}"
 
 export REPO_DIR SEEDS VARIANTS
 export STAGE1_HOLD_RETINAL="${STAGE1_HOLD_RETINAL:-1}"
