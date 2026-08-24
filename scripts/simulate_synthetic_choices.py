@@ -45,9 +45,13 @@ Fixed-stim helper (still available; not the wired null):
   stim/side stream.
 
 Optional late stickiness (``late_sticky=True`` / ``--actkernel-late-sticky``):
-  after AK simulate, a copy-last mixture so each draw's post-0.5 quintile
+  after simulate, a copy-last mixture so each draw's post-0.5 quintile
   mean_run matches **this real session's** quintile mean_run (not a cohort
-  median). Copy-last can only add repeats. Default off = stationary α.
+  median). Copy-last can only add repeats. Default off = stationary policy.
+
+``choice_model='bayes'``: IBL OptimalBayesian policy (same τ/γ as
+``bayesian_priors``; fixed ζ=0.1, lapse=0.05). No ActionKernel fit.
+Used for ``*bayes*`` splits. ``actkernel`` remains the default.
 
 ``behavior_models`` is vendored as git submodule ``third_party/behavior_models``
 (path-prepended below). Remote jobs only need this checkout + ``torch`` in the
@@ -87,6 +91,14 @@ _LATE_STICKY_SEED_OFFSET = 10007
 
 # ActionKernel parameter order (single_zeta=True): see models.py::ActionKernel.simulate
 PARAM_NAMES = ["alpha", "zeta", "lapse_pos", "lapse_neg"]
+
+# IBL OptimalBayesian *choice* policy (Findling et al. 2025; behavior_models.OptimalBayesian).
+# Prior uses the same τ/γ/block-length as ``bayesian_priors``. ζ and lapse are
+# fixed (not a per-session MCMC fit) — copy-last supplies mouse stickiness.
+BAYES_CHOICE_ZETA = 0.1
+BAYES_CHOICE_LAPSE = 0.05
+BAYES_CHOICE_SIGMA = 0.49  # behavior_models.utils.combine_lkd_prior default
+CHOICE_MODELS = ('actkernel', 'bayes')
 
 
 def _as_trials_df(trials):
@@ -191,8 +203,95 @@ def simulate_choices(stim, side, params, n_sim=1, seed=None, model=None):
     return act_sim
 
 
+def _combine_lkd_prior_np(stim, zeta, pi, sigma=BAYES_CHOICE_SIGMA):
+    """Numpy port of ``behavior_models.utils.combine_lkd_prior``.
+
+    ``stim`` is format_data signed contrast (left positive). ``pi`` is
+    P(stim left) before the trial.
+    """
+    from scipy.stats import norm
+    stim = np.asarray(stim, dtype=float)
+    pi = np.clip(np.asarray(pi, dtype=float), 1e-7, 1.0 - 1e-7)
+    zeta = float(zeta)
+    sigma_star = np.sqrt(1.0 / (float(sigma) ** -2 + zeta ** -2))
+    prior_contrib = norm.ppf(1.0 - pi)
+    combined = stim / zeta - (zeta / sigma_star) * prior_contrib
+    return np.clip(norm.cdf(combined), 1e-7, 1.0 - 1e-7)
+
+
+def _stim_ibl_from_brainbox(stim_side, signed_contrast):
+    """Map brainbox (−1 left) signed contrast onto format_data (left positive)."""
+    stim_side = np.asarray(stim_side, dtype=float)
+    mag = np.abs(np.asarray(signed_contrast, dtype=float))
+    return np.where(stim_side < 0, mag, -mag)
+
+
+def _p_left_prior_from_side(stim_side):
+    """P(stim left) via ``bayesian_priors`` (lazy import; ba is already loaded)."""
+    from block_analysis_allsplits import bayesian_priors
+    pi, _ = bayesian_priors(np.asarray(stim_side, dtype=float) < 0)
+    return np.asarray(pi, dtype=float)
+
+
+def simulate_bayes_choices(stim_side, signed_contrast, n_sim=1, seed=None,
+                           zeta=None, lapse=None, priors=None):
+    """Sample choices from the IBL OptimalBayesian policy (fixed τ, γ, ζ, lapse).
+
+    ``stim_side`` / ``signed_contrast`` use the brainbox / analysis convention
+    (−1 left, +1 right). Returns choices in {−1, +1} with +1 = left (same
+    encoding as ``ActionKernel.simulate``).
+
+    ``priors`` is optional P(stim left) per trial. If omitted, computed with
+    ``bayesian_priors`` on ``stim_side < 0``.
+    """
+    zeta = BAYES_CHOICE_ZETA if zeta is None else float(zeta)
+    lapse = BAYES_CHOICE_LAPSE if lapse is None else float(lapse)
+    side = np.asarray(stim_side, dtype=float)
+    signed = np.asarray(signed_contrast, dtype=float)
+    squeeze = side.ndim == 1
+    if squeeze:
+        side = side[None, :]
+        signed = signed[None, :]
+    if side.shape != signed.shape:
+        raise ValueError(
+            f'stim_side shape {side.shape} != signed_contrast {signed.shape}')
+    n_sess, n_trials = side.shape
+    rng = np.random.default_rng(seed)
+    stim_ibl = _stim_ibl_from_brainbox(side, signed)
+    p_left = np.empty((n_sess, n_trials), dtype=float)
+    if priors is not None:
+        pi_all = np.asarray(priors, dtype=float)
+        if squeeze:
+            pi_all = pi_all.reshape(1, n_trials)
+        if pi_all.shape != (n_sess, n_trials):
+            raise ValueError(
+                f'priors shape {np.asarray(priors).shape} != {(n_sess, n_trials)}')
+        for i in range(n_sess):
+            p_left[i] = _combine_lkd_prior_np(stim_ibl[i], zeta, pi_all[i])
+    else:
+        for i in range(n_sess):
+            pi = _p_left_prior_from_side(side[i])
+            p_left[i] = _combine_lkd_prior_np(stim_ibl[i], zeta, pi)
+    p_left = p_left * (1.0 - lapse) + 0.5 * lapse
+    if squeeze:
+        if int(n_sim) == 1:
+            ch = np.where(rng.random(n_trials) < p_left[0], 1, -1)
+            return ch.astype(np.int64)
+        u = rng.random((int(n_sim), n_trials))
+        return np.where(u < p_left[0], 1, -1).astype(np.int64)
+    return np.where(rng.random((n_sess, n_trials)) < p_left, 1, -1).astype(np.int64)
+
+
+def _feedback_from_brainbox_choice(choice, stim_side):
+    """Correct = +1 when choice left matches stim left (brainbox −1 left)."""
+    stim_is_left = np.asarray(stim_side, dtype=float) < 0
+    choice = np.asarray(choice, dtype=float)
+    correct = ((choice == 1) & stim_is_left) | ((choice == -1) & ~stim_is_left)
+    return np.where(correct, 1, -1).astype(np.int64)
+
+
 def make_synthetic_session(trials_df, params, seed=None, n_trials=None,
-                           late_sticky=False):
+                           late_sticky=False, choice_model='actkernel'):
     """Reproduce generate_null_distribution_session: a pseudo-session whose choice &
     feedbackType are simulated by the action-kernel model. This is one draw of the
     paper's 'synthetic session' choice/feedback null.
@@ -218,14 +317,30 @@ def make_synthetic_session(trials_df, params, seed=None, n_trials=None,
             'stim_side': side[0],
             'probabilityLeft': pleft[0],
         })
-    choice = simulate_choices(pseudosess.signed_contrast.values,
-                              pseudosess.stim_side.values, params, n_sim=1, seed=seed)
+    if choice_model == 'bayes':
+        choice = simulate_bayes_choices(
+            pseudosess['stim_side'].values,
+            pseudosess['signed_contrast'].values, n_sim=1, seed=seed)
+    elif choice_model == 'actkernel':
+        if params is None:
+            raise ValueError('actkernel synthetic session requires params')
+        # Negate the brainbox (-1=left) stream to behavior_models (+1=left) so
+        # simulate returns +1=left. See _synthetic_fast / journal 2026-08-24.
+        choice = simulate_choices(-pseudosess.signed_contrast.values,
+                                  -pseudosess.stim_side.values, params,
+                                  n_sim=1, seed=seed)
+    else:
+        raise ValueError(f'choice_model must be one of {CHOICE_MODELS}, '
+                         f'got {choice_model!r}')
     target = _real_mean_run_targets(trials_df) if late_sticky else None
     choice = _maybe_late_stickiness(
         choice, pseudosess['probabilityLeft'].values, seed=seed,
         late_sticky=late_sticky, target_mean_run=target)
     pseudosess["choice"] = choice
-    pseudosess["feedbackType"] = np.where(pseudosess["choice"] == pseudosess["stim_side"], 1, -1)
+    # Both paths now emit +1=left choices; feedback uses the brainbox stim_side
+    # (-1=left) convention consistently.
+    pseudosess["feedbackType"] = _feedback_from_brainbox_choice(
+        choice, pseudosess['stim_side'].values)
     return pseudosess
 
 
@@ -319,23 +434,50 @@ def _synthetic_fast(trials, params, n, seed=0, n_trials=None, late_sticky=False)
     torch.manual_seed(seed)
     model = _sim_model()
     arr_params = np.asarray(params, dtype=float)[None]         # (1, 4): one parameter "chain"
-    # simulate_parallel runs all n sessions through the trial loop at once (nb_simul=1 each).
-    act_sim, _, _ = model.simulate_parallel(arr_params, signed_contrast, stim_side, nb_simul=1)
-    choice = np.asarray(act_sim.squeeze(-1), dtype=np.int64)   # (n, n_trials), {-1, +1}
+    # ``behavior_models`` (format_data) uses +1 = left / left-positive contrast,
+    # but the vectorized pseudo stream is brainbox convention (-1 = left /
+    # left-negative). Feed the model the sign-flipped stream so the returned
+    # actions come back in the analysis / IBL convention (+1 = left) — matching
+    # real trials, the Bayes path, and the downstream stim×choice masks. Without
+    # this, AK pseudo choices are L↔R flipped, so act_block stim×choice strata are
+    # built from the wrong (error) trials. See journals/structured_nulls_choice_lr.md
+    # 2026-08-24. simulate_parallel runs all n sessions through the trial loop at once.
+    act_sim, _, _ = model.simulate_parallel(
+        arr_params, -signed_contrast, -stim_side, nb_simul=1)
+    choice = np.asarray(act_sim.squeeze(-1), dtype=np.int64)   # (n, n_trials), +1 = left
     target = _real_mean_run_targets(trials) if late_sticky else None
     choice = _maybe_late_stickiness(
         choice, pleft, seed=seed, late_sticky=late_sticky,
         target_mean_run=target)
     choice = np.asarray(choice, dtype=np.int64)
-    feedback = np.where(choice == stim_side, 1, -1).astype(np.int64)
+    feedback = _feedback_from_brainbox_choice(choice, stim_side)
     return dict(choice=choice, feedbackType=feedback, signed_contrast=signed_contrast,
                 stim_side=stim_side, probabilityLeft=pleft)
+
+
+def _synthetic_fast_bayes(trials, n, seed=0, n_trials=None, late_sticky=False,
+                          zeta=None, lapse=None):
+    """Vectorized pseudo-sessions + OptimalBayesian choices + optional copy-last."""
+    signed_contrast, stim_side, pleft = _pseudo_sessions_vectorized(
+        trials, n, seed=seed, n_trials=n_trials)
+    choice = simulate_bayes_choices(
+        stim_side, signed_contrast, seed=seed, zeta=zeta, lapse=lapse)
+    target = _real_mean_run_targets(trials) if late_sticky else None
+    choice = _maybe_late_stickiness(
+        choice, pleft, seed=seed, late_sticky=late_sticky,
+        target_mean_run=target)
+    choice = np.asarray(choice, dtype=np.int64)
+    feedback = _feedback_from_brainbox_choice(choice, stim_side)
+    return dict(choice=choice, feedbackType=feedback,
+                signed_contrast=signed_contrast, stim_side=stim_side,
+                probabilityLeft=pleft)
 
 
 def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-000000000000",
                                    subject="synthetic_mouse", nb_steps=None, seed=0,
                                    model_dir=None, return_dataframes=False, params=None,
-                                   fast=True, n_trials=None, late_sticky=False):
+                                   fast=True, n_trials=None, late_sticky=False,
+                                   choice_model='actkernel'):
     """Standalone: from a trials DataFrame, build `n` synthetic sessions (choice/feedback null).
 
     Same as generate_synthetic_sessions but takes the trials object directly (no ONE lookup).
@@ -359,16 +501,24 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
     late_sticky : bool      copy-last mixture so each draw's post-0.5 quintile
                             mean_run matches this real session's quintile mean_run.
                             Default False = stationary AK.
+    choice_model : str      ``actkernel`` (fitted/provided θ) or ``bayes``
+                            (IBL OptimalBayesian policy; no AK fit).
 
     Returns
     -------
     dict of rectangular arrays of shape (n, n_trials) -- choice, feedbackType, signed_contrast,
     stim_side, probabilityLeft -- plus eid, subject, params, n_trials, and (optionally) sessions.
     """
+    if choice_model not in CHOICE_MODELS:
+        raise ValueError(f'choice_model must be one of {CHOICE_MODELS}, '
+                         f'got {choice_model!r}')
     trials = _as_trials_df(trials)
 
-    # Fit (or load cached) action-kernel for this session, once -- unless params were supplied.
-    if params is None:
+    if choice_model == 'bayes':
+        params = np.array(
+            [BAYES_CHOICE_ZETA, BAYES_CHOICE_LAPSE], dtype=float)
+    elif params is None:
+        # Fit (or load cached) action-kernel unless params were supplied.
         _, params = fit_action_kernel(trials, eid=eid, subject=subject,
                                       model_dir=model_dir, nb_steps=nb_steps)
 
@@ -376,12 +526,17 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
     n_out = int(n_real if n_trials is None else n_trials)
 
     if fast and not return_dataframes:
-        arrs = _synthetic_fast(
-            trials, params, n, seed=seed, n_trials=n_out, late_sticky=late_sticky)
-        return dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_out, **arrs)
+        if choice_model == 'bayes':
+            arrs = _synthetic_fast_bayes(
+                trials, n, seed=seed, n_trials=n_out, late_sticky=late_sticky)
+        else:
+            arrs = _synthetic_fast(
+                trials, params, n, seed=seed, n_trials=n_out,
+                late_sticky=late_sticky)
+        return dict(eid=eid, subject=subject, params=np.asarray(params),
+                    n_trials=n_out, choice_model=choice_model, **arrs)
 
     # ---- slow loop (per-session DataFrame; needed for return_dataframes) ----
-    sim_model = _sim_model()           # build the torch model once, reuse for all n draws
     arrs = {k: np.empty((n, n_out), dtype=(np.int64 if k in ("choice", "feedbackType") else float))
             for k in ("choice", "feedbackType", "signed_contrast", "stim_side", "probabilityLeft")}
     sessions = [] if return_dataframes else None
@@ -389,13 +544,14 @@ def synthetic_sessions_from_trials(trials, n=2000, eid="0000face-0000-0000-0000-
     for i in range(n):
         ps = make_synthetic_session(
             trials, params, seed=seed + i, n_trials=n_out,
-            late_sticky=late_sticky)
+            late_sticky=late_sticky, choice_model=choice_model)
         for k in arrs:
             arrs[k][i] = ps[k].values
         if return_dataframes:
             sessions.append(ps)
 
-    out = dict(eid=eid, subject=subject, params=np.asarray(params), n_trials=n_out, **arrs)
+    out = dict(eid=eid, subject=subject, params=np.asarray(params),
+               n_trials=n_out, choice_model=choice_model, **arrs)
     if return_dataframes:
         out["sessions"] = sessions
     return out
@@ -427,7 +583,7 @@ def stim_side_from_trials(trials):
 def synthetic_choices_fixed_stim(
         trials, params=None, n=1, eid="0000face-0000-0000-0000-000000000000",
         subject="synthetic_mouse", nb_steps=None, seed=None, model_dir=None,
-        model=None, late_sticky=False):
+        model=None, late_sticky=False, choice_model='actkernel'):
     """Generate ``n`` choice sequences with the real stim / block schedule fixed.
 
     Fits ActionKernel on ``trials`` (unless ``params`` given), then calls
@@ -436,23 +592,36 @@ def synthetic_choices_fixed_stim(
     ``--actkernel-choice-null`` path uses ``synthetic_sessions_from_trials``
     (BWM paper: regenerated pseudo stim/blocks) instead.
 
+    ``choice_model='bayes'`` uses the OptimalBayesian policy (no AK fit).
+
     Returns
     -------
     dict with
         choice : (n_trials,) if n==1 else (n, n_trials)  values in {-1, +1}
-        params : fitted or provided [alpha, zeta, lapse_pos, lapse_neg]
+        params : fitted AK θ, or [zeta, lapse] for ``bayes``
         stim, side, probabilityLeft : fixed covariates from ``trials``
     """
+    if choice_model not in CHOICE_MODELS:
+        raise ValueError(f'choice_model must be one of {CHOICE_MODELS}, '
+                         f'got {choice_model!r}')
     trials = _as_trials_df(trials)
     stim, side, pLeft = stim_side_from_trials(trials)
 
-    if params is None:
-        _, params = fit_action_kernel(
-            trials, eid=eid, subject=subject, model_dir=model_dir,
-            nb_steps=nb_steps)
-
-    choice = simulate_choices(
-        stim, side, params, n_sim=n, seed=seed, model=model)
+    if choice_model == 'bayes':
+        # format_data: +1 left / left-positive → brainbox −1 left / left-negative.
+        choice = simulate_bayes_choices(
+            -np.asarray(side, dtype=float),
+            -np.asarray(stim, dtype=float),
+            n_sim=n, seed=seed)
+        params = np.array(
+            [BAYES_CHOICE_ZETA, BAYES_CHOICE_LAPSE], dtype=float)
+    else:
+        if params is None:
+            _, params = fit_action_kernel(
+                trials, eid=eid, subject=subject, model_dir=model_dir,
+                nb_steps=nb_steps)
+        choice = simulate_choices(
+            stim, side, params, n_sim=n, seed=seed, model=model)
     target = _real_mean_run_targets(trials) if late_sticky else None
     choice = _maybe_late_stickiness(
         choice, pLeft, seed=seed, late_sticky=late_sticky,
@@ -463,6 +632,7 @@ def synthetic_choices_fixed_stim(
         stim=stim,
         side=side,
         probabilityLeft=pLeft,
+        choice_model=choice_model,
     )
 
 
