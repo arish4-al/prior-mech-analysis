@@ -119,6 +119,22 @@ FAMILIES = {
         'cmap_m': 'act_block_duringchoice',
         'out_stem': 'act_block_unsplit',
     },
+    'act_block_fully_unsplit': {
+        'timeframes': {
+            'act_block_duringstim_fully_unsplit': [
+                'act_block_duringstim_fully_unsplit',
+            ],
+            'act_block_duringchoice_fully_unsplit': [
+                'act_block_duringchoice_fully_unsplit',
+            ],
+        },
+        'tf_s': 'act_block_duringstim_fully_unsplit',
+        'tf_m': 'act_block_duringchoice_fully_unsplit',
+        'col_prefix': 'prior',
+        'cmap_s': 'act_block_duringstim',
+        'cmap_m': 'act_block_duringchoice',
+        'out_stem': 'act_block_fully_unsplit',
+    },
 }
 
 # Back-compat alias used by load_or_build_combined callers / tests.
@@ -540,7 +556,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--family', choices=sorted(FAMILIES), default='choice',
                     help='choice L–R (default), act_block prior L–R (f1/f2), '
-                         'or act_block_unsplit (stim-side / choice-side)')
+                         'act_block_unsplit (stim-side / choice-side), or '
+                         'act_block_fully_unsplit (no stratum)')
     ap.add_argument('--openalyx-res', type=Path, default=_default_openalyx_res())
     ap.add_argument('--arm-res', type=Path, default=_default_arm_res(),
                     help='Second arm res/ folder (default: res_excl_sticky)')

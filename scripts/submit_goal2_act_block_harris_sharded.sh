@@ -13,7 +13,11 @@
 #   PRESET=act_block_duringstim …
 #   PRESET=act_block_duringchoice …
 #   PRESET=act_block_harris_unsplit …   # stim-side + choice-side, no f1/f2
+#   PRESET=act_block_harris_fully_unsplit …  # one pool per window, no stratum
 #   PRESET=goal3_duringstim_act …   # contrast-expanded (needs donor contrasts)
+#
+# Fully-unsplit wrapper (Harris unique + AK copy-last, more shards):
+#   bash scripts/submit_goal2_act_block_fully_unsplit_orcd.sh
 #
 # Unsplit-only wrapper:
 #   bash scripts/submit_goal2_act_block_harris_unsplit_sharded.sh
