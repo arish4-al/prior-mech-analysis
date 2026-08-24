@@ -125,6 +125,9 @@ align_old = {
          # Choice-side prior (no stim/f1/f2): movement window via 'duringc' in name
          'act_block_duringchoice_l':'firstMovement_times',
          'act_block_duringchoice_r':'firstMovement_times',
+         # Fully unsplit: prior L vs R on all biased trials (no stim/choice/f1/f2)
+         'act_block_duringstim_fully_unsplit':'stimOn_times',
+         'act_block_duringchoice_fully_unsplit':'firstMovement_times',
          # Bayes-optimal prior (stimulus-history inference); mirrors act_block_*
          'bayes_block_stim_r_choice_r_f1':'stimOn_times',
          'bayes_block_stim_l_choice_l_f1':'stimOn_times',
@@ -328,6 +331,13 @@ ACT_BLOCK_UNSPLIT_CHOICE = (
     'act_block_duringchoice_r',
 )
 ACT_BLOCK_UNSPLIT_SPLITS = ACT_BLOCK_UNSPLIT_STIM + ACT_BLOCK_UNSPLIT_CHOICE
+# Fully unsplit: one pool per timeframe (no stim / choice / f1/f2 stratum).
+ACT_BLOCK_FULLY_UNSPLIT_STIM = 'act_block_duringstim_fully_unsplit'
+ACT_BLOCK_FULLY_UNSPLIT_CHOICE = 'act_block_duringchoice_fully_unsplit'
+ACT_BLOCK_FULLY_UNSPLIT_SPLITS = (
+    ACT_BLOCK_FULLY_UNSPLIT_STIM,
+    ACT_BLOCK_FULLY_UNSPLIT_CHOICE,
+)
 BAYES_BLOCK_UNSPLIT_STIM = (
     'bayes_block_duringstim_l',
     'bayes_block_duringstim_r',
@@ -345,6 +355,14 @@ def is_act_block_unsplit_split(split):
     if contrast_from_split(name) is not None:
         name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', name)
     return name in ACT_BLOCK_UNSPLIT_SPLITS or name in BAYES_BLOCK_UNSPLIT_SPLITS
+
+
+def is_act_block_fully_unsplit_split(split):
+    '''Prior L vs R with no stim / choice / f1/f2 stratum (one pool per window).'''
+    name = split or ''
+    if contrast_from_split(name) is not None:
+        name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', name)
+    return name in ACT_BLOCK_FULLY_UNSPLIT_SPLITS
 
 
 def is_harris_eligible_split(split):
@@ -881,7 +899,9 @@ def _act_block_conditioning_spec(split):
     Unsplit (model analog of stim-side / choice-side pooling):
       - ``act_block_duringstim_{l,r}`` — stim side only (no choice / f1/f2)
       - ``act_block_duringchoice_{l,r}`` — choice side only (no stim / f1/f2)
-      - ``act_block_only`` — no stim/choice stratum
+      - ``act_block_duringstim_fully_unsplit`` / ``duringchoice_fully_unsplit``
+        — no stim/choice/f1/f2 (all biased trials in the analysis window)
+      - ``act_block_only`` — no stim/choice stratum (ITI window)
 
     Returns dict: stim_is_left (bool|None), choice (±1|None), contrast (float|None).
     '''
@@ -889,7 +909,8 @@ def _act_block_conditioning_spec(split):
     name = split
     if contrast is not None:
         name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', split)
-    if name in ('act_block_only', 'bayes_block_only', 'block_only'):
+    if name in ('act_block_only', 'bayes_block_only', 'block_only') or (
+            'fully_unsplit' in name):
         return {
             'stim_is_left': None, 'choice': None, 'contrast': contrast,
         }
@@ -1008,10 +1029,11 @@ def _donor_block_conditioning_mask(rec, split, keep=None):
     '''Conditioning mask on a donor for act_block Harris (None if unusable).
 
     Always restricted to non-0.5 true-block trials (same as recipient). For
-    ``act_block_only`` that is the full biased-block session (no stim/choice
-    stratum). For unsplit ``act_block_duringstim_{l,r}`` / ``duringchoice_{l,r}``
-    that is stim-side only or choice-side only. For choice×stim splits, further
-    intersect stim × choice (±c).
+    ``act_block_only`` / ``*_fully_unsplit`` that is the full biased-block
+    session (no stim/choice stratum). For unsplit
+    ``act_block_duringstim_{l,r}`` / ``duringchoice_{l,r}`` that is stim-side
+    only or choice-side only. For choice×stim splits, further intersect
+    stim × choice (±c).
     '''
     rec = _normalize_donor_rec(rec)
     if rec.get('_legacy'):
@@ -1786,7 +1808,8 @@ def _compute_control_D_harris_block(
     Recipient conditioning defines ``elig_idx`` / neural ``b``:
     stim × choice (± contrast) for f1/f2 splits; stim-side only for
     ``act_block_duringstim_{l,r}``; choice-side only for
-    ``act_block_duringchoice_{l,r}``; none for ``act_block_only``.
+    ``act_block_duringchoice_{l,r}``; none for ``act_block_only`` /
+    ``*_fully_unsplit``.
     Observed labels = prior-L on those trials (act / bayes / true per split
     name). Each null transplants another eid's **prior** labels from the same
     conditioning stratum.
@@ -2860,8 +2883,9 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         another eid's choices from the same stim×prior stratum
       - act_block prior L–R: recipient stratum defines ``elig_idx`` (stim×choice
         ±contrast for f1/f2 splits; stim-side only for ``duringstim_{l,r}``;
-        choice-side only for ``duringchoice_{l,r}``); null labels are another
-        eid's **prior** labels from the same conditioning stratum
+        choice-side only for ``duringchoice_{l,r}``; none for ``*_fully_unsplit``
+        / ``act_block_only``); null labels are another eid's **prior** labels
+        from the same conditioning (or the full biased session if none)
     Default False → label shuffle.
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
@@ -3102,6 +3126,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         # Prior L vs R within one choice side; firstMovement window; no stim/f1/f2.
         ch = 1 if split.endswith('_l') else -1
         trials = trials[trials['choice'] == ch]
+        for pleft in [0.8, 0.2]:
+            sel = trials['probabilityLeft'] == pleft
+            events.append(trials[align[split]][sel])
+            trn.append(np.arange(len(trials['choice']))[sel])
+
+    elif is_act_block_fully_unsplit_split(split):
+        # Prior L vs R on all biased trials; no stim/choice/f1/f2.
+        # Window from 'durings' / 'duringc' in the name (150 ms post-stim /
+        # 150 ms pre-move).
         for pleft in [0.8, 0.2]:
             sel = trials['probabilityLeft'] == pleft
             events.append(trials[align[split]][sel])

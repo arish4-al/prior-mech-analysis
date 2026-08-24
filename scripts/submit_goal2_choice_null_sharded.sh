@@ -110,7 +110,7 @@ case "$_ORIG_SCHEME" in
     PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
     CASE_TAG=strat_sticky
     SUFFIX=_pseudo_strat_sticky
-    JOB_PREFIX=g2pss
+    JOB_PREFIX="${JOB_PREFIX:-g2pss}"
     CLEAR_STREAM="${CLEAR_STREAM:-1}"
     ;;
   harris|harris_unique|session)
@@ -119,7 +119,7 @@ case "$_ORIG_SCHEME" in
     SESSION_SHUFFLE_NULL=1
     CASE_TAG=harris_unique
     SUFFIX=_harris_unique
-    JOB_PREFIX=g2hu
+    JOB_PREFIX="${JOB_PREFIX:-g2hu}"
     PSEUDO_LEN_FACTOR=""
     CLEAR_STREAM="${CLEAR_STREAM:-1}"
     if [[ "${MEM_SHARD}" == "12G" ]]; then

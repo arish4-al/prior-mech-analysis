@@ -4,6 +4,7 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
 
   python scripts/run_goal2_splits.py --preset stimOn_times_act
   python scripts/run_goal2_splits.py --preset act_block_harris_unsplit --list-splits
+  python scripts/run_goal2_splits.py --preset act_block_harris_fully_unsplit --list-splits
   python scripts/run_goal2_splits.py --preset act_block_excl_sticky --list-splits
   python scripts/run_goal2_splits.py --preset goal3_c0_choice
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
@@ -199,6 +200,11 @@ PRESETS = {
     'act_block_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     'act_block_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     'act_block_harris_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    # Fully unsplit: one split per timeframe, no stim/choice/f1/f2 in data or null.
+    'act_block_fully_unsplit': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
+    'act_block_fully_unsplit_duringstim': [ba.ACT_BLOCK_FULLY_UNSPLIT_STIM],
+    'act_block_fully_unsplit_duringchoice': [ba.ACT_BLOCK_FULLY_UNSPLIT_CHOICE],
+    'act_block_harris_fully_unsplit': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
     'act_block_ak_sticky': (
         list(RUN_ALIGN['stimOn_times'])
         + list(RUN_ALIGN['firstMovement_times'])
@@ -212,6 +218,8 @@ PRESETS = {
     ),
     # Unsplit prior L–R + fitted AK + copy-last (stim-side / choice-side only)
     'act_block_ak_sticky_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    # Fully unsplit + fitted AK + copy-last (no stim/choice/f1/f2)
+    'act_block_ak_sticky_fully_unsplit': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
     # Bayes *mouse* + copy-last (not fitted AK). Same remake as option 1:
     # Choice: remake stim×Bayes-prior; labels = sticky OptimalBayesian choices.
     # Bayes_block: remake stim×choice; labels = that draw's Bayes-binary.
