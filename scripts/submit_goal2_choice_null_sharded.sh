@@ -26,6 +26,7 @@
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
 # Submit all three: bash scripts/submit_goal2_choice_null_all_schemes_sharded.sh
+# Partition: PARTITION=mit_normal bash scripts/submit_goal2_choice_null_sharded.sh
 
 set -euo pipefail
 
@@ -50,6 +51,7 @@ CPUS_SMOKE="${CPUS_SMOKE:-2}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
 TIME_SMOKE="${TIME_SMOKE:-2:00:00}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
@@ -182,7 +184,7 @@ echo "NULL_SCHEME=$NULL_SCHEME  mode=$ACTKERNEL_NULL_MODE  late_sticky=$ACTKERNE
 echo "PSEUDO_LEN_FACTOR=${PSEUDO_LEN_FACTOR:-1}  ACTKERNEL_PSEUDO_LEN_FACTOR=${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
 echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
-echo "MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
 echo "Suffix: {split}${SUFFIX}.npy"
 printf '  %s\n' "${SPLITS[@]}"
 
@@ -195,6 +197,7 @@ job_tag() {
 DEP_AFTER=""
 if [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
   DONOR_JID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
     --job-name="g2_choice_donors" \
     --export=ALL,SMOKE_FIRST="$SMOKE_FIRST" \
@@ -203,6 +206,7 @@ if [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
   DEP_AFTER="--dependency=afterok:${DONOR_JID}"
 elif [[ "$SMOKE_FIRST" == "1" && "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
   SMOKE_JID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_SMOKE" --cpus-per-task="$CPUS_SMOKE" --time="$TIME_SMOKE" \
     --job-name="g2_ak_smoke_${CASE_TAG}" \
     --export=ALL,ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}" \
@@ -226,6 +230,7 @@ for sp in "${SPLITS[@]}"; do
   for ((k=0; k<N_SHARDS; k++)); do
     # shellcheck disable=SC2086
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
       $DEP_AFTER \
@@ -236,6 +241,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \

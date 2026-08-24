@@ -13,6 +13,7 @@
 #
 #   bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh
 #   FAMILY=choice|bayes_block|f1|f2|unsplit|both   (default both)
+#   PARTITION=mit_normal bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh
 #
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
@@ -21,9 +22,10 @@ cd "$REPO_DIR"
 FAMILY="${FAMILY:-both}"
 NRAND="${NRAND:-2000}"
 N_SHARDS="${N_SHARDS:-4}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
-export NRAND N_SHARDS PREFIT_JID="${PREFIT_JID:-}"
+export NRAND N_SHARDS PARTITION PREFIT_JID="${PREFIT_JID:-}"
 export NULL_SCHEME=pseudo_strat_sticky
 
 if [[ "$FAMILY" != "choice" && "$FAMILY" != "bayes_block" \

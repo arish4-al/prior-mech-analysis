@@ -13,6 +13,7 @@
 #     bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
 #   PRESET=act_block_excl_sticky_duringchoice …
 #   PRESET=act_block_excl_sticky_unsplit_duringstim …
+#   PARTITION=mit_normal bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
 #
 # Outputs → manifold/res_excl_sticky/{split}.npy (same folder as choice
 # excl-sticky). CLEAR_STREAM=1 (default) removes only the listed act_block
@@ -38,6 +39,7 @@ MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export EXCLUDE_STICKY_TRIALS STICKY_LATE_FRAC STICKY_MIN_RUN
@@ -96,7 +98,7 @@ n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "EXCLUDE_STICKY_TRIALS=$EXCLUDE_STICKY_TRIALS  late_frac=$STICKY_LATE_FRAC  min_run=$STICKY_MIN_RUN"
 echo "SESSION_SHUFFLE_NULL=$SESSION_SHUFFLE_NULL  CLEAR_STREAM=$CLEAR_STREAM"
-echo "MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  MEM_FIN=$MEM_FIN  shard_jobs=$n_shard_jobs"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  MEM_FIN=$MEM_FIN  shard_jobs=$n_shard_jobs"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_excl_sticky/{split}.npy"
 echo "Splits:"
 printf '  %s\n' "${SPLITS[@]}"
@@ -112,6 +114,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR=,ACTKERNEL_LATE_STICKY=0 \
@@ -121,6 +124,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \

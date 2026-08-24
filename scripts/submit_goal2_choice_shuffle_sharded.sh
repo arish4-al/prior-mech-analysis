@@ -18,7 +18,7 @@
 #     --arm-res $ONE_CACHE_DIR/manifold/res/new \
 #     --arm-tag harris_unique --arm-suffix _harris_unique --force-combine --alpha 0.01
 #
-# Override: N_SHARDS=3 CLEAR_STREAM=0 MEM_SHARD=8G \
+# Override: N_SHARDS=3 CLEAR_STREAM=0 MEM_SHARD=8G PARTITION=mit_normal \
 #   bash scripts/submit_goal2_choice_shuffle_sharded.sh
 
 set -euo pipefail
@@ -43,6 +43,7 @@ else
   N_SHARDS="${N_SHARDS:-4}"
   TIME_SHARD="${TIME_SHARD:-12:00:00}"
 fi
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
@@ -89,7 +90,7 @@ n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=label_shuffle (plain)  PRESET=$PRESET"
 echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
 echo "N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}  shard_jobs=$n_shard_jobs"
-echo "MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}.npy  (no suffix)"
 printf '  %s\n' "${SPLITS[@]}"
 
@@ -104,6 +105,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="g2sh_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR= \
@@ -113,6 +115,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2sh_fin_${TAG}" \

@@ -11,6 +11,7 @@
 #     bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 #   PRESET=choice_lr_excl_sticky_bayes \
 #     bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
+#   PARTITION=mit_normal bash scripts/submit_goal2_choice_excl_sticky_sharded.sh
 #
 # Assumes insertion cache already exists.
 
@@ -31,6 +32,7 @@ MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
+PARTITION="${PARTITION:-pi_fiete}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export EXCLUDE_STICKY_TRIALS STICKY_LATE_FRAC STICKY_MIN_RUN
@@ -60,7 +62,7 @@ n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
 echo "EXCLUDE_STICKY_TRIALS=$EXCLUDE_STICKY_TRIALS  late_frac=$STICKY_LATE_FRAC  min_run=$STICKY_MIN_RUN"
 echo "SESSION_SHUFFLE_NULL=$SESSION_SHUFFLE_NULL"
-echo "MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  shard_jobs=$n_shard_jobs"
+echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  MEM_FIN=$MEM_FIN  shard_jobs=$n_shard_jobs"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_excl_sticky/"
 echo "Splits:"
 printf '  %s\n' "${SPLITS[@]}"
@@ -76,6 +78,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2x_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART",EXCLUDE_STICKY_TRIALS="$EXCLUDE_STICKY_TRIALS",STICKY_LATE_FRAC="$STICKY_LATE_FRAC",STICKY_MIN_RUN="$STICKY_MIN_RUN",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \
@@ -85,6 +88,7 @@ for sp in "${SPLITS[@]}"; do
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
   FID=$(sbatch --parsable \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g2x_fin_${TAG}" \
