@@ -536,11 +536,18 @@ _ACTKERNEL_MODE_SUFFIX = {
     'fixedstim': '_pseudo_fixed',
     'unconstrained': '_pseudosession',  # legacy calendar-index into full pseudo
 }
-# Strat-only: multiply BWM pseudo length vs real session.
-# Default 3; on low accept rate the control loop doubles up to MAX.
-# Outputs always use ``_pseudo_strat`` (overwrites prior strat runs).
-ACTKERNEL_PSEUDO_LEN_FACTOR_DEFAULT = 3.0
+# Strat-only: size the BWM pseudo so its *biased* length ≈ factor × real session.
+# ``generate_pseudo_blocks`` always prepends a ~90-trial pLeft=0.5 warm-up block
+# that the act_block analysis drops, so we add it back (``_PSEUDO_UNBIASED_PAD``)
+# rather than paying for it multiplicatively. Default factor 1 ⇒ biased pseudo
+# length ≈ real (best match to session structure / stickiness); on low accept the
+# control loop doubles up to MAX. Outputs always use ``_pseudo_strat``.
+# See journals/structured_nulls_choice_lr.md 2026-08-24b.
+ACTKERNEL_PSEUDO_LEN_FACTOR_DEFAULT = 1.0
 ACTKERNEL_PSEUDO_LEN_FACTOR_MAX = 16.0
+# IBL biased pseudo-sessions (generate_pseudo_blocks) start with a fixed
+# unbiased (pLeft=0.5) warm-up block of this length; the act_block path drops it.
+ACTKERNEL_PSEUDO_UNBIASED_PAD = 90
 
 
 def _actkernel_pseudo_len_factor(factor=None):
@@ -563,11 +570,15 @@ def _strat_file_suffix(pseudo_len_factor=None):
 
 
 def _strat_pseudo_n_trials(trials, pseudo_len_factor=None):
+    '''Pseudo length whose *biased* portion ≈ ``factor`` × real session length.
+
+    Adds ``ACTKERNEL_PSEUDO_UNBIASED_PAD`` so the ~90-trial pLeft=0.5 warm-up
+    block (dropped by the act_block analysis) does not eat into the biased-trial
+    budget. Factor 1 ⇒ biased pseudo length ≈ real (matches session structure).
+    '''
     n = int(len(trials))
     f = _actkernel_pseudo_len_factor(pseudo_len_factor)
-    if f <= 1.0 + 1e-12:
-        return n
-    return int(np.ceil(n * f))
+    return int(np.ceil(n * f)) + ACTKERNEL_PSEUDO_UNBIASED_PAD
 
 
 def configure_null_file_suffix(
@@ -2266,7 +2277,9 @@ def _compute_control_D_actkernel_block(
     print(f'actkernel-block [{split}]: mode={mode}; '
           f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
-          f'(real={len(trials)}, n_elig={n_elig}); '
+          f'(real={len(trials)}, n_elig={n_elig}, '
+          f'biased≈{n_pseudo - ACTKERNEL_PSEUDO_UNBIASED_PAD if mode == "strat" else n_pseudo}, '
+          f'drop-0.5 pseudo strata); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
           f'fit mode={fit.get("mode")} '
           f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
@@ -2309,15 +2322,28 @@ def _compute_control_D_actkernel_block(
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             signed_mat = np.asarray(out['signed_contrast'], dtype=float)
+            pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
         gen_offset += n_gen
         gen_at_factor += n_gen
 
         for i in range(ch_mat.shape[0]):
             if mode == 'strat':
-                prior_l = _block_null_prior_left(split, ch_mat[i], side_mat[i])
+                # Match the real act_block path: drop the pseudo's pLeft=0.5
+                # warm-up block before forming the stim×choice stratum, and
+                # cold-start the act-kernel prior on the biased choices (Bayes
+                # priors need full stim history, so compute then drop). Journal
+                # 2026-08-24b.
+                keep = ~np.isclose(pleft_mat[i], 0.5)
+                ch_k = ch_mat[i][keep]
+                side_k = side_mat[i][keep]
+                signed_k = signed_mat[i][keep]
+                if _split_uses_bayes_prior(split):
+                    prior_l = _block_null_prior_left(
+                        split, ch_mat[i], side_mat[i])[keep]
+                else:
+                    prior_l = _block_null_prior_left(split, ch_k, side_k)
                 mask = _act_block_stream_mask(
-                    split, side_mat[i], ch_mat[i],
-                    signed_contrast=signed_mat[i])
+                    split, side_k, ch_k, signed_contrast=signed_k)
                 ys = _ys_from_stratum_labels(prior_l, mask, n_elig, rng)
             else:
                 side_i = (side_mat[i] if side_mat is not None

@@ -2,7 +2,7 @@
 
 **Scope:** the problem that an unrestricted label shuffle is too narrow a null when choice/prior labels are temporally autocorrelated and neural responses drift, and every null scheme built to address it — Harris session permutation and ActionKernel synthetic sessions (stratified pseudo and fixed-stim). Late-session / perseveration **trial exclusion** is [sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md), not a structured null.
 
-**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim. Intended next act arm: **option 1 + copy-last** (`_pseudo_strat_sticky`) — remake stim×act-prior (choice) or stim×choice (act_block) on each pseudo. **Not yet scored.** Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. `_harris_unique` remains the preferred file for claims.
+**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim. Intended next act arm: **option 1 + copy-last** (`_pseudo_strat_sticky`) — remake stim×act-prior (choice) or stim×choice (act_block) on each pseudo. **Not yet scored.** Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. **2026-08-24:** a choice sign-convention bug (AK pseudo `choice` L↔R flipped) was found and fixed in `scripts/simulate_synthetic_choices.py`; all pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid and must be regenerated (see 2026-08-24 entry). `_harris_unique` remains the preferred file for claims.
 
 Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits.
 
@@ -820,6 +820,137 @@ PREFIT=0 bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh
 
 ---
 
+## 2026-08-24 — AK pseudo choice was L↔R flipped (fixed); `act_block` f1 timeouts
+
+**Symptom.** Option-1 `strat` `act_block_*_choice_*_f1` (congruent stim×choice)
+shards could not fill `nrand=2000` balanced draws even at
+`ACTKERNEL_PSEUDO_LEN_FACTOR=3`; the control loop kept doubling 3→6→12 (`res/new_logs`
+`goal2_shard_g2pss_act_block_duringstim_l_choice_l_f1_*`: “only 0/2000 after 42000
+draws … raising → 6/12”), timing out at 12 h. f2 (incongruent) shards finished fine.
+
+**Root cause — choice sign convention.** `behavior_models` (`utils.format_data`)
+uses **+1 = left / left-positive contrast**; the analysis (and real IBL `choice`)
+also uses **+1 = left** (verified: real `choice==+1 & stim_left` ≡ `feedbackType==1`,
+agreement 1.000). But `scripts/simulate_synthetic_choices.py::_pseudo_sessions_vectorized`
+emits the pseudo stream in **brainbox convention (−1 = left / left-negative)** and
+`_synthetic_fast` fed it **straight into `ActionKernel.simulate_parallel` without
+`format_input`**. The model therefore ran in a sign-flipped world and returned AK
+`choice` with **−1 = left**. Probe: strong left stim (`side=−1, signed=−1`), lapse 0
+→ `choice==−1` w.p. 1.0.
+
+Downstream `_act_block_stream_mask` / `_act_block_conditioning_spec` select
+`choice_l` as `choice==+1`, i.e. the pseudo’s **right** choices. So
+`stim_l × choice_l` (f1 = correct) was built from stim-left & pseudo-right =
+**error** trials → ~error-rate sized → never reaches real `n_elig` → escalation +
+timeout. It also **swapped f1↔f2** (f2 got the big pseudo-correct stratum, hence
+“finished”), and inverted the act-prior label (`_act_prior_binary_from_choice`
+uses `int(action>0)`), which stayed balanced only by L/R symmetry.
+
+**Not** the AK model, copy-last, or a prior-imbalance problem: pseudo prior
+minority fraction was healthy (~0.4) throughout. The failure was purely stratum
+**size**.
+
+Evidence (eid `4364a246` probe01, `saturation_stim_plus04`, MCMC θ≈[0.089,0.077,0.173,0.173]):
+
+| stratum | real `n_elig` | buggy pseudo med stratum @f3 | buggy accept @f3 | fixed accept @f3 |
+|---|---:|---:|---:|---:|
+| `stim_l × choice_l` f1 | 65 | 32 | **0.00** | **0.99** |
+| `stim_r × choice_r` f1 | 47 | 33 | 0.02 | 0.91 |
+
+Pseudo “accuracy” (`choice==stim`) went 0.174 → **0.824** after the fix (real ≈0.86).
+
+**Fix (`scripts/simulate_synthetic_choices.py`).** Feed the model the negated
+stream so returned actions come back in the analysis convention (+1 = left):
+- `_synthetic_fast`: `simulate_parallel(θ, −signed_contrast, −stim_side)`; feedback
+  via `_feedback_from_brainbox_choice(choice, stim_side)` (was `choice==stim_side`).
+- `make_synthetic_session` AK branch: `simulate_choices(−signed, −side, …)`; unified
+  feedback to `_feedback_from_brainbox_choice`.
+- Negating the **input** (not the output) keeps asymmetric `lapse_pos/lapse_neg`
+  mapped to the correct side.
+
+**Scope of impact.**
+- `act_block_*` f1/f2 AK `strat`/`fixedstim` nulls were built on the wrong
+  (correct↔error) stratum → **regenerate**. (fixedstim’s choice was already +1=left
+  via `stim_side_from_trials`/`format_data`, so fixedstim was correct; the bug was
+  the `strat` `_synthetic_fast` path.)
+- `bayes_*` splits **unaffected** — `simulate_bayes_choices` already returns +1=left.
+- choice L–R `*_act` and unsplit `act_block_duringstim_*` AK nulls are numerically
+  robust (L↔R distance is symmetric under a global label flip) but their strata were
+  mirrored; the fix makes them correct with unchanged p-values.
+
+**Length factor after the fix.** The 3× was a general workaround (real congruent
+strata can exceed a fresh balanced pseudo at matched length), **not** specific to
+this bug. Post-fix the `act_block` congruent path behaves like the other splits —
+factor **2** gives ≥0.95 accept here (f1: f1.0=0.03, f1.5=0.71, f2.0=0.98, f3.0=1.0;
+f1r: f1.0=0.43, f1.5=0.96, f2.0=0.95). Factor 1 still falls short for high-bias
+sessions where real `n_elig` > pseudo congruent count. On stickiness fidelity: a
+longer pseudo stretches the copy-last quintile mean_run match over more calendar
+trials and the `n_elig` window then samples a narrower slice — so use the **smallest**
+factor that reaches `n_elig`. For literal empirical within-stratum stickiness, Harris
+is the exact null; option-1 + copy-last is the parametric mean_run-matched approximation.
+
+```bash
+# smoke: python scripts/test_late_stickiness.py   (OK)
+```
+
+**Not done (superseded by 2026-08-24b):** re-run affected `act_block_*` AK shards.
+
+---
+
+## 2026-08-24b — pseudo drops its own pLeft=0.5 block; sizing is additive (factor 1 default)
+
+**Why factor 1 was still failing after the sign fix.** `generate_pseudo_blocks`
+always prepends a **fixed ~90-trial pLeft=0.5 warm-up block**, but the real
+`act_block` path drops pLeft=0.5 *before* defining `elig_idx`
+([block_analysis_allsplits.py](../block_analysis_allsplits.py) get_d_vars), while
+the pseudo stratum did **not**. So at factor 1 (`n_pseudo = n_real`) **~73% of the
+pseudo was the unbiased warm-up** (measured: 124→0.73, 214→0.42, 248→0.36, 372→0.24
+of trials at 0.5 — i.e. a constant ~90), leaving too few biased trials to reach
+`n_elig`, and it polluted the stratum with ~50/50-choice trials whose act-prior is
+meaningless. Two problems: **efficiency** (length wasted) and **semantics**
+(the real analysis excludes those trials).
+
+**Fix 1 — pseudo drops pLeft=0.5 (act_block only).** In
+`_compute_control_D_actkernel_block` (`strat`), each draw now drops
+`pLeft=0.5` before the stim×choice mask, and the act-kernel prior is **cold-started
+on the biased choices** (matching real `action_kernel_priors` on post-drop choices).
+Bayes priors need the full stim history, so they are computed on the whole pseudo
+**then** restricted to biased trials. Choice L–R (choicestim family) **keeps** 0.5
+in the real path, so it is unchanged.
+
+**Fix 2 — additive sizing (`_strat_pseudo_n_trials`).** `n_pseudo = ceil(n_real ×
+factor) + ACTKERNEL_PSEUDO_UNBIASED_PAD` (`PAD = 90`), and the **default factor is
+now 1.0** (was 3.0). So factor 1 ⇒ *biased* pseudo length ≈ real session (best match
+to session structure / stickiness); the ~90-trial warm-up is added back rather than
+paid for multiplicatively. Applies to both AK strat families (shared helper); the
+existing auto-grow (double up to 16) still covers strongly-biased sessions.
+
+**Result (eid `4364a246`, biased session, real n_elig 65/47; accept over 400 draws):**
+
+| factor | n_pseudo (biased) | `stim_l×choice_l` | `stim_r×choice_r` |
+|---:|---|---:|---:|
+| 1 | 214 (≈124) | 0.10 | 0.39 |
+| 2 | 338 (≈248) | 0.96 | 0.92 |
+| 4 | 586 (≈496) | 0.99 | 0.93 |
+
+This is a genuinely lopsided session (58% of biased trials are `stim_l×choice_l`
+vs ~40% for a balanced pseudo), so factor 1 accept is low but **still fills** at
+factor 1 (accept ≈0.10 ⇒ ~21k cheap short draws < the 40k auto-grow threshold), so
+length stays minimal; more-biased insertions auto-grow to factor 2. Typical
+(less-biased) sessions accept at factor 1 directly. For literal empirical
+within-stratum stickiness, Harris remains the exact null.
+
+**Length vs stickiness.** Factor 1 keeps the pseudo at real biased length, so the
+copy-last quintile mean_run match is over the real calendar span and the `n_elig`
+window is (nearly) the whole stratum — the faithful-stickiness regime the campaign
+wants. Only grow when a session's real congruent stratum exceeds a balanced pseudo.
+
+**Not done:** re-run the affected `act_block_*` AK `strat`/`fixedstim` shards with
+both fixes (sign + 0.5-drop/sizing); the old restart script pins factor 6 —
+regenerate with default factor 1.
+
+---
+
 ## Open questions
 
 1. **Primary null choice for choice L–R claims** — Harris (empirical sticky structure within stratum) vs AK stratified pseudo (BWM-like new world with matched bias context). Min5 shuffle (08-14) is more liberal than openalyx, which widens the Harris–shuffle gap but does not change Harris FDR counts.
@@ -827,6 +958,6 @@ PREFIT=0 bash scripts/submit_goal2_ak_sticky_bayes_orcd.sh
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
 5. **act_block Harris unique is a near-total null** (0 FDR @0.01). 08-14b: **not** the f2 donor-stratum skip. **2026-08-17 unsplit:** same 0 FDR @0.01. **2026-08-17b early-stim 80 ms:** shuffle FDR shrinks but unsplit stays liberal; Harris still 0 FDR @0.01. **2026-08-18 `act_block_only` ITI:** shuffle already 0 FDR @0.01 (5 at 0.05); Harris unique 0 FDR @0.01 **and** @0.05 (208 regions, 63k cells). Remaining question: is that the intended correction for block-autocorrelated priors, or is the Harris prior-transplant null too wide? Duringchoice unsplit **shuffle** still missing.
-6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. Option-1 + copy-last (`_pseudo_strat_sticky`) is wired for the AK mouse; full-BWM FDR not yet run. An option-2 (`fixedstim`) job was run by mistake; those numbers are deleted.
+6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. Option-1 + copy-last (`_pseudo_strat_sticky`) is wired for the AK mouse; full-BWM FDR not yet run. An option-2 (`fixedstim`) job was run by mistake; those numbers are deleted. **2026-08-24:** the AK pseudo `choice` was L↔R flipped (see entry) — all pre-08-24 `act_block_*` AK `strat`/`fixedstim` files must be regenerated.
 7. **Bayes mouse vs fitted OptimalBayesian** — 08-23 uses fixed ζ=0.1 / lapse=0.05 (same τ/γ as analysis priors). A per-session OptimalBayesian MCMC fit was not implemented.
 

@@ -324,8 +324,10 @@ def make_synthetic_session(trials_df, params, seed=None, n_trials=None,
     elif choice_model == 'actkernel':
         if params is None:
             raise ValueError('actkernel synthetic session requires params')
-        choice = simulate_choices(pseudosess.signed_contrast.values,
-                                  pseudosess.stim_side.values, params,
+        # Negate the brainbox (-1=left) stream to behavior_models (+1=left) so
+        # simulate returns +1=left. See _synthetic_fast / journal 2026-08-24.
+        choice = simulate_choices(-pseudosess.signed_contrast.values,
+                                  -pseudosess.stim_side.values, params,
                                   n_sim=1, seed=seed)
     else:
         raise ValueError(f'choice_model must be one of {CHOICE_MODELS}, '
@@ -335,13 +337,10 @@ def make_synthetic_session(trials_df, params, seed=None, n_trials=None,
         choice, pseudosess['probabilityLeft'].values, seed=seed,
         late_sticky=late_sticky, target_mean_run=target)
     pseudosess["choice"] = choice
-    if choice_model == 'bayes':
-        pseudosess["feedbackType"] = _feedback_from_brainbox_choice(
-            choice, pseudosess['stim_side'].values)
-    else:
-        # Historical AK path: compare to brainbox stim_side as stored.
-        pseudosess["feedbackType"] = np.where(
-            pseudosess["choice"] == pseudosess["stim_side"], 1, -1)
+    # Both paths now emit +1=left choices; feedback uses the brainbox stim_side
+    # (-1=left) convention consistently.
+    pseudosess["feedbackType"] = _feedback_from_brainbox_choice(
+        choice, pseudosess['stim_side'].values)
     return pseudosess
 
 
@@ -435,15 +434,23 @@ def _synthetic_fast(trials, params, n, seed=0, n_trials=None, late_sticky=False)
     torch.manual_seed(seed)
     model = _sim_model()
     arr_params = np.asarray(params, dtype=float)[None]         # (1, 4): one parameter "chain"
-    # simulate_parallel runs all n sessions through the trial loop at once (nb_simul=1 each).
-    act_sim, _, _ = model.simulate_parallel(arr_params, signed_contrast, stim_side, nb_simul=1)
-    choice = np.asarray(act_sim.squeeze(-1), dtype=np.int64)   # (n, n_trials), {-1, +1}
+    # ``behavior_models`` (format_data) uses +1 = left / left-positive contrast,
+    # but the vectorized pseudo stream is brainbox convention (-1 = left /
+    # left-negative). Feed the model the sign-flipped stream so the returned
+    # actions come back in the analysis / IBL convention (+1 = left) — matching
+    # real trials, the Bayes path, and the downstream stim×choice masks. Without
+    # this, AK pseudo choices are L↔R flipped, so act_block stim×choice strata are
+    # built from the wrong (error) trials. See journals/structured_nulls_choice_lr.md
+    # 2026-08-24. simulate_parallel runs all n sessions through the trial loop at once.
+    act_sim, _, _ = model.simulate_parallel(
+        arr_params, -signed_contrast, -stim_side, nb_simul=1)
+    choice = np.asarray(act_sim.squeeze(-1), dtype=np.int64)   # (n, n_trials), +1 = left
     target = _real_mean_run_targets(trials) if late_sticky else None
     choice = _maybe_late_stickiness(
         choice, pleft, seed=seed, late_sticky=late_sticky,
         target_mean_run=target)
     choice = np.asarray(choice, dtype=np.int64)
-    feedback = np.where(choice == stim_side, 1, -1).astype(np.int64)
+    feedback = _feedback_from_brainbox_choice(choice, stim_side)
     return dict(choice=choice, feedbackType=feedback, signed_contrast=signed_contrast,
                 stim_side=stim_side, probabilityLeft=pleft)
 

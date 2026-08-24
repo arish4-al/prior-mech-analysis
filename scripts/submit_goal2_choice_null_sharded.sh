@@ -6,7 +6,8 @@
 #
 # Schemes (journal 2026-07-23b / 2026-07-24 / 2026-08-22):
 #   pseudo_strat  — opt 1: AK + stim×block–stratified pseudo
-#                   default PSEUDO_LEN_FACTOR=3; adaptive bump to 16 if needed
+#                   default PSEUDO_LEN_FACTOR=1 (additive: biased pseudo len ≈ real,
+#                   +~90 warm-up pad added in code); adaptive bump to 16 if needed
 #                   always writes {split}_pseudo_strat*.npy (overwrites prior strat)
 #   pseudo_fixed  — opt 2: AK on exact real stim×block sequence
 #   pseudo_fixed_sticky / strat_sticky — fitted AK + copy-last (_sticky suffix)
@@ -69,7 +70,9 @@ case "$_ORIG_SCHEME" in
     NULL_SCHEME=pseudo_strat
     ACTKERNEL_CHOICE_NULL=1
     ACTKERNEL_NULL_MODE=strat
-    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-3}"
+    # Default factor 1 (additive sizing: biased pseudo len ≈ real; +~90 pad added
+    # in code). Auto-grows to 16 if a session's stratum is short. Journal 2026-08-24b.
+    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
     CASE_TAG=strat
     SUFFIX=_pseudo_strat
     JOB_PREFIX=g2ps
@@ -101,7 +104,10 @@ case "$_ORIG_SCHEME" in
     ACTKERNEL_CHOICE_NULL=1
     ACTKERNEL_NULL_MODE=strat
     ACTKERNEL_LATE_STICKY=1
-    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-3}"
+    # Default factor 1 (additive sizing: biased pseudo len ≈ real; +~90 pad added
+    # in code) to match real session stickiness. Auto-grows to 16 if short.
+    # Journal 2026-08-24b.
+    PSEUDO_LEN_FACTOR="${PSEUDO_LEN_FACTOR:-}"
     CASE_TAG=strat_sticky
     SUFFIX=_pseudo_strat_sticky
     JOB_PREFIX=g2pss
