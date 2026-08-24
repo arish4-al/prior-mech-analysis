@@ -361,10 +361,7 @@ def build_stage_b_hybrid_payload(
         "d_s": u["d_s"],
         "retinal": {k: u[k] for k in (
             "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss")},
-        "model_params": {
-            k: float(v) if isinstance(v, (int, float, np.floating)) else v
-            for k, v in mp.items()
-        },
+        "model_params": jsonify_model_params(mp),
         "note": (
             "Warm-start for Stage B joint: retinal free under regular:12|13 / "
             "sensory:6|7|8|9 (do not freeze 14–20). "
@@ -414,10 +411,7 @@ def _payload_joint(theta, loss, train_mask=None, random_state=None, **extra):
         "d_s": u["d_s"],
         "retinal": {k: u[k] for k in (
             "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss")},
-        "model_params": {
-            k: float(v) if isinstance(v, (int, float, np.floating)) else v
-            for k, v in model_params.items()
-        },
+        "model_params": jsonify_model_params(model_params),
     }
     payload.update(extra)
     return payload
@@ -462,7 +456,7 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     model_type="data", plot=False, debug=False, return_details=False,
                     blocks_per_session_override=None, verbose=True,
                     stim_rng=None, stimuli_bundle=None, avg_data_R=None,
-                    s_baseline=0.0):
+                    s_baseline=0.0, p_offset_always_on=None, iti_penalty=None):
     """
     Joint loss: one sim → L_w (I/P/M + prior) + L_S (S rms).
     avg_data_R required (passed explicitly or via loss_extra_kwargs).
@@ -480,6 +474,12 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                 import traceback
                 print("EXC@unpack(joint):", traceback.format_exc().splitlines()[-1])
             return 1e12
+
+        apply_model_ablation_flags(
+            model_params,
+            p_offset_always_on=p_offset_always_on,
+            iti_penalty=iti_penalty,
+        )
 
         if avg_data_R is None:
             if debug:
@@ -579,13 +579,14 @@ def _safe_loss_joint(theta_log, *args, **kwargs):
 def _tracked_loss_joint(theta_log, mean_data_results, prior_regions, behavior, debug=False,
                         model_type="data", plot=False, verbose=True, SAVE_THRESH_V2=0.8,
                         random_state=None, train_mask=None, blocks_per_session_override=None,
-                        stim_rng=None, stimuli_bundle=None, avg_data_R=None, s_baseline=0.0):
+                        stim_rng=None, stimuli_bundle=None, avg_data_R=None, s_baseline=0.0,
+                        **loss_kw):
     loss = _safe_loss_joint(
         theta_log, mean_data_results, prior_regions, behavior,
         model_type=model_type, plot=False, debug=debug,
         blocks_per_session_override=blocks_per_session_override,
         verbose=verbose, stim_rng=stim_rng, stimuli_bundle=stimuli_bundle,
-        avg_data_R=avg_data_R, s_baseline=s_baseline,
+        avg_data_R=avg_data_R, s_baseline=s_baseline, **loss_kw,
     )
     fw._eval_counter["n"] += 1
     step = fw._eval_counter["n"]
@@ -623,7 +624,7 @@ def _tracked_loss_joint(theta_log, mean_data_results, prior_regions, behavior, d
 
 
 def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
-                        **kwargs):
+                        p_offset_always_on=False, iti_penalty=True, **kwargs):
     """
     Joint DE→CMA→polish via fit_weights_two_stage_v2 hooks.
     Requires avg_data_R (S target curves from avg_mean_R.npy).
@@ -634,6 +635,11 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
     # (baked into create_stimuli) actually move during CMA/polish. Callers may
     # override via kwargs.
     kwargs.setdefault("stage2_restim", True)
+    extra = dict(kwargs.pop("loss_extra_kwargs", None) or {})
+    extra.setdefault("avg_data_R", avg_data_R)
+    extra.setdefault("s_baseline", 0.0)
+    extra["p_offset_always_on"] = bool(p_offset_always_on)
+    extra["iti_penalty"] = bool(iti_penalty)
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_joint,
@@ -643,7 +649,7 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
         save_params_fn=_save_params_joint,
         save_rolling_fn=_save_rolling_joint,
         freeze_fill=freeze_fill_joint(),
-        loss_extra_kwargs={"avg_data_R": avg_data_R, "s_baseline": 0.0},
+        loss_extra_kwargs=extra,
         default_refine_idx=DEFAULT_REFINE_IDX,
         **kwargs,
     )

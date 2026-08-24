@@ -242,6 +242,7 @@ def call_kernel(mp, stim, contrast_mag, trial_side, theta_c_tr, theta_d_tr, L, s
         int(mp["prestim_offset_start"]),
         int(mp["post_action_steps"]),
         bool(mp.get("gs_outside_adaptation", False)),
+        bool(mp.get("p_offset_always_on", False)),
         0.0,
         np.zeros((1, 1), dtype=np.float64),
         0.0,

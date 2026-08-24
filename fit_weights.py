@@ -168,7 +168,7 @@ def _save_params_v2(theta_log, loss, tag="v2", random_state=None, train_mask=Non
         "g": {"g_i": float(g_i), "g_m": float(g_m)},
         "d": {"d_i": float(d_i), "d_m": float(d_m)},
         "theta": {"theta_c": float(theta_c), "theta_d": float(theta_d)},
-        "model_params": {k: float(v) if isinstance(v, (int, float, np.floating)) else v for k, v in model_params.items()},
+        "model_params": jsonify_model_params(model_params),
     }
     with open(base.with_suffix(".json"), "w") as f:
         json.dump(payload, f, indent=2)
@@ -215,7 +215,7 @@ def _save_rolling_checkpoint(theta_log_full, loss, stage="stage2", gen=None,
         "g": {"g_i": float(g_i), "g_m": float(g_m)},
         "d": {"d_i": float(d_i), "d_m": float(d_m)},
         "theta": {"theta_c": float(theta_c), "theta_d": float(theta_d)},
-        "model_params": {k: float(v) if isinstance(v, (int, float, np.floating)) else v for k, v in model_params.items()},
+        "model_params": jsonify_model_params(model_params),
     }
     # Atomic-ish: write then replace, so a reader never sees a truncated file.
     tmp = base.with_suffix(".json.tmp")
@@ -249,7 +249,7 @@ def _save_de_result(de_result, stage="de1", tag="v2", fit_idx=None, random_state
         "nit": getattr(de_result, "nit", None),
         "nfev": getattr(de_result, "nfev", None),
         "message": getattr(de_result, "message", None),
-        "model_params": {k: float(v) if isinstance(v, (int, float, np.floating)) else v for k, v in model_params.items()},
+        "model_params": jsonify_model_params(model_params),
     }
     with open(base.with_suffix(".json"), "w") as f:
         json.dump(payload, f, indent=2)
@@ -662,7 +662,8 @@ def build_stimuli_bundle(bps, stim_rng=None, **create_kw):
 def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          model_type='data', plot=False, debug=False, return_details=False,
                          blocks_per_session_override=None, verbose=True,
-                         stim_rng=None, stimuli_bundle=None):
+                         stim_rng=None, stimuli_bundle=None,
+                         p_offset_always_on=None, iti_penalty=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
     Combines trajectory, prior-effect, and behavioral losses.
@@ -686,6 +687,12 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 import traceback
                 print("EXC@unpack(weights_v2):", traceback.format_exc().splitlines()[-1])
             return 1e12
+
+        apply_model_ablation_flags(
+            model_params,
+            p_offset_always_on=p_offset_always_on,
+            iti_penalty=iti_penalty,
+        )
 
         model_params.update({
             # taus remain fixed in model_params
@@ -923,7 +930,7 @@ def _loss_active_de_worker(x_act):
 def _tracked_loss_weights_v2(theta_log, mean_data_results, prior_regions, behavior, debug=False,
                              model_type='data', plot=False, verbose=True, SAVE_THRESH_V2=0.4,
                              random_state=None, train_mask=None, blocks_per_session_override=None,
-                             stim_rng=None, stimuli_bundle=None):
+                             stim_rng=None, stimuli_bundle=None, **loss_kw):
     """
     Logs params + loss each evaluation, updates live loss trace,
     and plots model vs data (I,P,M) when loss < SAVE_THRESH_V2 or every 100 steps.
@@ -940,7 +947,8 @@ def _tracked_loss_weights_v2(theta_log, mean_data_results, prior_regions, behavi
                                  blocks_per_session_override=blocks_per_session_override,
                                  verbose=verbose,
                                  stim_rng=stim_rng,
-                                 stimuli_bundle=stimuli_bundle)
+                                 stimuli_bundle=stimuli_bundle,
+                                 **loss_kw)
     _eval_counter['n'] += 1
     step = _eval_counter['n']
     loss_history.append(float(loss))

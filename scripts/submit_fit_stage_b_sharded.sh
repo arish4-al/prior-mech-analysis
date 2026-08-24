@@ -26,6 +26,8 @@
 #   STAGE1_HOLD_RETINAL  default 1 (DE holds Stage-A retinal; CMA unfreezes)
 #   BPS_STAGE1        default 20 (DE); BPS_STAGE2 default 20 (CMA)
 #   plus all submit_fit_joint_sharded.sh knobs (SEEDS PIPELINE OUT_TAG FORCE …)
+#   P_OFFSET_ALWAYS_ON=1 / NO_ITI_PENALTY=1 — modeling-detail ablations
+#     (prefer scripts/submit_fit_stage_b_model_ablations.sh)
 
 set -euo pipefail
 
@@ -98,7 +100,8 @@ export BPS_STAGE1 BPS_STAGE2 STAGE1_HOLD_RETINAL
 for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
           BEAT_LOSS L_THRESHOLD BPS_STAGE1 BPS_STAGE2 STAGE1_HOLD_RETINAL \
           STAGE2_N_STIM_SEEDS STAGE2_STIM_AGGREGATE VAL_SEED \
-          LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME; do
+          LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME \
+          P_OFFSET_ALWAYS_ON NO_ITI_PENALTY; do
   if [[ -n "${!_k:-}" ]]; then
     export "$_k"
   fi

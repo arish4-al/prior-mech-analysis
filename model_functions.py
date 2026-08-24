@@ -253,6 +253,10 @@ model_params = {
     'internal_noise': [1.0, 1.0, 1.0, 1.0, 1.0],
     'prestim_offset_start': int(100/_DEFAULT_DT),
     'direct_offset': False,
+    # If True, P→S/I/M additive offset stays on through the ITI (no −100 ms gate).
+    'p_offset_always_on': False,
+    # If False, skip the I/M −400→−100 ms zero-activity term in the traj loss.
+    'iti_penalty': True,
     'dt': _DEFAULT_DT,  # Set default dt in model_params
 }
 
@@ -315,6 +319,32 @@ def _compute_dt_dependent_params(dt_value):
         'post_action_steps': int(40 / dt_value),
         'prestim_offset_start': int(100 / dt_value),
     }
+
+
+def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None):
+    """Set ITI P-offset / I/M ITI-penalty flags (call inside each loss eval).
+
+    Loky CMA workers re-import ``model_params`` at defaults; passing the flags
+    through ``loss_extra_kwargs`` and applying them here is what the workers see.
+    """
+    if p_offset_always_on is not None:
+        mp["p_offset_always_on"] = bool(p_offset_always_on)
+    if iti_penalty is not None:
+        mp["iti_penalty"] = bool(iti_penalty)
+    return mp
+
+
+def jsonify_model_params(mp):
+    """JSON-safe copy of model_params. Check bool before int (bool subclasses int)."""
+    out = {}
+    for k, v in mp.items():
+        if isinstance(v, (bool, np.bool_)):
+            out[k] = bool(v)
+        elif isinstance(v, (int, float, np.integer, np.floating)):
+            out[k] = float(v)
+        else:
+            out[k] = v
+    return out
 
 
 def _get_dt_from_model_params(model_params, default_dt=None):
@@ -800,6 +830,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
     direct_offset = model_params['direct_offset']
     gs_outside_adap = bool(model_params.get('gs_outside_adaptation', False))
     prestim_offset_start = model_params['prestim_offset_start']
+    p_offset_always_on = bool(model_params.get('p_offset_always_on', False))
     # print(prestim_offset_start)
 
     def retinal_delay(c, alpha_d, beta_d, actual_dt):
@@ -907,11 +938,11 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                     conc=False
                     del_P = -np.abs(P[0]-P[1])
                 P_gain = np.array([[del_P, 0], [0, del_P]])
-                if k >= (steps_before_obs-prestim_offset_start):
+                if p_offset_always_on or k >= (steps_before_obs-prestim_offset_start):
                     P_offset = J @ P
                 else:
                     P_offset = np.array([0, 0])
-                # P_offset = J @ P
+                # P_offset = J @ P  # equivalent to p_offset_always_on=True
 
                 S0_delayed = perceived_stim[t - delay] if delay > 0 and k >= (delay+steps_before_obs) else np.array([0, 0]) if delay > 0 else S0
                 # g_s feedforward: optionally move g_s outside the adaptation gate
@@ -1255,6 +1286,7 @@ def _run_model_kernel(
     baseline, stim_adap, direct_offset, nonlin_code,
     prestim_offset_start, post_action_steps,
     gs_outside_adap,
+    p_offset_always_on,
     thr_temp,
     u_commit,
     m_sigma,
@@ -1332,7 +1364,7 @@ def _run_model_kernel(
                 del_P = -abs(dP)
                 action_threshold = theta_d
 
-            if k >= (steps_before_obs - prestim_offset_start):
+            if p_offset_always_on or k >= (steps_before_obs - prestim_offset_start):
                 P_offset = _j_apply(P)
             else:
                 P_offset = zero2
@@ -1473,7 +1505,9 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         print('model', model_type,
               'offset_s, offset_i, offset_m, gain_s, gain_i, gain_m:',
               d_s, d_i, d_m, g_s, g_i, g_m, 'nonlin_type:', nonlin_type)
-        print('direct_offset:', model_params['direct_offset'], '(numba backend)')
+        print('direct_offset:', model_params['direct_offset'],
+              'p_offset_always_on:', bool(model_params.get('p_offset_always_on', False)),
+              '(numba backend)')
 
     action_thresholds = model_params['action_thresholds']
     is_thr_dict = isinstance(action_thresholds, dict)
@@ -1545,6 +1579,7 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         bool(model_params['direct_offset']), int(nonlin_code),
         int(model_params['prestim_offset_start']), int(model_params['post_action_steps']),
         bool(model_params.get('gs_outside_adaptation', False)),
+        bool(model_params.get('p_offset_always_on', False)),
         float(thr_temp), u_commit,
         float(m_sigma), z_m,
     )
@@ -1853,6 +1888,7 @@ def _run_model_torch(model_type, stimuli, trial_strengths, trial_sides, block_si
     direct_offset = bool(model_params.get('direct_offset', False))
     gs_outside_adap = bool(model_params.get('gs_outside_adaptation', False))
     prestim_offset_start = int(model_params.get('prestim_offset_start', 0))
+    p_offset_always_on = bool(model_params.get('p_offset_always_on', False))
 
     dt_tensor = torch.tensor(float(dt), dtype=dtype, device=device)
 
@@ -2030,7 +2066,7 @@ def _run_model_torch(model_type, stimuli, trial_strengths, trial_sides, block_si
 
                 conc_indicator = (p_diff * s_diff) >= 0
 
-                if step_idx >= (steps_before_obs - prestim_offset_start):
+                if p_offset_always_on or step_idx >= (steps_before_obs - prestim_offset_start):
                     P_offset = J @ P
                 else:
                     P_offset = torch.zeros(2, dtype=dtype, device=device)
@@ -5214,6 +5250,8 @@ def _loss_plot_diff_by_condition_with_data_torch(
             }
             pen_sum = torch.zeros((), dtype=dtype, device=device)
             any_pen = False
+            if not bool(model_params.get('iti_penalty', True)):
+                arr_iti_prev = {}
             for prev_ch_sign, arr in arr_iti_prev.items():
                 if arr is None:
                     continue
@@ -5307,7 +5345,8 @@ def loss_plot_diff_by_condition_with_data(
            'debug': {'energy': {...}, 'sse_raw': {...}} }
     Notes:
         Adds an intertrial penalty for I and M based on the mean absolute magnitude
-        of each previous-choice-conditioned ITI trace (pushing ITI activity toward zero).
+        of each previous-choice-conditioned ITI trace (pushing ITI activity toward zero),
+        unless model_params['iti_penalty'] is False.
     """
     # Get dt from parameter, model_params, or global default
     if dt is None:
@@ -5520,6 +5559,8 @@ def loss_plot_diff_by_condition_with_data(
             }
             pen_sum = 0.0
             any_pen = False
+            if not bool(model_params.get('iti_penalty', True)):
+                arr_iti_prev = {}
             for prev_ch_sign, arr in arr_iti_prev.items():
                 if arr is None or arr.size == 0:
                     continue

@@ -236,7 +236,13 @@ def build_args(argv=None):
     ap.add_argument("--local-refine-max-wall-s", type=float, default=1800.0,
                     help="safety cap (seconds) on local-refine wall time; keeps best-so-far "
                          "on exceed. Default 1800 (~30 min): covers Powell/prior (~15 min) "
-                         "and CMA/prior (~11 min) under sample aggregate; set 0 to disable.")
+                         "                    and CMA/prior (~11 min) under sample aggregate; set 0 to disable.")
+    ap.add_argument("--p-offset-always-on", action="store_true", default=False,
+                    help="Leave P→S/I/M additive offset on through the ITI "
+                         "(no −100 ms pre-stim gate). Modeling-details test 1.")
+    ap.add_argument("--no-iti-penalty", action="store_true", default=False,
+                    help="Drop I/M −400→−100 ms zero-activity term from traj loss. "
+                         "Modeling-details test 2.")
     return ap.parse_args(argv)
 
 
@@ -330,11 +336,15 @@ def main(argv=None):
 
     # --- model_params (retinal front-end) alignment ---
     for k, v in (resume_meta_mp or {}).items():
+        if k in ("p_offset_always_on", "iti_penalty"):
+            continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
     model_params["direct_offset"] = False
     model_params["dt"] = float(args.dt)
     _update_model_params_for_dt(model_params, float(args.dt))
+    model_params["p_offset_always_on"] = bool(args.p_offset_always_on)
+    model_params["iti_penalty"] = not bool(args.no_iti_penalty)
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -347,7 +357,9 @@ def main(argv=None):
         train_mask[i] = False
     frozen = [PARAM_NAMES[i] for i in freeze_idx]
     print(f"variant mtype={args.mtype} mask={slug} ({frozen or 'none'}) "
-          f"pipeline={args.pipeline} seed={args.seed} n_jobs={args.n_jobs} backend={args.backend}")
+          f"pipeline={args.pipeline} seed={args.seed} n_jobs={args.n_jobs} backend={args.backend} "
+          f"p_offset_always_on={bool(args.p_offset_always_on)} "
+          f"iti_penalty={not bool(args.no_iti_penalty)}")
 
     fw._ensure_run_dirs(run_dir=run_dir)
     print(f"run_dir: {run_dir}")
@@ -429,6 +441,10 @@ def main(argv=None):
         stage2_n_stim_seeds=int(args.stage2_n_stim_seeds),
         stage2_stim_aggregate=args.stage2_stim_aggregate,
         val_stim_seed=val_seed,
+        loss_extra_kwargs={
+            "p_offset_always_on": bool(args.p_offset_always_on),
+            "iti_penalty": not bool(args.no_iti_penalty),
+        },
     )
     wall = time.perf_counter() - wall0
 

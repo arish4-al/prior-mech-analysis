@@ -19,6 +19,8 @@
 #      STAGE2_STIM_AGGREGATE, BACKEND, VAL_SEED,
 #      LOCAL_REFINE_IDX (prior|sensory|retinal|active), LOCAL_REFINE_METHOD,
 #      LOCAL_REFINE_MAX_WALL_S, STAGE1_HOLD_RETINAL (1 → --stage1-hold-retinal).
+#      P_OFFSET_ALWAYS_ON=1 → --p-offset-always-on (test 1).
+#      NO_ITI_PENALTY=1 → --no-iti-penalty (test 2).
 
 set -euo pipefail
 
@@ -58,6 +60,8 @@ LOCAL_REFINE_IDX="${LOCAL_REFINE_IDX:-prior}"
 LOCAL_REFINE_METHOD="${LOCAL_REFINE_METHOD:-powell}"
 LOCAL_REFINE_MAX_WALL_S="${LOCAL_REFINE_MAX_WALL_S:-1800}"
 STAGE1_HOLD_RETINAL="${STAGE1_HOLD_RETINAL:-0}"
+P_OFFSET_ALWAYS_ON="${P_OFFSET_ALWAYS_ON:-0}"
+NO_ITI_PENALTY="${NO_ITI_PENALTY:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -78,6 +82,7 @@ git log -1 --oneline 2>/dev/null || true
 echo "MTYPE=$MTYPE FREEZE='${FREEZE}' SEED=$SEED PIPELINE=$PIPELINE OUT_TAG=${OUT_TAG:-none}"
 echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
+echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -96,6 +101,8 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$RESUME_JSON" ]] && ARGS+=(--resume-json "$RESUME_JSON")
 [[ "$FORCE" == "1" ]] && ARGS+=(--force)
 [[ "$STAGE1_HOLD_RETINAL" == "1" ]] && ARGS+=(--stage1-hold-retinal)
+[[ "$P_OFFSET_ALWAYS_ON" == "1" ]] && ARGS+=(--p-offset-always-on)
+[[ "$NO_ITI_PENALTY" == "1" ]] && ARGS+=(--no-iti-penalty)
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"
