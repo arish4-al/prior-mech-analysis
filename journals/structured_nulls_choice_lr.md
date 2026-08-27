@@ -2,9 +2,9 @@
 
 **Scope:** the problem that an unrestricted label shuffle is too narrow a null when choice/prior labels are temporally autocorrelated and neural responses drift, and every null scheme built to address it — Harris session permutation and ActionKernel synthetic sessions (stratified pseudo and fixed-stim). Late-session / perseveration **trial exclusion** is [sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md), not a structured null.
 
-**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim, and **option 1 + copy-last** (`_pseudo_strat_sticky`, post-08-24 sign/0.5-drop, factor 1). **Choice L–R sticky is more liberal than shuffle** (183 / 184 FDR hits) — do not use as a conservative choice null. **Prior L–R sticky is a total null** (0 FDR), same as Harris unique. `_harris_unique` remains the preferred file for **choice** claims. Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid (sign bug). **2026-08-24d:** fully unsplit act-prior (one pool per window, no stim/choice/f1/f2) wired for Harris unique + AK copy-last; **not yet run.**
+**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim, and **option 1 + copy-last** (`_pseudo_strat_sticky`, post-08-24 sign/0.5-drop, factor 1). **Choice L–R sticky is more liberal than shuffle** (183 / 184 FDR hits) — do not use as a conservative choice null. **Prior L–R f1/f2 and stim-side unsplit:** sticky and Harris unique are **0 FDR @0.01**. **Fully unsplit prior** (08-24e; L+R mixed, no stratum): still 0 FDR @0.01 duringstim (Harris and sticky); duringchoice sticky **11**, Harris **0** (BH p-floor — Harris is *more* liberal on median p and FDR @0.05). Pooling L+R liberalizes both structured nulls; the f1/f2 / stim-side total null is partly a stratum effect, not unique-null thinning. `_harris_unique` remains the preferred file for **choice** claims. Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid (sign bug).
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d:** fully unsplit act-prior campaign.
+Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d / 24e:** fully unsplit act-prior campaign + FDR.
 
 ---
 
@@ -36,10 +36,10 @@ Label autocorrelation **alone** is not sufficient: if trial responses were indep
 | label shuffle (within stim×block)            | `{split}.npy`                 | baseline                              |
 | option 1 — AK stratified pseudo-session      | `{split}_pseudo_strat.npy`    | valid (needs `pseudo_len_factor ≥ 3`) |
 | option 2 — AK fixed real stim×block          | `{split}_pseudo_fixed.npy`    | valid, most liberal (stationary)      |
-| option 1 + copy-last (AK mouse)              | `{split}_pseudo_strat_sticky.npy` | scored 08-24c: choice **liberal** (183/184); prior **0 FDR** |
+| option 1 + copy-last (AK mouse)              | `{split}_pseudo_strat_sticky.npy` | scored 08-24c: choice **liberal** (183/184); prior f1/f2 **0 FDR**. 08-24e fully unsplit: duringstim 0; duringchoice **11** |
 | option 1 + copy-last (Bayes mouse)           | `{split}_pseudo_strat_sticky.npy` | wired for `*_bayes` / `bayes_block_*`; **FDR not yet run** |
 | option 3 — Harris (legacy, with replacement) | `{split}_harris.npy`          | valid after donor re-stratification   |
-| option 3 — Harris **unique-null**            | `{split}_harris_unique.npy`   | **preferred**                         |
+| option 3 — Harris **unique-null**            | `{split}_harris_unique.npy`   | **preferred** (choice). Prior f1/f2 / stim-side unsplit: 0 FDR @0.01. Fully unsplit (08-24e): 0 @0.01; **32 / 39** @0.05 |
 | legacy unconstrained BWM index               | `{split}_pseudosession.npy`   | **invalid** — do not interpret        |
 
 
@@ -1066,7 +1066,109 @@ Outputs: `{split}_harris_unique.npy`, `{split}_pseudo_strat_sticky.npy`.
 Presets: `act_block_harris_fully_unsplit`, `act_block_ak_sticky_fully_unsplit`.
 Plot family: `--family act_block_fully_unsplit`.
 
-**Not done:** run / FDR. Needs these files on `main` for ORCD.
+Scored **2026-08-24e** (local alyx `res/new`; no fully unsplit shuffle, so no comparison-table plot).
+
+---
+
+## 2026-08-24e — fully unsplit prior FDR (Harris unique + option 1 + copy-last)
+
+Local alyx `manifold/res/new/` `{split}_pseudo_strat_sticky.npy` (mtime 2026-08-24 21:13) and `{split}_harris_unique.npy` (21:26). Diagnostic from 08-24d: is the stratified prior=0 FDR a stratum-thinning artefact? BH-FDR on `p_mean` from per-split `*_regde.npy` (one split per window; 72 bins). No fully unsplit shuffle, so no `plot_choice_null_comparison_table.py` vs-shuffle table.
+
+**Coverage.** Sticky and Harris unique both **209 regions / ~63.2–63.4k cells** (matched to stim-side unsplit, not a cell-count jump). Sticky **`n_null=2000` every region**. Harris unique median 2000, but 64 / 66 regions below 2000 (min 352 duringstim, 216 duringchoice); none under 100. Not unique-null collapse of the f2 kind.
+
+| arm | duringstim @0.01 | duringchoice @0.01 | @0.05 stim / choice | median uncorr p | uncorr @0.01 |
+|---|---|---|---|---|---|
+| shuffle, stim-side unsplit (08-17) | **126** | (missing) | 146 / — | 0.001 / — | 134 / — |
+| Harris, f1/f2 (08-14) | **0** | **0** | 0 / 0 | 0.725 / 0.695 | 2 / 1 |
+| Harris, stim-side unsplit (08-17) | **0** | **0** | 9 / 0 | 0.388 / 0.585 | 16 / 2 |
+| sticky, f1/f2 (08-24c) | **0** | **0** | 0 / 0 | 0.944 / 0.940 | 1 / 1 |
+| sticky, stim-side unsplit (08-24c) | **0** | **0** | **0 / 0** | 0.737 / 0.889 | 7 / 0 |
+| **sticky, fully unsplit** | **0** | **11** | **17 / 24** | **0.299 / 0.215** | 21 / 29 |
+| **Harris unique, fully unsplit** | **0** | **0** | **32 / 39** | **0.119 / 0.079** | 34 / 40 |
+
+Observed curve-mean / null-median: sticky 1.04 / 1.07; Harris 1.10 / 1.13. Mixing L+R moves observed curves into the structured-null tail; the null is not collapsed.
+
+**Sticky duringchoice FDR @0.01 (11):** CP, FRP, IRN, MOp, MOs, ORBvl, PL, RT, SCm, SOC, SSs (all `p_c=0.0095`). Motor / prefrontal / striatum — the real-data analog of pooling L+R so choice leaks into the prior contrast.
+
+**Harris duringstim FDR @0.05 (32)** and **duringchoice (39)** overlap that set (IRN, PL, MOp, MOs, SCm, CP, ORBvl, FRP, …) plus CLA, FOTU, GRN, RN, ZI, VISa, etc.
+
+**08-24d answer.** The stratified prior=0 FDR is **not** unique-null thinning (`n_null` still hundreds to 2000). Removing the last stratum **does** liberalize both arms: median p drops from ~0.74/0.89 (stim-side sticky) and ~0.39/0.59 (stim-side Harris) to **0.30/0.22** (sticky) and **0.12/0.08** (Harris). Uncorr @0.01 goes 7→21 (sticky duringstim) and 16→34 (Harris duringstim); duringchoice Harris 2→40.
+
+What still holds at canonical α=0.01:
+
+- **Duringstim:** 0 FDR for Harris **and** sticky even with L+R mixed. α=0.05 does not (Harris 32, sticky 17).
+- **Duringchoice:** sticky **11**; Harris **0**.
+
+**Harris 0 vs sticky 11 at @0.01 is a BH p-floor, not a tighter Harris null.** Harris fully unsplit is *more* liberal: smaller p in 189/209 duringstim and 179/209 duringchoice regions; FDR @0.05 is larger (32/39 vs 17/24). With m=209, BH @0.01 needs ~11 regions at `p=1/2001=0.0005`. Sticky duringchoice had those 11; Harris duringchoice has only 8 at that floor (next hits are coarser, e.g. MOp/MOs/CLA at `1/1347≈0.0007` because `U<2000`). All 11 sticky FDR hits still have Harris `p_mean ≤ 0.0035`.
+
+`p_euc` (amplitude; **not** the claim statistic) would call sticky 37/56 and Harris 36/46 FDR @0.01 — a large peak-to-trough with only a small mean shift. Pooled-all-cells: sticky `p_mean` 0.034 / 0.005; Harris `p_mean = p_euc = 0.0028 / 0.0046` (`n_null` only 352 / 216). Whole-brain is significant; region-wise @0.01 duringstim is not.
+
+**Claim policy (prior).** Stratified (f1/f2 or stim-side) Harris unique / sticky remain 0 FDR @0.01 and are the files for prior L–R claims. Fully unsplit is a diagnostic that those zeros partly reflect keeping stim/choice out of the contrast, not a proof that the structured null is too wide on the stratified splits. Fully unsplit shuffle still missing (same as 08-17 duringchoice unsplit).
+
+---
+
+## 2026-08-24f — why prior=0 FDR / choice inflates: null-label run length + cohort heterogeneity
+
+Diagnostic (local, `iblenv`; scratch scripts `scripts/_tmp_*_diag.py`,
+`scripts/_tmp_cohort_priorrun.py`). Question carried over from 08-24c/e: is the
+prior 0-FDR (and the choice inflation) an artefact of the structured null, and is
+the AK/Harris pseudo a faithful model of the mouse?
+
+**Statistic decomposition.** Null width for `d_euc = Σ_cells (mean_L − mean_R)²`
+has two ingredients: (i) **count/balance** `1/nL + 1/nR` (the i.i.d. sampling
+term shuffle preserves) and (ii) **label run length** = mean consecutive
+same-label stretch in trial order. (ii) only matters because neural `b` **drifts**
+in time: clustered labels make `mean_L` / `mean_R` sample different drift epochs
+→ large, variable distances → wide null. Under stationarity only counts matter.
+
+**Choice vs prior are opposite because the label autocorrelation is opposite.**
+On insertion `4364a246` (choice `choice_duringstim_l_block_l_act`, `n_elig=61`):
+choice labels run ≈**1.2** in real *and* pseudo (against-prior choices are
+scattered), so run length is a non-factor; instead min5 + a less-extreme AK make
+the pseudo minority group *larger* than real (11 vs 6) → `1/nL+1/nR` **0.111 vs
+0.185** → **narrower** null → choice significance **inflated**. For prior
+(`act_block`) the label *is* the block-driven prior, run ≈ **3–8**, so the
+structured null is legitimately **wider** → conservative → 0 FDR. Same insertion,
+`act_block_*` stratified: pseudo is *more* imbalanced + longer-run than real →
+wider null.
+
+**Copy-last is not the culprit; the AK generative process is.** On `4364a246`
+fully-unsplit: real choice one-step run 2.95, prior run **5.64**; base AK choice
+run 2.58 (under) but prior run **7.29**; copy-last choice run 2.82 (≈real, no
+overshoot from `RHO_GAIN=1.27`) yet prior run **7.29 unchanged**. Fitted α=0.193
+≈ label α=0.20 (no time-constant mismatch); no timeout/no-go trials. So copy-last
+matches *one-step* stickiness but the *running-bias* (act-prior) run is decoupled
+and set by the AK, which over-persists on this session.
+
+**Cohort (457 donor sessions, fully-unsplit, choices only).** Own real prior run:
+median **9.95**, IQR [8.0, 12.0], 10/90 [6.9, 14.4], range **[5.0, 50.6]**;
+minority_frac median 0.43. `|log2(own/pop-median)|` median 0.30 (~1.2×), 90th
+0.70 (~1.6×); **2%** of sessions ≥2× off, ~10% in each tail. So mice are
+**heterogeneous** but most sit within ~1.2× of the population.
+
+- **Harris** draws its null run from this population (~independent of the
+  recipient: measured 9.5 on `4364a246` vs pop 9.95). So Harris is ~**calibrated
+  for the median session** but mis-nulls the tails — **conservative** for
+  low-run sessions (like `4364a246`, pctile 3%, run 5.6) and **anti-conservative**
+  for high-run sessions. Not a uniform "too wide."
+- **AK compresses to ~8 for everyone.** AK-sim prior run across 5 local eids:
+  7.75, 8.33, 8.15, 7.76, 8.55 while real spans 5.64→13.43 (AK/real = 1.38,
+  0.83, 0.95, 0.71, 0.64). It **over-persists for low-stickiness mice,
+  under-persists for high-stickiness mice**, and lands *below* the population
+  median (10). So for the typical session the AK null is slightly **narrower**
+  (mildly anti-conservative), yet AK still gives 0 FDR on stratified prior — i.e.
+  the prior 0-FDR is **not** a conservatism artefact for typical sessions.
+
+**Corrections to earlier read.** The 08-24e worry that AK/Harris are "too wide"
+was **outlier-specific**: `4364a246` is a pctile-3% low-perseveration session.
+Cohort-wide, neither null tracks per-session prior run — Harris imposes the
+population distribution, AK compresses to ~8. The count effect (choice) and the
+run-length effect (prior) are the real, opposite drivers.
+
+**Recommended fix (not yet run):** a per-session **self cyclic-shift** (circular
+rotation) of the recipient's *own* prior-label sequence — preserves that mouse's
+exact run length **and** counts, destroys only neural↔label phase alignment.
+Sidesteps both AK compression and Harris heterogeneity. See open question 5.
 
 ---
 
@@ -1076,7 +1178,7 @@ Plot family: `--family act_block_fully_unsplit`.
 2. **Why strat null amplitudes stay below Harris** at matched coverage.
 3. **Fixed α vs per-session action-kernel fit** for act labels — see [prior definitions](prior_definitions.md).
 4. **Drop-0.5 timing mismatch** between prior-distance and choice L–R families — see [prior definitions](prior_definitions.md).
-5. **act_block Harris unique is a near-total null** (0 FDR @0.01). 08-14b: **not** the f2 donor-stratum skip. **2026-08-17 unsplit:** same 0 FDR @0.01. **2026-08-17b early-stim 80 ms:** shuffle FDR shrinks but unsplit stays liberal; Harris still 0 FDR @0.01. **2026-08-18 `act_block_only` ITI:** shuffle already 0 FDR @0.01 (5 at 0.05); Harris unique 0 FDR @0.01 **and** @0.05 (208 regions, 63k cells). **2026-08-24d:** fully unsplit duringstim/duringchoice (no stim/choice stratum) wired for Harris unique + AK copy-last to test whether 0 FDR is stratum thinning; **not yet run.** Remaining question: is the total null the intended correction for block-autocorrelated priors, or is the structured null too wide? Duringchoice unsplit **shuffle** still missing.
-6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. **2026-08-24c FDR** (post sign/0.5-drop, factor 1): choice sticky is **more liberal than shuffle** (183/184 vs 88/122) — not a conservative structured null; Harris unique stays the choice claim. Prior L–R sticky is **0 FDR** (median p ~0.94), same conclusion as Harris unique. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` still invalid (sign bug) and were **not** regenerated in this campaign (`_pseudo_strat_sticky` only). Option-2 (`fixedstim`) sticky FDR remains deleted.
+5. **act_block Harris unique is a near-total null** (0 FDR @0.01) on **stratified** splits. 08-14b: **not** the f2 donor-stratum skip. **2026-08-17 unsplit** (stim-side): same 0 FDR @0.01. **2026-08-17b early-stim 80 ms:** shuffle FDR shrinks but unsplit stays liberal; Harris still 0 FDR @0.01. **2026-08-18 `act_block_only` ITI:** shuffle already 0 FDR @0.01 (5 at 0.05); Harris unique 0 FDR @0.01 **and** @0.05 (208 regions, 63k cells). **2026-08-24e fully unsplit** (no stim/choice/f1/f2): not unique-null thinning (`n_null` 2000 sticky; Harris min 216–352). Pooling L+R **does** liberalize (median p Harris 0.12/0.08, sticky 0.30/0.22; FDR @0.05 Harris **32 / 39**). Canonical @0.01 duringstim still 0 for both; duringchoice sticky **11**, Harris **0** (BH p-floor — Harris more liberal on median p / @0.05). Remaining question: is the stratified total null the intended correction for block-autocorrelated priors, or too wide? Fully unsplit **shuffle** still missing (and duringchoice stim-side unsplit shuffle). **2026-08-24f:** null width is driven by act-prior **label run length** (drift alignment), and neither structured null tracks it per session — Harris imposes the population run distribution (median ~10, IQR [8,12]); AK compresses every session to ~8 (below pop median → mildly *anti*-conservative for typical sessions, so the prior 0-FDR is not a conservatism artefact for them). Proposed per-session fix: self cyclic-shift of the recipient's own prior labels (preserves own run length + counts). Not yet run.
+6. **AK + late stickiness** — 08-22 quintile match on 80 sessions. **2026-08-24c FDR** (post sign/0.5-drop, factor 1): choice sticky is **more liberal than shuffle** (183/184 vs 88/122) — not a conservative structured null; Harris unique stays the choice claim. Prior L–R **stratified** sticky is **0 FDR** (median p ~0.94), same conclusion as Harris unique. **08-24e fully unsplit** sticky duringchoice is **11 FDR @0.01** (Harris 0 at that α, more liberal at @0.05). Pre-08-24 `act_block_*` AK `strat`/`fixedstim` still invalid (sign bug) and were **not** regenerated (`_pseudo_strat_sticky` only). Option-2 (`fixedstim`) sticky FDR remains deleted.
 7. **Bayes mouse vs fitted OptimalBayesian** — 08-23 uses fixed ζ=0.1 / lapse=0.05 (same τ/γ as analysis priors). A per-session OptimalBayesian MCMC fit was not implemented.
 

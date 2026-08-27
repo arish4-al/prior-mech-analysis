@@ -61,6 +61,9 @@ PARAM_NAMES = [
     "g_s", "d_s",
     "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss",
 ]
+W_PP_IDX = 1
+THETA_C_IDX = 10
+THETA_D_IDX = 11
 
 # Native (positive) bounds for documentation / validation. Optimizer uses log/asinh.
 NATIVE_BOUNDS = {
@@ -72,8 +75,43 @@ NATIVE_BOUNDS = {
     "g_s": (1e-1, 2e2), "d_s": (1e-5, 1e2),
     "alpha_w": (1.0, 2.6), "beta_w": BETA_W_NATIVE,
     "alpha_d": (20.0, 40.0), "beta_d": (1e-2, 3.0),
-    "tau_a": (100.0, 400.0), "W_as": (1.0, 50.0), "W_ss": (1e-6, 2e-1),
+    "tau_a": (100.0, 400.0), "W_as": (1.0, 50.0),     "W_ss": (1e-6, 2e-1),
 }
+
+
+def set_w_pp_native_bounds(lo, hi):
+    """Loosen / restore the W_pp box for test 3. Syncs fit_weights + NATIVE_BOUNDS."""
+    pair = fw.set_w_pp_native_bounds(lo, hi)
+    NATIVE_BOUNDS["W_pp"] = pair
+    return pair
+
+
+def overwrite_w_pp_in_theta(theta, w_pp):
+    """Set native W_pp in a log-space vector (index 1)."""
+    th = np.asarray(theta, float).copy()
+    w = float(w_pp)
+    lo, hi = NATIVE_BOUNDS["W_pp"]
+    if not (lo <= w <= hi):
+        raise ValueError(f"W_pp={w} outside native bounds {(lo, hi)}")
+    th[W_PP_IDX] = np.log(w)
+    return th
+
+
+def tie_thresholds_in_theta(theta, how="mean"):
+    """Set theta_c = theta_d in a log-space vector. Default init = mean of the two."""
+    th = np.asarray(theta, float).copy()
+    tc = float(np.exp(th[THETA_C_IDX]))
+    td = float(np.exp(th[THETA_D_IDX]))
+    if how == "c":
+        t = tc
+    elif how == "d":
+        t = td
+    else:
+        t = 0.5 * (tc + td)
+    z = np.log(t)
+    th[THETA_C_IDX] = z
+    th[THETA_D_IDX] = z
+    return th, float(t)
 
 # Larger σ on prior gains (I/M/S) like fit_weights CMA_STDS for g_i/g_m.
 # beta_w σ is in asinh-space (same order as other retinal log dims).
@@ -198,6 +236,8 @@ def apply_joint_to_model_params(theta):
 def unpack_result_joint(theta):
     """Shape expected by fit_weights return sites + joint extras."""
     u = unpack_joint(theta)
+    if bool(model_params.get("tied_thresholds", False)):
+        u["theta_d"] = u["theta_c"]
     return {
         "W": (u["W_ii"], u["W_pp"], u["W_mm"], u["W_is"], u["W_pi"], u["W_mi"]),
         "g": (u["g_i"], u["g_m"]),
@@ -216,7 +256,10 @@ def unpack_result_joint(theta):
 def reconstruct_theta_joint_from_json(meta):
     """Rebuild 21-d vector from joint (or padded weights) JSON."""
     if "theta_log" in meta and len(meta["theta_log"]) == D_JOINT:
-        return np.asarray(meta["theta_log"], float)
+        th = np.asarray(meta["theta_log"], float)
+        if bool((meta.get("model_params") or {}).get("tied_thresholds", False)):
+            th[THETA_D_IDX] = th[THETA_C_IDX]
+        return th
     # Build from groups; pad missing g_s/d_s/retinal from model_params or defaults.
     mp = meta.get("model_params") or {}
     W = meta["W"]
@@ -391,6 +434,10 @@ def write_stage_b_hybrid_json(weights_json, retinal_json, out_json):
 def _payload_joint(theta, loss, train_mask=None, random_state=None, **extra):
     u = unpack_joint(theta)
     theta_arr = np.asarray(theta, float)
+    if bool(model_params.get("tied_thresholds", False)):
+        u["theta_d"] = u["theta_c"]
+        theta_arr = theta_arr.copy()
+        theta_arr[THETA_D_IDX] = theta_arr[THETA_C_IDX]
     if train_mask is not None:
         frozen_idx = np.where(~np.asarray(train_mask, bool))[0].tolist()
     else:
@@ -456,7 +503,8 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     model_type="data", plot=False, debug=False, return_details=False,
                     blocks_per_session_override=None, verbose=True,
                     stim_rng=None, stimuli_bundle=None, avg_data_R=None,
-                    s_baseline=0.0, p_offset_always_on=None, iti_penalty=None):
+                    s_baseline=0.0, p_offset_always_on=None, iti_penalty=None,
+                    tied_thresholds=None):
     """
     Joint loss: one sim → L_w (I/P/M + prior) + L_S (S rms).
     avg_data_R required (passed explicitly or via loss_extra_kwargs).
@@ -479,6 +527,7 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
             model_params,
             p_offset_always_on=p_offset_always_on,
             iti_penalty=iti_penalty,
+            tied_thresholds=tied_thresholds,
         )
 
         if avg_data_R is None:
@@ -624,7 +673,8 @@ def _tracked_loss_joint(theta_log, mean_data_results, prior_regions, behavior, d
 
 
 def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
-                        p_offset_always_on=False, iti_penalty=True, **kwargs):
+                        p_offset_always_on=False, iti_penalty=True,
+                        tied_thresholds=False, **kwargs):
     """
     Joint DE→CMA→polish via fit_weights_two_stage_v2 hooks.
     Requires avg_data_R (S target curves from avg_mean_R.npy).
@@ -640,6 +690,7 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
     extra.setdefault("s_baseline", 0.0)
     extra["p_offset_always_on"] = bool(p_offset_always_on)
     extra["iti_penalty"] = bool(iti_penalty)
+    extra["tied_thresholds"] = bool(tied_thresholds)
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_joint,

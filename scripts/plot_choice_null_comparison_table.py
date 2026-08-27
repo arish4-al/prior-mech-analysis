@@ -35,6 +35,13 @@ python scripts/plot_choice_null_comparison_table.py --family act_block_unsplit \
   --openalyx-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \\
   --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \\
   --arm-tag harris_unique --force-combine --alpha 0.01
+
+# fully unsplit prior, no shuffle: sticky vs Harris unique (α=0.05)
+python scripts/plot_choice_null_comparison_table.py --family act_block_fully_unsplit \\
+  --openalyx-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \\
+  --arm-res ~/Downloads/ONE/alyx.internationalbrainlab.org/manifold/res/new \\
+  --shuffle-tag sticky --arm-tag harris_unique --force-combine --alpha 0.05 \\
+  --out-prefix table_act_block_fully_unsplit_harris_vs_sticky
 """
 from __future__ import annotations
 
@@ -380,6 +387,8 @@ def build_comparison_table(
     family: str = 'choice',
     force_combine_shuffle: bool = False,
     shuffle_res_duringchoice: Path | None = None,
+    shuffle_split_suffix: str = '',
+    shuffle_tag: str = '',
 ) -> pd.DataFrame:
     import analysis_functions as af
 
@@ -398,20 +407,25 @@ def build_comparison_table(
 
     p_base = ptype[:-2] if ptype.endswith('_c') else ptype
     tag = arm_tag.strip().replace(' ', '_')
-    col_s = f'{prefix}_s'
-    col_m = f'{prefix}_m'
+    sh_tag = shuffle_tag.strip().replace(' ', '_') if shuffle_tag else ''
+    col_s = f'{prefix}_s_{sh_tag}' if sh_tag else f'{prefix}_s'
+    col_m = f'{prefix}_m_{sh_tag}' if sh_tag else f'{prefix}_m'
     col_s_arm = f'{prefix}_s_{tag}'
     col_m_arm = f'{prefix}_m_{tag}'
+    left_label = sh_tag or 'shuffle'
     if out_prefix is None:
-        out_prefix = f'table_{spec["out_stem"]}_{tag}_vs_shuffle'
+        out_prefix = (
+            f'table_{spec["out_stem"]}_{tag}_vs_{left_label}'
+            if sh_tag else f'table_{spec["out_stem"]}_{tag}_vs_shuffle'
+        )
 
     shuffle_res_m = shuffle_res_duringchoice or openalyx_res
     shuffle_by_tf = {tf_s: openalyx_res, tf_m: shuffle_res_m}
 
-    print(f'Coverage shuffle ({tf_s}) {openalyx_res}')
-    _split_coverage(openalyx_res, timeframes[tf_s], '')
-    print(f'Coverage shuffle ({tf_m}) {shuffle_res_m}')
-    _split_coverage(shuffle_res_m, timeframes[tf_m], '')
+    print(f'Coverage {left_label} ({tf_s}) {openalyx_res}  suffix={shuffle_split_suffix!r}')
+    _split_coverage(openalyx_res, timeframes[tf_s], shuffle_split_suffix)
+    print(f'Coverage {left_label} ({tf_m}) {shuffle_res_m}  suffix={shuffle_split_suffix!r}')
+    _split_coverage(shuffle_res_m, timeframes[tf_m], shuffle_split_suffix)
     print(f'Coverage {tag} ({tf_s}) {arm_res}')
     _split_coverage(arm_res, timeframes[tf_s], arm_split_suffix)
     print(f'Coverage {tag} ({tf_m}) {arm_res}')
@@ -420,7 +434,7 @@ def build_comparison_table(
     loaded = {}
     for tf in timeframes:
         for label, pth, force, suffix in [
-            ('oa', shuffle_by_tf[tf], force_combine_shuffle, ''),
+            ('oa', shuffle_by_tf[tf], force_combine_shuffle, shuffle_split_suffix),
             ('arm', arm_res, force_combine, arm_split_suffix),
         ]:
             name, d = load_or_build_combined(
@@ -489,29 +503,49 @@ def build_comparison_table(
         out_path=out_path,
     )
 
+    left_m = f'{prefix}_{left_label}'
     df2 = df_to_plot[['region', col_m, col_m_arm]].copy()
     df2 = df2.rename(columns={
-        col_m: f'{prefix}_shuffle',
+        col_m: left_m,
         col_m_arm: f'{prefix}_{tag}',
     })
     out2 = meta_dir / f'{out_prefix}_duringchoice_{ptype}_{alpha}.png'
     plot_table_with_styles(
         df=df2,
         colormap_lookup={
-            f'{prefix}_shuffle': get_cmap_(spec['cmap_m']),
+            left_m: get_cmap_(spec['cmap_m']),
             f'{prefix}_{tag}': get_cmap_(spec['cmap_m']),
         },
         beryl_palette=beryl_palette,
         out_path=out2,
     )
 
+    df_s = df_to_plot[['region', col_s, col_s_arm]].copy()
+    left_s = f'{prefix}_{left_label}'
+    df_s = df_s.rename(columns={
+        col_s: left_s,
+        col_s_arm: f'{prefix}_{tag}',
+    })
+    out_s = meta_dir / f'{out_prefix}_duringstim_{ptype}_{alpha}.png'
+    plot_table_with_styles(
+        df=df_s,
+        colormap_lookup={
+            left_s: get_cmap_(spec['cmap_s']),
+            f'{prefix}_{tag}': get_cmap_(spec['cmap_s']),
+        },
+        beryl_palette=beryl_palette,
+        out_path=out_s,
+    )
+
+    key_s_left = f's_{sh_tag}' if sh_tag else 's'
+    key_m_left = f'm_{sh_tag}' if sh_tag else 'm'
     rows = []
     for reg in region_order:
         row = {'region': reg}
         for label, tf, key in [
-            ('oa', tf_s, 's'),
+            ('oa', tf_s, key_s_left),
             ('arm', tf_s, f's_{tag}'),
-            ('oa', tf_m, 'm'),
+            ('oa', tf_m, key_m_left),
             ('arm', tf_m, f'm_{tag}'),
         ]:
             d = loaded[(label, tf)]
@@ -529,15 +563,21 @@ def build_comparison_table(
     csv_path = meta_dir / f'{out_prefix}_{ptype}_{alpha}.csv'
     summary.to_csv(csv_path, index=False)
 
-    both = summary.dropna(subset=[f'p_s', f'p_s_{tag}', f'p_m', f'p_m_{tag}'])
+    both = summary.dropna(subset=[
+        f'p_{key_s_left}', f'p_s_{tag}', f'p_{key_m_left}', f'p_m_{tag}',
+    ])
     print(f'Wrote {out_path}')
     print(f'Wrote {out2}')
+    print(f'Wrote {out_s}')
     print(f'Wrote {csv_path}')
     print(f'Family={family}  Arm: {arm_res}  tag={tag}  '
-          f'split_suffix={arm_split_suffix!r}')
+          f'split_suffix={arm_split_suffix!r}  '
+          f'{left_label}_suffix={shuffle_split_suffix!r}')
     for epoch, sk, ak, pk, pak in [
-        ('duringstim', 'sig_s', f'sig_s_{tag}', 'p_s', f'p_s_{tag}'),
-        ('duringchoice', 'sig_m', f'sig_m_{tag}', 'p_m', f'p_m_{tag}'),
+        ('duringstim', f'sig_{key_s_left}', f'sig_s_{tag}',
+         f'p_{key_s_left}', f'p_s_{tag}'),
+        ('duringchoice', f'sig_{key_m_left}', f'sig_m_{tag}',
+         f'p_{key_m_left}', f'p_m_{tag}'),
     ]:
         n_sh = int(both[sk].sum())
         n_arm = int(both[ak].sum())
@@ -546,9 +586,9 @@ def build_comparison_table(
         kept = int(((both[sk] == 1) & (both[ak] == 1)).sum())
         med_sh = float(both[pk].median())
         med_arm = float(both[pak].median())
-        print(f'  {epoch}: shuffle={n_sh}  {tag}={n_arm}  '
+        print(f'  {epoch}: {left_label}={n_sh}  {tag}={n_arm}  '
               f'lost={lost} gained={gained} kept={kept}  (n={len(both)})  '
-              f'median p shuffle={med_sh:.3f} / {tag}={med_arm:.3f}')
+              f'median p {left_label}={med_sh:.3f} / {tag}={med_arm:.3f}')
     return df_to_plot
 
 
@@ -570,6 +610,14 @@ def main():
     ap.add_argument('--arm-split-suffix', default='',
                     help='On-disk suffix for arm split files '
                          '(e.g. _pseudosession or _harris; empty = plain shuffle names)')
+    ap.add_argument('--shuffle-split-suffix', default='',
+                    help='On-disk suffix for the left-hand arm (empty = plain '
+                         'shuffle names). Use with --shuffle-tag to plot two '
+                         'structured nulls when shuffle is missing.')
+    ap.add_argument('--shuffle-tag', default='',
+                    help='Column label for the left-hand arm (default: shuffle). '
+                         'If set and --shuffle-split-suffix is empty, uses the '
+                         'same tag→suffix aliases as --arm-tag.')
     ap.add_argument('--out-prefix', default=None,
                     help='Filename prefix under meta/ '
                          '(default: table_{family}_{tag}_vs_shuffle)')
@@ -602,6 +650,12 @@ def main():
     }
     if not suffix and args.arm_tag in tag_aliases:
         suffix = tag_aliases[args.arm_tag]
+    shuffle_suffix = args.shuffle_split_suffix
+    shuffle_tag = args.shuffle_tag
+    if shuffle_tag and not shuffle_suffix and shuffle_tag in tag_aliases:
+        shuffle_suffix = tag_aliases[shuffle_tag]
+    force_left = args.force_combine_shuffle or (
+        bool(shuffle_tag) and args.force_combine)
     build_comparison_table(
         openalyx_res=args.openalyx_res,
         arm_res=arm_res,
@@ -613,8 +667,10 @@ def main():
         out_prefix=args.out_prefix,
         arm_split_suffix=suffix,
         family=args.family,
-        force_combine_shuffle=args.force_combine_shuffle,
+        force_combine_shuffle=force_left,
         shuffle_res_duringchoice=args.shuffle_res_duringchoice,
+        shuffle_split_suffix=shuffle_suffix,
+        shuffle_tag=shuffle_tag,
     )
 
 

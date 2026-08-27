@@ -1,10 +1,10 @@
 # Sticky / end-of-session trial exclusion
 
-**Scope:** dropping late-session and perseveration-tail trials before label-shuffle neural distances — originally as a robustness arm against drift × sticky-label false positives, now also as a possible SNR filter if the end of session is zoned-out noise. Choice L–R has been run; prior L–R has not.
+**Scope:** dropping late-session and perseveration-tail trials before label-shuffle neural distances — originally as a robustness arm against drift × sticky-label false positives, now also as a possible SNR filter if the end of session is zoned-out noise. Choice L–R and act-prior L–R (excl-sticky) have both been run.
 
-**Status:** implemented and compared for **choice L–R only**. Exclusion **widens** the FDR map. Late behaviour: not zoned-out, not more block-aligned. Post-0.5 quintiles (08-21): stickiness peaks in **Q4**, not the last 20 % (Q5); only RT is a Q5 outlier. Prior L–R excl-sticky is **wired** (2026-08-23) but not yet run.
+**Status:** choice L–R FDR **widens**. Act-prior L–R under the same trim **does not** go Harris-null. Canonical **4-split duringstim** (08-25, both f2 files in) matches duringchoice 4-split: **expands @0.05 / shrinks @0.01**. Split-conditioned **f1** and **unsplit** duringstim still **shrink** at both α. Late behaviour: not zoned-out, not more block-aligned. Post-0.5 quintiles (08-21): stickiness peaks in **Q4**, not the last 20 % (Q5); only RT is a Q5 outlier.
 
-Sources: dated entries in [structured nulls](structured_nulls_choice_lr.md) 07-20 (exclusion API), 07-20b (BWM counts), 07-21 (choice FDR comparison), 07-21b (SC regtype); choice-epoch stickiness 07-13 / 07-13b **in this file**; 2026-08-18 / 08-18b–g / **08-21** (quintiles) / **08-21 AK late-sticky**; **08-23** (prior L–R submitter).
+Sources: dated entries in [structured nulls](structured_nulls_choice_lr.md) 07-20 (exclusion API), 07-20b (BWM counts), 07-21 (choice FDR comparison), 07-21b (SC regtype); choice-epoch stickiness 07-13 / 07-13b **in this file**; 2026-08-18 / 08-18b–g / **08-21** (quintiles) / **08-21 AK late-sticky**; **08-23** (prior L–R submitter); **08-24** (prior L–R FDR, incomplete 4-split); **08-25** (canonical 4-split duringstim).
 
 ---
 
@@ -382,22 +382,102 @@ PRESET=act_block_excl_sticky_unsplit_duringstim bash scripts/submit_goal2_act_bl
 
 ---
 
+## 2026-08-24 — act-prior L–R excl-sticky FDR
+
+Local alyx `manifold/res_excl_sticky/` (mtime 2026-08-24 21:55–21:58). Label shuffle after late 20 % ∪ pers-tail drop; `n_null=2000` (p-floor 0.0005). Same combine as 08-14: sum `*_regde` → `p_mean` → BH-FDR. Shuffle duringstim / unsplit = alyx `res/new` min5; duringchoice 4-split shuffle = **openalyx pre-min5** (no alyx counterpart, same caveat as 08-14). Harris unique from `res/new`.
+
+**Missing file:** `act_block_duringstim_l_choice_r_f2` did not land, so the canonical **4-split duringstim** excl combine is blocked. Duringchoice 4, duringstim f1 (both files), one duringstim f2, and unsplit duringstim are complete.
+
+### Coverage (pooled `{split}.npy`)
+
+| split | shuffle nreg / cells | excl nreg / cells | cells kept |
+| ----- | -------------------- | ----------------- | ---------- |
+| duringstim f1 (`*_choice_*_f1`) | 207–208 / 62.5–62.6 k | 205–207 / 60.5–60.7 k | ~97 % |
+| duringstim f2 `r_choice_l_f2` | 200 / 55.2 k | 172 / 31.2 k | **57 %** |
+| duringstim f2 `l_choice_r_f2` | 201 / 56.0 k | **MISSING** | — |
+| duringchoice f1 | 207–208 / 62.5–62.7 k | 206–207 / 60.6–60.9 k | ~97 % |
+| duringchoice f2 | 200–202 / 55.5–56.3 k | 176–184 / 31.6–34.2 k | **57–61 %** |
+| unsplit duringstim `{l,r}` | 207–209 / 62.8 k | 205–207 / 61.1 k | ~97 % |
+
+f1 / unsplit lose a few percent of cells (late∪pers trim + `min_trials_per_side`). f2 is already sparse; exclusion cuts it almost in half. `trial_exclusion` stats are not stored on the pooled region dicts.
+
+### FDR (`p_mean`, BH)
+
+Shared-region lost/gained vs the shuffle combine of the **same split list**. Harris unique of that list is 0 FDR @0.01 in every split-conditioned row (matches 08-14 / 08-14b / 08-17).
+
+| combine | α | shuffle FDR | excl FDR | lost | gained | kept | median p sh / excl |
+| ------- | - | ----------- | -------- | ---- | ------ | ---- | ------------------ |
+| duringchoice **4** | 0.05 | 52 | **71** | 18 | 37 | 34 | 0.089 / 0.078 |
+| duringchoice **4** | 0.01 | 42 | **33** | 22 | 13 | 20 | 0.089 / 0.078 |
+| duringstim **f1 only** | 0.05 | 129 | **106** | 30 | 7 | 99 | 0.009 / 0.021 |
+| duringstim **f1 only** | 0.01 | 89 | **72** | 29 | 12 | 60 | 0.009 / 0.021 |
+| duringstim **3** (no `l_choice_r_f2`) | 0.05 | 69 | 67 | 29 | 27 | 40 | 0.085 / 0.071 |
+| duringstim **3** (no `l_choice_r_f2`) | 0.01 | 45 | 37 | 25 | 17 | 20 | 0.085 / 0.071 |
+| unsplit duringstim | 0.05 | 146 | **127** | 27 | 9 | 118 | 0.001 / 0.008 |
+| unsplit duringstim | 0.01 | 126 | **95** | 38 | 8 | 87 | 0.001 / 0.008 |
+
+Shuffle duringstim **4-split** still FDR **42** @0.01 (08-14 reproduced). Shuffle f1-only 89 and unsplit 126 also match 08-14b / 08-17.
+
+Median `amp_euc` excl/shuffle: duringchoice 4 **0.76**; duringstim 3 0.86; f1 **1.13**; unsplit **1.09**. f1/unsplit distances are not smaller; p-values get worse (fewer p at the 0.0005 floor: f1 64→45, unsplit 99→67). Duringchoice 4-split @0.01 FDR drops 42→33 even though uncorr ≤0.01 rises 46→61 — extra hits sit off the p-floor and fail BH.
+
+Harris unique remains 0 FDR @0.01 on every split-conditioned combine (duringchoice 4, duringstim 3, f1). Unsplit Harris is still 0 @0.01 and 9 @0.05 (08-17), vs excl 95 / 127.
+
+Plots / CSV (alyx `meta/`; 2 columns, shuffle vs excl):
+
+- `table_act_block_excl_sticky_vs_shuffle_duringchoice_p_mean_c_{0.05,0.01}.png`
+- `table_act_block_excl_sticky_vs_shuffle_duringstim_f1_p_mean_c_{0.05,0.01}.png`
+- `table_act_block_excl_sticky_vs_shuffle_unsplit_duringstim_p_mean_c_{0.05,0.01}.png`
+
+**Interpretation:** the trim is **not** Harris. Choice L–R expanded; prior f1 and unsplit duringstim **shrink** and stay far above Harris-null. That is closer to the original “drop late/sticky trials, lose some shuffle hits” story than to “drop zoned-out noise, raise SNR,” and it does not explain why Harris wipes prior maps (label autocorrelation under a donor-prior null). Duringchoice 4-split is mixed by α (wider @0.05, narrower @0.01) and still uses the pre-min5 openalyx shuffle. Do not treat the missing duringstim f2 as a 4-split result; f1-only is the fair duringstim comparison (08-14b: shuffle prior is almost entirely f1). Canonical 4-split duringstim completed **2026-08-25**.
+
+---
+
+## 2026-08-25 — act-prior duringstim 4-split excl-sticky FDR (canonical)
+
+`act_block_duringstim_l_choice_r_f2` landed locally (mtime 2026-08-25 09:51; 184 regions / 33.9 k cells, `n_null=2000`). Shuffle counterpart: 201 / 56.0 k (~**60 %** cells kept, same as the other duringstim f2). All 10 requested splits are now in `res_excl_sticky/`. Same combine as 08-24 / 08-14: sum `*_regde` → `p_mean` → BH-FDR. Shuffle duringstim 4-split from alyx `res/new` min5 (FDR **42** @0.01 reproduced). Duringchoice 4 / f1 / unsplit numbers unchanged from 08-24.
+
+### Coverage (new file)
+
+| split | shuffle nreg / cells | excl nreg / cells | cells kept |
+| ----- | -------------------- | ----------------- | ---------- |
+| duringstim f2 `l_choice_r_f2` | 201 / 56.0 k | 184 / 33.9 k | **60 %** |
+| duringstim f2 `r_choice_l_f2` (08-24) | 200 / 55.2 k | 172 / 31.2 k | **57 %** |
+
+### FDR (`p_mean`, BH)
+
+| combine | α | shuffle FDR | excl FDR | lost | gained | kept | median p sh / excl |
+| ------- | - | ----------- | -------- | ---- | ------ | ---- | ------------------ |
+| duringstim **4** | 0.05 | 56 | **69** | 22 | 35 | 34 | 0.119 / 0.080 |
+| duringstim **4** | 0.01 | 42 | **28** | 24 | 10 | 18 | 0.119 / 0.080 |
+| duringchoice **4** | 0.05 | 52 | **71** | 18 | 37 | 34 | 0.089 / 0.078 |
+| duringchoice **4** | 0.01 | 42 | **33** | 22 | 13 | 20 | 0.089 / 0.078 |
+| unsplit duringstim | 0.05 | 146 | **127** | 27 | 9 | 118 | 0.001 / 0.008 |
+| unsplit duringstim | 0.01 | 126 | **95** | 38 | 8 | 87 | 0.001 / 0.008 |
+
+Harris unique of the duringstim **4-split** remains **0 FDR** at both 0.05 and 0.01 (uncorr 3 / 2). f2-only shuffle is already 0 FDR at both α; excl adds 4 hits only at 0.05.
+
+Uncorr vs FDR on the 4-split: @0.05 uncorr 75→92 and FDR 56→**69** (both up); @0.01 uncorr 54→59 but FDR 42→**28** — extra hits sit off the p-floor (shuffle 25 → excl 22 regions at p≤0.0005) and fail BH. Same mixed-α pattern as duringchoice 4-split.
+
+Median `amp_euc` excl/shuffle: duringstim 4 **0.77**; f2-only 0.73; duringchoice 4 0.76; f1 **1.13**; unsplit **1.09**. The 4-split amplitude is pulled by f2 (smaller distances), not by f1.
+
+Plots / CSV (alyx `meta/`):
+
+- `table_act_block_excl_sticky_vs_shuffle_duringstim_p_mean_c_{0.05,0.01}.*` (2-col, canonical 4-split)
+- `table_act_block_excl_sticky_vs_shuffle_p_mean_c_{0.05,0.01}.png` (4-col: duringstim 4 + duringchoice 4, shuffle vs excl)
+
+The incomplete 08-24 3-split duringstim row is superseded.
+
+**Interpretation:** with both f2 files in, canonical **4-split duringstim** is no longer a shrink-at-both-α map. It tracks duringchoice 4-split (wider @0.05, narrower @0.01). The f1-only and unsplit maps still **shrink** at both α and still have tens of FDR hits (72 / 95 @0.01). Harris unique is still 0 @0.01 on every split-conditioned combine. The trim is still **not** Harris: it does not wipe prior maps. The 4-split expansion @0.05 is f2-driven (shuffle f2 FDR = 0; excl f2 FDR = 4; cell retention ~57–60 %). f1 remains the fair “where shuffle prior lives” comparison (08-14b).
+
+---
+
 ## Next investigations
 
 ### 3. Same exclusion on prior L–R splits
 
-Wired **2026-08-23** (not yet submitted). Default preset is the 8 split-conditioned + unsplit duringstim only. Still missing: a combine table vs the existing min5 shuffle (and vs Harris unique); `act_block_only` and unsplit duringchoice were left out.
+**Done 2026-08-25** for the full 8 split-conditioned splits + unsplit duringstim (canonical 4-split duringstim complete). Still not run: `act_block_only`, unsplit duringchoice, and a duringchoice 4-split vs **min5** shuffle if that baseline is ever copied to alyx.
 
-```bash
-bash scripts/submit_goal2_act_block_excl_sticky_sharded.sh
-```
-
-**What would change our mind**
-
-- Prior FDR **shrinks** after exclusion → more consistent with removing a late-session drift confound (the original story), and would make the choice expansion the odd one out.
-- Prior FDR **grows or holds** → the trim is not removing a prior false-positive either. Combined with 08-18b (late trials are slower, not inaccurate), that would point away from “drop zoned-out noise for SNR” and toward composition / trial-count / neural variability. Harris unique still wiping prior maps would then be a different mechanism (label autocorrelation under a donor-prior null), not “late sticky trials.”
-
-Do **not** treat excl-sticky as a replacement for Harris. If both are run, they answer different questions (trim then shuffle vs keep all trials and widen the null).
+Do **not** treat excl-sticky as a replacement for Harris. 4-split maps are mixed by α; f1 / unsplit shrink but leave tens of FDR hits; Harris unique is still 0 @0.01.
 
 ---
 
@@ -405,7 +485,7 @@ Do **not** treat excl-sticky as a replacement for Harris. If both are run, they 
 
 1. **Overlap (answered 08-18b):** sticky tails are spread through the session (median 19 % in the last 20 %). The pers rule is an extra ~5 % cut, not redundant with late.
 2. **Behaviour in the last 20 % (answered 08-18b–g / 08-21):** not zoned-out inaccurate; not more true-block-aligned. Calendar mean run vs pooled early 80 % is longer (08-18f), but quintiles of the post-0.5 sequence show that bump **peaks in Q4**, not Q5. RT is the only Q5 outlier vs Q1–Q4. Last 10 % is slower and *less* autocorrelated (08-18g).
-3. **Why choice FDR expands:** not because late trials are behavioural failures. Still open: late neural variability (RT slowing), n_L/n_R / trial-count, or a real choice signal diluted by late trials for another reason.
-4. **Prior L–R under the same trim:** jobs are wired (08-23) but not yet run. Does the map shrink, grow, or stay Harris-null? The zoned-out-SNR prediction is weaker now; this is still the clean test of whether the trim moves prior maps the same way as choice.
+3. **Why choice FDR expands:** not because late trials are behavioural failures. Still open: late neural variability (RT slowing), n_L/n_R / trial-count, or a real choice signal diluted by late trials for another reason. Canonical prior **4-split** now expands at FDR 0.05 too (08-25); f1/unsplit still shrink.
+4. **Prior L–R under the same trim (answered 08-25):** canonical 4-split duringstim **expands @0.05 (56→69) / shrinks @0.01 (42→28)**, same mixed-α pattern as duringchoice 4. f1 and unsplit still **shrink**, not Harris-null. f2-only shuffle FDR is 0; excl adds 4 hits only @0.05.
 5. Re-plot choice excl-sticky against the **min5** shuffle baseline (08-14), not only pre-min5 openalyx.
 6. This remains a robustness arm next to Harris, not the primary structured null ([structured nulls](structured_nulls_choice_lr.md) open question 1).
