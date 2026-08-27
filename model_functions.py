@@ -257,6 +257,8 @@ model_params = {
     'p_offset_always_on': False,
     # If False, skip the I/M −400→−100 ms zero-activity term in the traj loss.
     'iti_penalty': True,
+    # If True, discordant action threshold is copied from concordant (one θ).
+    'tied_thresholds': False,
     'dt': _DEFAULT_DT,  # Set default dt in model_params
 }
 
@@ -321,8 +323,42 @@ def _compute_dt_dependent_params(dt_value):
     }
 
 
-def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None):
-    """Set ITI P-offset / I/M ITI-penalty flags (call inside each loss eval).
+def tau_delta_ms(w, tau=20.0):
+    """Difference-mode timescale (ms): τ_Δ ≈ τ / (1 − 2W). W ≥ ½ → inf."""
+    den = 1.0 - 2.0 * float(w)
+    if den <= 0.0:
+        return float("inf")
+    return float(tau) / den
+
+
+def apply_tied_action_thresholds(mp):
+    """If ``tied_thresholds``, both conc/disc get the concordant (or scalar) value."""
+    if not bool(mp.get("tied_thresholds", False)):
+        return mp
+    th = mp.get("action_thresholds")
+    if th is None:
+        return mp
+    if isinstance(th, dict):
+        conc = th.get("concordant") or {}
+        if 0.0 in conc:
+            theta = float(conc[0.0])
+        elif conc:
+            theta = float(next(iter(conc.values())))
+        else:
+            return mp
+        keys = list(conc.keys()) or [1.0, 0.25, 0.125, 0.0625, 0.0]
+        mp["action_thresholds"] = {
+            "concordant": {c: theta for c in keys},
+            "discordant": {c: theta for c in keys},
+        }
+    else:
+        mp["action_thresholds"] = float(th)
+    return mp
+
+
+def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
+                               tied_thresholds=None):
+    """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
     through ``loss_extra_kwargs`` and applying them here is what the workers see.
@@ -331,6 +367,9 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None):
         mp["p_offset_always_on"] = bool(p_offset_always_on)
     if iti_penalty is not None:
         mp["iti_penalty"] = bool(iti_penalty)
+    if tied_thresholds is not None:
+        mp["tied_thresholds"] = bool(tied_thresholds)
+    apply_tied_action_thresholds(mp)
     return mp
 
 

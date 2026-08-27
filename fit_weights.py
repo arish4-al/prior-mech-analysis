@@ -140,6 +140,11 @@ def _save_params_v2(theta_log, loss, tag="v2", random_state=None, train_mask=Non
     """
     (W_ii, W_pp, W_mm, W_is, W_pi, W_mi,
      g_i, g_m, d_i, d_m, theta_c, theta_d) = _unpack_log_params_weights_v2(theta_log)
+    theta_log_arr = np.asarray(theta_log, float)
+    if bool(model_params.get("tied_thresholds", False)):
+        theta_d = theta_c
+        theta_log_arr = theta_log_arr.copy()
+        theta_log_arr[11] = theta_log_arr[10]
 
     if _RUN_DIR is None:
         _ensure_run_dirs()
@@ -150,7 +155,6 @@ def _save_params_v2(theta_log, loss, tag="v2", random_state=None, train_mask=Non
 
     # mask/frozen info
     LOG_ZERO, tol = -30.0, 1e-8
-    theta_log_arr = np.asarray(theta_log, float)
     frozen_idx = np.where(np.isclose(theta_log_arr, LOG_ZERO, atol=tol))[0].tolist()
     train_mask_list = (np.asarray(train_mask, bool).tolist() if train_mask is not None else None)
     grad_list = np.asarray(grad, float).tolist() if grad is not None else None
@@ -564,6 +568,26 @@ def pack_theta_log_weights_v2(init_params):
     return np.log(v)
 
 
+# Native W_pp box. Slow-P floor: 0.496 → τ_P,Δ = 2.5 s (tau_p=20 ms).
+# Test 3 can loosen the floor via set_w_pp_native_bounds; hi must stay < 0.5.
+W_PP_NATIVE_BOUNDS = (0.496, 0.49999)
+
+
+def set_w_pp_native_bounds(lo, hi):
+    """Override the W_pp native box used by ``_log_bounds_weights_v2``.
+
+    Require ``0 < lo < hi < 0.5`` (difference-mode τ_Δ diverges at W=½).
+    """
+    global W_PP_NATIVE_BOUNDS
+    lo, hi = float(lo), float(hi)
+    if not (0.0 < lo < hi < 0.5):
+        raise ValueError(
+            f"W_pp bounds must satisfy 0 < lo < hi < 0.5; got {(lo, hi)}"
+        )
+    W_PP_NATIVE_BOUNDS = (lo, hi)
+    return W_PP_NATIVE_BOUNDS
+
+
 def _log_bounds_weights_v2():
     # btau_i = (40.0,   200.0)
     # btau_p = (1000.0, 2000.0)
@@ -571,7 +595,7 @@ def _log_bounds_weights_v2():
 
     # individual weight bounds
     bW_ii = (2e-1, 0.49)
-    bW_pp = (0.496, 0.49999)
+    bW_pp = W_PP_NATIVE_BOUNDS
     bW_mm = (1e-1, 0.40)
     bW_is = (1e-4, 5)
     bW_pi = (1e-7, 1e-1)
@@ -663,7 +687,8 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          model_type='data', plot=False, debug=False, return_details=False,
                          blocks_per_session_override=None, verbose=True,
                          stim_rng=None, stimuli_bundle=None,
-                         p_offset_always_on=None, iti_penalty=None):
+                         p_offset_always_on=None, iti_penalty=None,
+                         tied_thresholds=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
     Combines trajectory, prior-effect, and behavioral losses.
@@ -688,12 +713,6 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 print("EXC@unpack(weights_v2):", traceback.format_exc().splitlines()[-1])
             return 1e12
 
-        apply_model_ablation_flags(
-            model_params,
-            p_offset_always_on=p_offset_always_on,
-            iti_penalty=iti_penalty,
-        )
-
         model_params.update({
             # taus remain fixed in model_params
             'W_ii': W_ii, 'W_pp': W_pp, 'W_mm': W_mm,
@@ -705,6 +724,12 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 'discordant': {c: theta_d for c in [1.0, 0.25, 0.125, 0.0625, 0.0]},
             },
         })
+        apply_model_ablation_flags(
+            model_params,
+            p_offset_always_on=p_offset_always_on,
+            iti_penalty=iti_penalty,
+            tied_thresholds=tied_thresholds,
+        )
 
         # ---------- STIMULI ----------
         try:

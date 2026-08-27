@@ -52,6 +52,7 @@ from model_functions import (
     model_params,
     save_dir,
     _update_model_params_for_dt,
+    tau_delta_ms,
 )
 import fit_weights as fw
 from fit_weights import disable_realtime_plot, loss_history, _eval_counter
@@ -63,8 +64,14 @@ from fit_joint import (
     DEFAULT_REFINE_IDX,
     SENSORY_REFINE_IDX,
     RETINAL_REFINE_IDX,
+    NATIVE_BOUNDS,
+    THETA_C_IDX,
+    THETA_D_IDX,
     fit_joint_two_stage,
     reconstruct_theta_joint_from_json,
+    set_w_pp_native_bounds,
+    overwrite_w_pp_in_theta,
+    tie_thresholds_in_theta,
     _save_params_joint,
 )
 
@@ -142,6 +149,9 @@ def _find_resume(run_dir: Path):
                 theta = reconstruct_theta_joint_from_json(meta)
             if theta.size != D_JOINT or not np.all(np.isfinite(theta)):
                 continue
+            if bool((meta.get("model_params") or {}).get("tied_thresholds", False)):
+                theta = np.asarray(theta, float).copy()
+                theta[THETA_D_IDX] = theta[THETA_C_IDX]
             raw_loss = meta.get("loss", 1.0)
             try:
                 loss = float(1.0 if raw_loss is None else raw_loss)
@@ -242,12 +252,27 @@ def build_args(argv=None):
     ap.add_argument("--no-iti-penalty", action="store_true", default=False,
                     help="Drop I/M −400→−100 ms zero-activity term from traj loss. "
                          "Modeling-details test 2.")
+    ap.add_argument("--w-pp-lo", type=float, default=None,
+                    help="Native W_pp lower bound (default 0.496). Test 3 open box.")
+    ap.add_argument("--w-pp-hi", type=float, default=None,
+                    help="Native W_pp upper bound (default 0.49999; must be < 0.5).")
+    ap.add_argument("--set-w-pp", type=float, default=None,
+                    help="Overwrite W_pp in the warm-start vector (native). Test 3.")
+    ap.add_argument("--tied-thresholds", action="store_true", default=False,
+                    help="Tie theta_c = theta_d (one free param; freeze theta_d). "
+                         "Modeling-details test 4.")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
     args = build_args(argv)
+    if (args.w_pp_lo is None) ^ (args.w_pp_hi is None):
+        raise SystemExit("--w-pp-lo and --w-pp-hi must be set together")
+    if args.w_pp_lo is not None:
+        set_w_pp_native_bounds(args.w_pp_lo, args.w_pp_hi)
     freeze_idx = _parse_freeze(args.freeze)
+    if args.tied_thresholds and THETA_D_IDX not in freeze_idx:
+        freeze_idx = sorted(set(freeze_idx) | {THETA_D_IDX})
     slug = _mask_slug(freeze_idx)
 
     prefix = f"fj_{args.out_tag}_" if args.out_tag else "fj_"
@@ -311,8 +336,29 @@ def main(argv=None):
     if args.pipeline == "cma_only" and resume_theta is None:
         raise SystemExit("--pipeline cma_only needs --resume-json or an in-folder ckpt")
 
+    # Only rewrite W_pp / θ on an *external* warm start. Re-applying on an
+    # in-folder ckpt would reset W_pp and, for --tied-thresholds, average
+    # theta_c with freeze-fill LOG_ZERO (≈0) and halve the threshold.
+    external_init = (
+        resume_theta is not None
+        and resume_source is not None
+        and str(resume_source).startswith("external:")
+    )
+    if external_init:
+        if args.set_w_pp is not None:
+            resume_theta = overwrite_w_pp_in_theta(resume_theta, args.set_w_pp)
+            print(
+                f"[test3] set W_pp={args.set_w_pp:g} "
+                f"(τ_Δ={tau_delta_ms(args.set_w_pp):.0f} ms)"
+            )
+        if args.tied_thresholds:
+            resume_theta, t0 = tie_thresholds_in_theta(resume_theta, how="mean")
+            print(f"[test4] tied theta_c=theta_d={t0:.4f} (mean of resume)")
+    elif args.set_w_pp is not None:
+        print("[test3] --set-w-pp skipped (not an external warm start)")
+
     for k, v in (resume_meta_mp or {}).items():
-        if k in ("p_offset_always_on", "iti_penalty"):
+        if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -321,6 +367,7 @@ def main(argv=None):
     _update_model_params_for_dt(model_params, float(args.dt))
     model_params["p_offset_always_on"] = bool(args.p_offset_always_on)
     model_params["iti_penalty"] = not bool(args.no_iti_penalty)
+    model_params["tied_thresholds"] = bool(args.tied_thresholds)
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -347,7 +394,11 @@ def main(argv=None):
           f"bps1={args.bps_stage1} bps2={args.bps_stage2} "
           f"hold_retinal={bool(args.stage1_hold_retinal)} "
           f"p_offset_always_on={bool(args.p_offset_always_on)} "
-          f"iti_penalty={not bool(args.no_iti_penalty)}")
+          f"iti_penalty={not bool(args.no_iti_penalty)} "
+          f"tied_thresholds={bool(args.tied_thresholds)} "
+          f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
+          f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
+          f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
 
     fw._ensure_run_dirs(run_dir=run_dir)
     print(f"run_dir: {run_dir}")
@@ -469,6 +520,7 @@ def main(argv=None):
         val_stim_seed=val_seed,
         p_offset_always_on=bool(args.p_offset_always_on),
         iti_penalty=not bool(args.no_iti_penalty),
+        tied_thresholds=bool(args.tied_thresholds),
     )
     wall = time.perf_counter() - wall0
 
@@ -484,6 +536,9 @@ def main(argv=None):
         "stage1_hold_retinal": bool(args.stage1_hold_retinal),
         "p_offset_always_on": bool(args.p_offset_always_on),
         "iti_penalty": not bool(args.no_iti_penalty),
+        "tied_thresholds": bool(args.tied_thresholds),
+        "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
+        "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
         "resume_source": resume_source,
         "val_seed": val_seed,
         "n_jobs": args.n_jobs,

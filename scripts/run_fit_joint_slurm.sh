@@ -21,6 +21,8 @@
 #      LOCAL_REFINE_MAX_WALL_S, STAGE1_HOLD_RETINAL (1 → --stage1-hold-retinal).
 #      P_OFFSET_ALWAYS_ON=1 → --p-offset-always-on (test 1).
 #      NO_ITI_PENALTY=1 → --no-iti-penalty (test 2).
+#      W_PP_LO / W_PP_HI / SET_W_PP → --w-pp-lo/hi --set-w-pp (test 3).
+#      TIED_THRESHOLDS=1 → --tied-thresholds (test 4).
 
 set -euo pipefail
 
@@ -62,6 +64,10 @@ LOCAL_REFINE_MAX_WALL_S="${LOCAL_REFINE_MAX_WALL_S:-1800}"
 STAGE1_HOLD_RETINAL="${STAGE1_HOLD_RETINAL:-0}"
 P_OFFSET_ALWAYS_ON="${P_OFFSET_ALWAYS_ON:-0}"
 NO_ITI_PENALTY="${NO_ITI_PENALTY:-0}"
+W_PP_LO="${W_PP_LO:-}"
+W_PP_HI="${W_PP_HI:-}"
+SET_W_PP="${SET_W_PP:-}"
+TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -83,6 +89,7 @@ echo "MTYPE=$MTYPE FREEZE='${FREEZE}' SEED=$SEED PIPELINE=$PIPELINE OUT_TAG=${OU
 echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
+echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -103,6 +110,10 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ "$STAGE1_HOLD_RETINAL" == "1" ]] && ARGS+=(--stage1-hold-retinal)
 [[ "$P_OFFSET_ALWAYS_ON" == "1" ]] && ARGS+=(--p-offset-always-on)
 [[ "$NO_ITI_PENALTY" == "1" ]] && ARGS+=(--no-iti-penalty)
+[[ -n "$W_PP_LO" ]] && ARGS+=(--w-pp-lo "$W_PP_LO")
+[[ -n "$W_PP_HI" ]] && ARGS+=(--w-pp-hi "$W_PP_HI")
+[[ -n "$SET_W_PP" ]] && ARGS+=(--set-w-pp "$SET_W_PP")
+[[ "$TIED_THRESHOLDS" == "1" ]] && ARGS+=(--tied-thresholds)
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"
