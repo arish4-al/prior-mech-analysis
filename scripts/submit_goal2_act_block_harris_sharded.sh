@@ -55,8 +55,13 @@ CPUS_FIN="${CPUS_FIN:-2}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
+# Always --requeue (override with SBATCH_EXTRA=""). Requeued shards keep
+# stream_acc; RESTART=1 skips insertions already in the shard file.
+# CLEAR_STREAM only runs in this wrapper, not on Slurm requeue.
+SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
+export SBATCH_EXTRA
 
 export SESSION_SHUFFLE_NULL=1
 export ACTKERNEL_CHOICE_NULL=0
@@ -102,8 +107,8 @@ fi
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=harris_unique (act_block prior L–R)"
 echo "PRESET=$PRESET  N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}"
-echo "CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS"
-echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
+echo "CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS  RESTART=$RESTART"
+echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD  shard_jobs=$n_shard_jobs"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}${SUFFIX}.npy"
 printf '  %s\n' "${SPLITS[@]}"
 
@@ -119,7 +124,8 @@ if [[ -n "${DONOR_JID:-}" ]]; then
   DEP_AFTER="--dependency=afterok:${DONOR_JID}"
 elif [[ "$REBUILD_DONORS" == "1" ]]; then
   # Force rebuild so contrast_left/right are present for Goal-3 / contrast splits.
-  DONOR_JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  DONOR_JID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
     --job-name="g2_choice_donors" \
@@ -134,7 +140,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     # shellcheck disable=SC2086
-    JID=$(sbatch --parsable \
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
@@ -145,7 +151,8 @@ for sp in "${SPLITS[@]}"; do
     echo "  $sp shard $k/$N_SHARDS -> $JID"
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \

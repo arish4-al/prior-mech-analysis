@@ -11,7 +11,9 @@
 #
 #   bash scripts/submit_goal2_bayes_shuffle_orcd.sh
 #   FAMILY=stim|choice|all
-#   PARTITION=mit_normal bash scripts/submit_goal2_bayes_shuffle_orcd.sh
+#   PARTITION=mit_preemptable bash scripts/submit_goal2_bayes_shuffle_orcd.sh
+#     --requeue always; RESTART=1 skips insertions already in stream_acc
+#   If you re-run this wrapper after a crash: CLEAR_STREAM=0
 #
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
@@ -24,7 +26,10 @@ PARTITION="${PARTITION:-pi_fiete}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
-export NRAND N_SHARDS PARTITION CLEAR_STREAM
+RESTART="${RESTART:-1}"
+export NRAND N_SHARDS PARTITION CLEAR_STREAM RESTART
+SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
+export SBATCH_EXTRA
 
 if [[ "$FAMILY" != "stim" && "$FAMILY" != "choice" && "$FAMILY" != "all" ]]; then
   echo "ERROR: FAMILY must be stim|choice|all (got $FAMILY)" >&2

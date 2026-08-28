@@ -12,7 +12,9 @@
 #
 #   bash scripts/submit_goal2_bayes_harris_orcd.sh
 #   FAMILY=local|prior|unsplit|choice|all
-#   PARTITION=mit_normal bash scripts/submit_goal2_bayes_harris_orcd.sh
+#   PARTITION=mit_preemptable bash scripts/submit_goal2_bayes_harris_orcd.sh
+#     --requeue always; RESTART=1 skips insertions already in stream_acc
+#   If you re-run this wrapper after a crash: CLEAR_STREAM=0
 #
 # Label shuffle (stim L–R / choice L–R duringstim, Bayes stratum):
 #   bash scripts/submit_goal2_bayes_shuffle_orcd.sh
@@ -32,6 +34,11 @@ REBUILD_DONORS="${REBUILD_DONORS:-1}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export NRAND N_SHARDS PARTITION
+RESTART="${RESTART:-1}"
+CLEAR_STREAM="${CLEAR_STREAM:-1}"
+export RESTART CLEAR_STREAM
+SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
+export SBATCH_EXTRA
 
 if [[ "$FAMILY" != "local" && "$FAMILY" != "choice" && "$FAMILY" != "prior" \
       && "$FAMILY" != "unsplit" && "$FAMILY" != "all" ]]; then
@@ -45,7 +52,8 @@ CPUS_DONORS="${CPUS_DONORS:-2}"
 
 DONOR_JID="${DONOR_JID:-}"
 if [[ -z "$DONOR_JID" && "$REBUILD_DONORS" == "1" ]]; then
-  DONOR_JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  DONOR_JID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
     --job-name="g2_choice_donors" \
