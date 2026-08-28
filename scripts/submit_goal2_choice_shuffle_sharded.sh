@@ -20,6 +20,7 @@
 #
 # Override: N_SHARDS=3 CLEAR_STREAM=0 MEM_SHARD=8G PARTITION=mit_normal \
 #   bash scripts/submit_goal2_choice_shuffle_sharded.sh
+# PARTITION=mit_preemptable (or mit_preem) defaults SBATCH_EXTRA=--requeue.
 
 set -euo pipefail
 
@@ -44,6 +45,14 @@ else
   TIME_SHARD="${TIME_SHARD:-12:00:00}"
 fi
 PARTITION="${PARTITION:-pi_fiete}"
+# --requeue is the default on preemptable partitions. Explicit SBATCH_EXTRA wins
+# (including SBATCH_EXTRA="" to disable).
+if [[ -z "${SBATCH_EXTRA+x}" ]]; then
+  case "$PARTITION" in
+    mit_preemptable|mit_preem) SBATCH_EXTRA="--requeue" ;;
+    *) SBATCH_EXTRA="" ;;
+  esac
+fi
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
@@ -90,7 +99,7 @@ n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=label_shuffle (plain)  PRESET=$PRESET"
 echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
 echo "N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}  shard_jobs=$n_shard_jobs"
-echo "PARTITION=$PARTITION  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD"
+echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res/{split}.npy  (no suffix)"
 printf '  %s\n' "${SPLITS[@]}"
 
@@ -104,7 +113,8 @@ for sp in "${SPLITS[@]}"; do
   TAG=$(job_tag "$sp")
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
-    JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="g2sh_${TAG}_s${k}" \
@@ -114,7 +124,8 @@ for sp in "${SPLITS[@]}"; do
     echo "  $sp shard $k/$N_SHARDS -> $JID"
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
