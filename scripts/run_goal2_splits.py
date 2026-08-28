@@ -5,6 +5,9 @@ Run Goal 2 BWM pipeline (insertion cache + stream_pool) for an explicit split li
   python scripts/run_goal2_splits.py --preset stimOn_times_act
   python scripts/run_goal2_splits.py --preset act_block_harris_unsplit --list-splits
   python scripts/run_goal2_splits.py --preset act_block_harris_fully_unsplit --list-splits
+  python scripts/run_goal2_splits.py --preset bayes_block_harris_local --list-splits
+  python scripts/run_goal2_splits.py --preset stim_duringstim_bayes --list-splits
+  python scripts/run_goal2_splits.py --preset choice_lr_session_null_bayes_duringstim --list-splits
   python scripts/run_goal2_splits.py --preset act_block_excl_sticky --list-splits
   python scripts/run_goal2_splits.py --preset goal3_c0_choice
   python scripts/run_goal2_splits.py --preset goal3_duringstim_act --contrasts 0.0 0.125 1.0
@@ -176,6 +179,8 @@ PRESETS = {
     'choice_lr_session_null_bayes': (
         CHOICE_DURINGCHOICE_BAYES + CHOICE_DURINGSTIM_BAYES
     ),
+    'choice_lr_session_null_bayes_duringstim': list(CHOICE_DURINGSTIM_BAYES),
+    'choice_lr_session_null_bayes_duringchoice': list(CHOICE_DURINGCHOICE_BAYES),
     # Fitted AK + copy-last on option-1 *pseudo-sessions* (strat + late_sticky).
     # Choice: remake stim×act-prior on the pseudo. Act_block: remake stim×choice.
     'choice_lr_ak_sticky': (
@@ -200,6 +205,22 @@ PRESETS = {
     'act_block_unsplit_duringstim': list(ba.ACT_BLOCK_UNSPLIT_STIM),
     'act_block_unsplit_duringchoice': list(ba.ACT_BLOCK_UNSPLIT_CHOICE),
     'act_block_harris_unsplit': list(ba.ACT_BLOCK_UNSPLIT_SPLITS),
+    # Bayes prior L–R Harris unique-null (donor priors = Bayes-binary from stim).
+    # Stim×choice (8): not unsplit, not bayes_block_only.
+    'bayes_block_duringstim': list(BAYES_ALIGN['stimOn_times']),
+    'bayes_block_duringchoice': list(BAYES_ALIGN['firstMovement_times']),
+    'bayes_block_harris': (
+        list(BAYES_ALIGN['stimOn_times'])
+        + list(BAYES_ALIGN['firstMovement_times'])
+    ),
+    # Local alyx shuffle maps (08-27): duringstim 4-split + stim-side 2. No duringchoice.
+    'bayes_block_harris_local': (
+        list(BAYES_ALIGN['stimOn_times'])
+        + list(ba.BAYES_BLOCK_UNSPLIT_STIM)
+    ),
+    # Stim-side only (no choice / f1/f2). Not choice-side duringchoice unsplit.
+    'bayes_block_unsplit_duringstim': list(ba.BAYES_BLOCK_UNSPLIT_STIM),
+    'bayes_block_harris_unsplit': list(ba.BAYES_BLOCK_UNSPLIT_STIM),
     # Fully unsplit: one split per timeframe, no stim/choice/f1/f2 in data or null.
     'act_block_fully_unsplit': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
     'act_block_fully_unsplit_duringstim': [ba.ACT_BLOCK_FULLY_UNSPLIT_STIM],

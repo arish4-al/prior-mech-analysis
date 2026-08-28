@@ -11,6 +11,7 @@ All simulation / prior-distance experiments in this repo **must** use these defa
 | **Truncated trials** | **fill-from-next-ITI** | Never zero-pad; skip if next ITI too short |
 | **Null** | **contrast-matched shuffle** | Default CLI; `--label-shuffle-null` to override |
 | **Output root** | `<ONE cache>/manifold_sim` | Do not use repo `output/` unless `--allow-repo-output` |
+| **Plots / fit figures** | **same ONE/alyx folder as the run** | Never repo `figs/` — see below |
 | **Environment** | `conda activate iblenv` | Run **outside** sandbox on this machine (see below) |
 
 ### Do not run ONE / analysis jobs in the Cursor sandbox
@@ -23,6 +24,13 @@ repeatedly on combine/plot/null jobs). Always:
 2. `conda activate iblenv` before `python …`.
 
 Do not retry the same ONE command under the default sandbox hoping it will finish.
+
+### Plots live with the data (since 2026-08-27)
+
+Write figures **into the model/analysis directory that produced them**
+(openalyx `models/weights_run_*/`, alyx `models/` or `models/new/`,
+`manifold/res`, `manifold_sim/`). Do **not** dump them in repo `figs/`
+or `output/`. Cursor rule: `.cursor/rules/plots-live-with-data.mdc`.
 
 ### Harris unique-null / long sessions → ORCD (since 2026-08-14)
 

@@ -5,6 +5,7 @@
 #
 #   bash scripts/submit_goal2_choice_session_null_sharded.sh
 #   PRESET=choice_lr_session_null_true bash scripts/submit_goal2_choice_session_null_sharded.sh
+#   PRESET=choice_lr_session_null_bayes bash scripts/submit_goal2_choice_session_null_sharded.sh
 #   SMOKE_FIRST=1 bash scripts/submit_goal2_choice_session_null_sharded.sh
 
 set -euo pipefail

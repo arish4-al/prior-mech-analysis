@@ -2,9 +2,9 @@
 
 **Scope:** the problem that an unrestricted label shuffle is too narrow a null when choice/prior labels are temporally autocorrelated and neural responses drift, and every null scheme built to address it — Harris session permutation and ActionKernel synthetic sessions (stratified pseudo and fixed-stim). Late-session / perseveration **trial exclusion** is [sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md), not a structured null.
 
-**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim, and **option 1 + copy-last** (`_pseudo_strat_sticky`, post-08-24 sign/0.5-drop, factor 1). **Choice L–R sticky is more liberal than shuffle** (183 / 184 FDR hits) — do not use as a conservative choice null. **Prior L–R f1/f2 and stim-side unsplit:** sticky and Harris unique are **0 FDR @0.01**. **Fully unsplit prior** (08-24e; L+R mixed, no stratum): still 0 FDR @0.01 duringstim (Harris and sticky); duringchoice sticky **11**, Harris **0** (BH p-floor — Harris is *more* liberal on median p and FDR @0.05). Pooling L+R liberalizes both structured nulls; the f1/f2 / stim-side total null is partly a stratum effect, not unique-null thinning. `_harris_unique` remains the preferred file for **choice** claims. Bayes splits use a **Bayes-agent** option-1 + copy-last (OptimalBayesian choices, not fitted AK); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid (sign bug).
+**Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim, and **option 1 + copy-last** (`_pseudo_strat_sticky`, post-08-24 sign/0.5-drop, factor 1). **Choice L–R sticky is more liberal than shuffle** (183 / 184 FDR hits) — do not use as a conservative choice null. **Prior L–R f1/f2 and stim-side unsplit:** sticky and Harris unique are **0 FDR @0.01**. **Fully unsplit prior** (08-24e; L+R mixed, no stratum): still 0 FDR @0.01 duringstim (Harris and sticky); duringchoice sticky **11**, Harris **0** (BH p-floor — Harris is *more* liberal on median p and FDR @0.05). Pooling L+R liberalizes both structured nulls; the f1/f2 / stim-side total null is partly a stratum effect, not unique-null thinning. `_harris_unique` remains the preferred file for **choice** claims. Bayes splits: Bayes-agent option-1 + copy-last (08-23) **and** Harris unique submitter (08-27b; stim×choice + stim-side prior, choice L–R `*_bayes`); **FDR not yet run.** A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid (sign bug).
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d / 24e:** fully unsplit act-prior campaign + FDR.
+Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d / 24e:** fully unsplit act-prior campaign + FDR. **2026-08-27b:** Bayes Harris unique submitter.
 
 ---
 
@@ -1169,6 +1169,40 @@ run-length effect (prior) are the real, opposite drivers.
 rotation) of the recipient's *own* prior-label sequence — preserves that mouse's
 exact run length **and** counts, destroys only neural↔label phase alignment.
 Sidesteps both AK compression and Harris heterogeneity. See open question 5.
+
+---
+
+## 2026-08-27b — Harris unique for Bayes splits (wired, not scored)
+
+Act Harris unique already accepted `bayes_block_*` / `*_bayes` (07-27e routing). Presets and an ORCD wrapper now match the act campaign for the three families asked:
+
+| Family | Preset | Splits | Stratum | Distance |
+|--------|--------|--------|---------|----------|
+| prior stim×choice | `bayes_block_harris` | 8 (4 duringstim + 4 duringchoice f1/f2) | stim × choice | Bayes-prior L vs R |
+| prior stim-only | `bayes_block_unsplit_duringstim` | 2 (`duringstim_{l,r}`) | stim side | Bayes-prior L vs R |
+| choice L–R | `choice_lr_session_null_bayes` | 8 | stim × Bayes-prior | choice L vs R |
+
+Donor priors / strata use `bayesian_priors` on stim history (not AK). Disk `{split}_harris_unique.npy`. Not included: choice-side unsplit (`bayes_block_duringchoice_{l,r}`), fully unsplit, Bayes-agent sticky. Details: [Bayesian prior](bayesian_vs_act_prior.md).
+
+```bash
+bash scripts/submit_goal2_bayes_harris_orcd.sh
+FAMILY=prior bash scripts/submit_goal2_bayes_harris_orcd.sh
+FAMILY=unsplit bash scripts/submit_goal2_bayes_harris_orcd.sh
+FAMILY=choice bash scripts/submit_goal2_bayes_harris_orcd.sh
+```
+
+**Not done:** full-BWM Bayes Harris FDR vs act Harris / min5 shuffle.
+
+### 2026-08-27d — Harris unique = local duringstim maps; shuffle stim/choice L–R
+
+Harris default is now `FAMILY=local`: the 6 splits with laptop shuffle npy (4-split duringstim + stim-side `duringstim_{l,r}`). Not duringchoice, not choice Harris.
+
+Label shuffle (not Harris) for duringstim **stim L–R** (`stim_choice_*_block_*_bayes`, stratum = choice × Bayes) and **choice L–R** (`choice_duringstim_*_block_*_bayes`, stratum = stim × Bayes):
+
+```bash
+bash scripts/submit_goal2_bayes_harris_orcd.sh
+bash scripts/submit_goal2_bayes_shuffle_orcd.sh
+```
 
 ---
 

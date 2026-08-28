@@ -202,14 +202,19 @@ job_tag() {
 
 DEP_AFTER=""
 if [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
-  DONOR_JID=$(sbatch --parsable \
-    --partition="$PARTITION" \
-    --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
-    --job-name="g2_choice_donors" \
-    --export=ALL,SMOKE_FIRST="$SMOKE_FIRST" \
-    scripts/run_goal2_choice_donors_slurm.sh)
-  echo "choice donors job -> $DONOR_JID"
-  DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  if [[ -n "${DONOR_JID:-}" ]]; then
+    echo "reusing donors job $DONOR_JID"
+    DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  else
+    DONOR_JID=$(sbatch --parsable \
+      --partition="$PARTITION" \
+      --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
+      --job-name="g2_choice_donors" \
+      --export=ALL,SMOKE_FIRST="$SMOKE_FIRST" \
+      scripts/run_goal2_choice_donors_slurm.sh)
+    echo "choice donors job -> $DONOR_JID"
+    DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  fi
 elif [[ "$SMOKE_FIRST" == "1" && "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
   SMOKE_JID=$(sbatch --parsable \
     --partition="$PARTITION" \

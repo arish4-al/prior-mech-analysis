@@ -1,0 +1,34 @@
+---
+description: Write plots next to the ONE/alyx data or model run that produced them
+alwaysApply: true
+---
+
+# Plots live with the data
+
+**Incident (2026-08-27):** I/M, prior, and RT overlays for Stage B ablations
+were written to repo `figs/modeling_details_ablations_bps20/`. User had to
+ask them moved into the alyx/openalyx **model run dirs**. Wrong.
+
+## Rule
+
+Save figures **in the same ONE/alyx folder as the source**. Per-run fit
+diagnostics go **inside that run directory**. Do **not** use repo `figs/`,
+`output/`, or a new tree under the git checkout.
+
+| Source | Put plots here |
+|--------|----------------|
+| `weights_run_*/` JSON | that same `weights_run_*/` |
+| baseline Stage B (openalyx `models/`) | that openalyx run dir |
+| ablations in alyx `models/new/` | that `models/new/` run dir |
+| BWM `manifold/res`, FDR, tables | that analysis output dir on alyx |
+| sim `manifold_sim/` | that experiment dir |
+
+Shared diagnostics for one “best” model (e.g. RT vs data) go **in that
+model’s run dir**, not a repo `figs/` sidecar.
+
+Journals may **link** those ONE paths. They are not a place to dump
+binaries.
+
+`--out-root` / `save_dir` / `OUT=` must resolve to the data/model folder.
+Defaulting to `figs/` because `plot_best_fit_results.py` once did is
+still wrong.

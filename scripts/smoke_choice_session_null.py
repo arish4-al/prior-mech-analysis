@@ -27,6 +27,8 @@ SPLITS = [
     # Prefer production act splits.
     'choice_stim_l_block_l_act', 'choice_stim_r_block_r_act',
     'choice_duringstim_l_block_l_act', 'choice_duringstim_r_block_r_act',
+    'choice_stim_l_block_l_bayes', 'choice_stim_r_block_r_bayes',
+    'choice_duringstim_l_block_l_bayes', 'choice_duringstim_r_block_r_bayes',
     'choice_stim_l', 'choice_stim_r',
     'choice_stim_l_block_l', 'choice_stim_l_block_r',
     'choice_duringstim_l', 'choice_duringstim_r',

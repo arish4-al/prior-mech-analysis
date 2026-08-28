@@ -30,6 +30,11 @@ SPLITS = [
     'act_block_only',
     'act_block_stim_l_duringchoice_l_f1',
     'act_block_stim_r_duringchoice_r_f1',
+    'bayes_block_duringstim_l',
+    'bayes_block_duringstim_r',
+    'bayes_block_duringstim_l_choice_l_f1',
+    'bayes_block_duringstim_r_choice_r_f1',
+    'bayes_block_stim_l_duringchoice_l_f1',
 ]
 
 

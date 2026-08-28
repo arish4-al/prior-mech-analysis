@@ -74,6 +74,29 @@ def check_pipeline() -> None:
     ys_act = ba._block_null_prior_left(F1_ACT[0], dummy_ch, side)
     assert ys_act[-1]  # all left choices → act prior L
     print('  _block_null_prior_left: bayes uses stim; act uses choice. OK')
+
+    print('=== Harris unique routing (stim×choice / stim-only / choice) ===')
+    unsplit = ['bayes_block_duringstim_l', 'bayes_block_duringstim_r']
+    for sp in unsplit:
+        assert ba.is_harris_eligible_split(sp), sp
+        spec = ba._act_block_conditioning_spec(sp)
+        assert spec['stim_is_left'] is not None, sp
+        assert spec['choice'] is None, f'stim-only must drop choice: {sp} {spec}'
+        print(f'  {sp} spec={spec}')
+    for sp in F1_BAYES:
+        assert ba.is_harris_eligible_split(sp), sp
+        spec = ba._act_block_conditioning_spec(sp)
+        assert spec['stim_is_left'] is not None and spec['choice'] is not None, sp
+    choice_bayes = [
+        'choice_duringstim_l_block_l_bayes',
+        'choice_stim_r_block_r_bayes',
+    ]
+    for sp in choice_bayes:
+        assert ba.is_choice_lr_split(sp) and ba.is_harris_eligible_split(sp), sp
+        assert ba._split_uses_bayes_prior(sp) and not ba._split_uses_act_prior(sp)
+        stim, p = ba._choice_lr_stratum_targets(sp)
+        assert stim is not None and p is not None, sp
+        print(f'  {sp} stim_left={stim} pleft={p}')
     print('pipeline checks passed')
 
 

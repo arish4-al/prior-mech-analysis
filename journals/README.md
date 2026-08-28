@@ -25,8 +25,9 @@ Dated entries are preserved inside each topic file (with their original date tag
 |-------|--------------|
 | [Real-data pipeline efficiency](realdata_pipeline_efficiency.md) | Insertion cache, loop reorder, stream pooling, ORCD sharding, memory settings, `min_trials_per_side` |
 | [Prior definitions and label conventions](prior_definitions.md) | True block vs action kernel vs Bayes-optimal; split naming; the prior-type routing fix; drop-0.5 and fixed-α open questions |
+| [Bayesian prior (real data)](bayesian_vs_act_prior.md) | Shuffle tables: 4-split **57** FDR @0.01, stim-side **116**; Harris unique defaults to those 6 splits (08-27d) |
 | [Prior modulation by contrast](prior_modulation_by_contrast.md) | Contrast-stratified during-trial splits, cell retention, FDR p-floor analysis, and the revised 0 %-contrast choice-conditioned result |
-| [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; option-1 + copy-last (`_pseudo_strat_sticky`); Bayes-agent sampler for `*bayes*` (08-23), FDR not yet run; fully unsplit prior FDR (08-24e) |
+| [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; option-1 + copy-last (`_pseudo_strat_sticky`); Bayes-agent sampler (08-23) and Bayes Harris unique submitter (08-27b), FDR not yet run; fully unsplit prior FDR (08-24e) |
 | [Sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md) | Late 20 % ∪ perseveration-tail drop; choice FDR *expanded*; prior 4-split duringstim expands @0.05 / shrinks @0.01 (08-25); f1/unsplit *shrink* and stay Harris-nonzero; sticky tails not concentrated late; last 20 % slower not inaccurate / not more block-aligned |
 | [Single-neuron variance partition](variance_partition_mixed_regions.md) | Mixed stim×choice target set, OLS variance partition, full BWM results, neuron- and region-level nulls |
 

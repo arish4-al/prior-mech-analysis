@@ -2,7 +2,7 @@
 
 **Scope:** how the prior label is computed for each split family in the real-data pipeline, the split-naming conventions that depend on it, and the two unresolved definition mismatches.
 
-**Status:** action-kernel and Bayes-optimal priors are implemented and wired; a prior-type routing bug for `act_block_*` was found and fixed on 2026-07-27. Two conventions remain open (fixed α vs per-session fit; drop-0.5 timing).
+**Status:** action-kernel and Bayes-optimal priors are implemented and wired; a prior-type routing bug for `act_block_*` was found and fixed on 2026-07-27. Two conventions remain open (fixed α vs per-session fit; drop-0.5 timing). Bayes shuffle tables: [Bayesian prior](bayesian_vs_act_prior.md).
 
 Sources: dated entries 2026-07-12 (Goal 1), 07-12e, 07-12f, 07-12h, 07-20h, 07-27e.
 
@@ -122,4 +122,4 @@ Motivation: block identity and recent outcomes can pull in opposite directions; 
 2. Does any effect concentrate on conflict trials, alignment trials, or both?
 3. Does the conclusion change relative to the usual block-prior split (pooled across recent-reward history)?
 
-**Status:** the Bayes prior machinery is implemented and the `bayes_block_*` splits are registered; the real-data comparison (`bayes_block_*` vs `act_block_*` vs true block, then conflict vs alignment) has not been run.
+**Status:** the Bayes prior machinery is implemented and the `bayes_block_*` splits are registered. Shuffle tables exist for duringstim prior L–R (4-split 57 FDR @0.01; stim-side 116) — see [Bayesian prior](bayesian_vs_act_prior.md). Harris unique and conflict-vs-alignment have not been scored.

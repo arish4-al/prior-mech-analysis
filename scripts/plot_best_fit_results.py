@@ -237,7 +237,8 @@ def main():
     ap.add_argument(
         "--out-root",
         type=Path,
-        default=REMOTE / "fit_result_plots_bps20",
+        default=None,
+        help="optional dump root (out-root/<run_name>/). Default: the JSON's parent model dir.",
     )
     ap.add_argument(
         "--weights-json",
@@ -285,10 +286,9 @@ def main():
         f"HAVE_NUMBA={mf._HAVE_NUMBA}"
     )
 
-    args.out_root.mkdir(parents=True, exist_ok=True)
     for jp in jsons:
         tag = jp.parent.name
-        out_dir = args.out_root / tag
+        out_dir = (args.out_root / tag) if args.out_root is not None else jp.parent
         print(f"\n=== {tag} ===")
         s = plot_one(jp, stim_bundle, mean_data, prior_regions, out_dir,
                      avg_mean_R=avg_mean_R)

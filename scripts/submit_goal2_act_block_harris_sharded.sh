@@ -15,6 +15,11 @@
 #   PRESET=act_block_harris_unsplit …   # stim-side + choice-side, no f1/f2
 #   PRESET=act_block_harris_fully_unsplit …  # one pool per window, no stratum
 #   PRESET=goal3_duringstim_act …   # contrast-expanded (needs donor contrasts)
+# Bayes (Harris unique; donor labels = Bayes-binary from stim):
+#   PRESET=bayes_block_duringstim …          # 4 duringstim (local maps)
+#   PRESET=bayes_block_unsplit_duringstim …  # stim-side only
+#   PRESET=bayes_block_harris …              # 8 stim×choice (incl. duringchoice)
+#   bash scripts/submit_goal2_bayes_harris_orcd.sh
 #
 # Fully-unsplit wrapper (Harris unique + AK copy-last, more shards):
 #   bash scripts/submit_goal2_act_block_fully_unsplit_orcd.sh
@@ -109,7 +114,10 @@ job_tag() {
 }
 
 DEP_AFTER=""
-if [[ "$REBUILD_DONORS" == "1" ]]; then
+if [[ -n "${DONOR_JID:-}" ]]; then
+  echo "reusing donors job $DONOR_JID"
+  DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+elif [[ "$REBUILD_DONORS" == "1" ]]; then
   # Force rebuild so contrast_left/right are present for Goal-3 / contrast splits.
   DONOR_JID=$(sbatch --parsable \
     --partition="$PARTITION" \
