@@ -994,8 +994,12 @@ def _block_conditioning_mask(
 def _donor_block_prior_labels(rec, split):
     '''Session-length boolean prior-L labels for an act_block Harris donor.
 
-    Matches recipient ``get_d_vars``: drop true 0.5 blocks, then compute
-    act / bayes / true prior on the remaining trial sequence.
+    Matches recipient ``get_d_vars``:
+      - drop true 0.5 blocks for the keep mask
+      - **act**: kernel on the remaining choice sequence
+      - **bayes**: ``bayesian_priors`` on the **full** stim history (needs 0.5
+        blocks), then restrict labels to the keep mask
+      - **true**: ``pleft_true`` on keep
     Returns ``(labels_bool, keep_mask)`` on the **full** donor length, or
     ``(None, None)`` if unusable. ``keep_mask`` is True on non-0.5 trials.
     '''
@@ -1011,13 +1015,12 @@ def _donor_block_prior_labels(rec, split):
     if int(keep.sum()) < 2 * min_trials_per_side:
         return None, None
     ch_k = ch[keep]
-    stim_k = stim[keep]
     if _split_uses_act_prior(split):
         _, pbin = action_kernel_priors(alpha, list(ch_k))
         lab_k = np.asarray(pbin, dtype=float) == 0.8
     elif _split_uses_bayes_prior(split):
-        _, pbin = bayesian_priors(stim_k)
-        lab_k = np.asarray(pbin, dtype=float) == 0.8
+        _, pbin = bayesian_priors(stim)
+        lab_k = np.asarray(pbin, dtype=float)[keep] == 0.8
     else:
         lab_k = np.isclose(pleft[keep], 0.8)
     labels = np.zeros(len(ch), dtype=bool)
