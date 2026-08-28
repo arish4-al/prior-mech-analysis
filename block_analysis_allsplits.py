@@ -367,7 +367,9 @@ def is_act_block_fully_unsplit_split(split):
 
 def is_harris_eligible_split(split):
     '''Splits that support ``--session-shuffle-null`` (Harris unique-null).'''
-    return is_choice_lr_split(split) or is_act_block_prior_split(split)
+    return (is_choice_lr_split(split)
+            or is_act_block_prior_split(split)
+            or _is_true_block_iti_split(split))
 
 
 # Back-compat alias (eligibility only; session-shuffle is opt-in via flag).
@@ -798,6 +800,54 @@ def _split_uses_bayes_prior(split):
     return 'bayes' in (split or '')
 
 
+def _is_true_block_iti_split(split):
+    '''True-block ITI prior L–R: ``block_only`` (+ optional contrast suffix).
+
+    Not ``act_block_only`` / ``bayes_block_only`` / during-trial ``block_*``.
+    Those ITI windows are labeled with trial t−1's true ``probabilityLeft``.
+    '''
+    name = split or ''
+    if _split_uses_act_prior(name) or _split_uses_bayes_prior(name):
+        return False
+    return name == 'block_only' or name.startswith('block_only_')
+
+
+def _apply_true_block_iti_previous_trial_label(trials):
+    '''Label stimOn[t] ITI with ``probabilityLeft[t-1]``; drop trial 0.
+
+    ``trials`` is already 0.5-dropped and in calendar order. The remaining
+    rows keep trial t's events (alignment) and receive trial t−1's block.
+    '''
+    n = len(trials)
+    if n < 2:
+        raise InsufficientTrials(
+            'need ≥2 biased trials to label ITI with previous-trial true block')
+    pleft = trials['probabilityLeft']
+    pleft = (pleft.to_numpy(dtype=float) if hasattr(pleft, 'to_numpy')
+             else np.asarray(pleft, dtype=float))
+    out = trials.iloc[1:].copy()
+    out['probabilityLeft'] = pleft[:-1]
+    return out.reset_index(drop=True)
+
+
+def _lag_true_block_iti_donor_labels(pleft, keep):
+    '''Harris donor true-block ITI: drop first biased trial; label with previous.
+
+    Returns ``(labels_bool, keep_out)`` on the full donor length, or
+    ``(None, None)`` if fewer than 2 biased trials.
+    '''
+    keep = np.asarray(keep, dtype=bool)
+    pleft = np.asarray(pleft, dtype=float).reshape(-1)
+    idx = np.flatnonzero(keep)
+    if len(idx) < 2:
+        return None, None
+    keep_out = keep.copy()
+    keep_out[idx[0]] = False
+    labels = np.zeros(len(keep), dtype=bool)
+    labels[idx[1:]] = np.isclose(pleft[idx[:-1]], 0.8)
+    return labels, keep_out
+
+
 def _trials_stim_side(trials):
     '''IBL stim side in {-1, +1}: left when ``contrastRight`` is NaN (same as donor bank).'''
     cr = trials['contrastRight']
@@ -999,9 +1049,11 @@ def _donor_block_prior_labels(rec, split):
       - **act**: kernel on the remaining choice sequence
       - **bayes**: ``bayesian_priors`` on the **full** stim history (needs 0.5
         blocks), then restrict labels to the keep mask
-      - **true**: ``pleft_true`` on keep
+      - **true**: ``pleft_true`` on keep; ``block_only`` ITI lags to t−1
+        (drop first biased trial)
     Returns ``(labels_bool, keep_mask)`` on the **full** donor length, or
-    ``(None, None)`` if unusable. ``keep_mask`` is True on non-0.5 trials.
+    ``(None, None)`` if unusable. ``keep_mask`` is True on non-0.5 trials
+    (and not the first biased trial for true-block ITI).
     '''
     rec = _normalize_donor_rec(rec)
     if rec.get('_legacy'):
@@ -1021,6 +1073,8 @@ def _donor_block_prior_labels(rec, split):
     elif _split_uses_bayes_prior(split):
         _, pbin = bayesian_priors(stim)
         lab_k = np.asarray(pbin, dtype=float)[keep] == 0.8
+    elif _is_true_block_iti_split(split):
+        return _lag_true_block_iti_donor_labels(pleft, keep)
     else:
         lab_k = np.isclose(pleft[keep], 0.8)
     labels = np.zeros(len(ch), dtype=bool)
@@ -1274,6 +1328,10 @@ def _null_labels(split, ntr, dx, choices=None):
     Used for stim_block nulls (shuffle stim-side labels within choice class).
     '''
     if 'block_only' in split:
+        if _is_true_block_iti_split(split):
+            # Observed labels are pLeft[t-1] on ntr trials (first dropped).
+            pb = generate_pseudo_blocks(ntr + 1, first5050=0)
+            return np.asarray(pb)[1:] == 0.8
         return generate_pseudo_blocks(ntr, first5050=0) == 0.8
     order = np.argsort(dx[:, 1])
     tr_c = dx[order][:, 0]
@@ -2568,14 +2626,13 @@ def _get_d_vars_session_shuffle(
     }
 
 
-# Function to calculate action kernel
 def action_kernel_priors(alpha, actions):
-    
-    # initialization
+    '''Causal action-kernel prior: ``priors[t]`` uses ``actions[0..t-1]`` only.
+
+    That is the label for the ITI before stimOn[t] (t−1's action and earlier).
+    '''
     prior = 0.5
     priors = [prior]
-    
-    # calculate action kernel for each trial
     for t in range(len(actions)-1):
         action = actions[t]
         prior = alpha * int(action>0) + (1-alpha) * prior
@@ -2599,8 +2656,11 @@ def bayesian_priors(
 
     Infers P(stim left on trial t | sides on trials 1..t-1) under the task
     generative model: truncated-exponential block lengths, biased blocks at
-    gamma, and uncued switches. Mirrors ``action_kernel_priors`` return
-    convention: continuous P(left) plus binarized 0.8 / 0.2 labels.
+    gamma, and uncued switches. ``priors[t]`` includes stim[t-1] and not
+    stim[t] — same timing as the action kernel, so the ITI before stimOn[t]
+    is labeled with the Bayes belief after t−1's stimulus. Mirrors
+    ``action_kernel_priors`` return convention: continuous P(left) plus
+    binarized 0.8 / 0.2 labels.
 
     Parameters
     ----------
@@ -2880,7 +2940,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     stationary AK files.
 
     ``session_shuffle_null``: if True and split is choice_stim* /
-    choice_duringstim* **or** ``act_block_*``, use Harris unique-null session
+    choice_duringstim* **or** ``act_block_*`` / ``bayes_block_*`` **or**
+    true-block ITI ``block_only``, use Harris unique-null session
     permutation (requires ``donor_bank``):
       - choice L–R: recipient stim×prior defines ``elig_idx``; null labels are
         another eid's choices from the same stim×prior stratum
@@ -2889,7 +2950,9 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         choice-side only for ``duringchoice_{l,r}``; none for ``*_fully_unsplit``
         / ``act_block_only``); null labels are another eid's **prior** labels
         from the same conditioning (or the full biased session if none)
-    Default False → label shuffle.
+      - ``block_only``: no stratum; donor true-block labels lagged to t−1
+    Default False → label shuffle (``*block_only*`` still uses
+    ``generate_pseudo_blocks``).
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
     the **tail** of perseveration runs (≥ ``sticky_min_run`` same choice poorly
@@ -2932,6 +2995,10 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     # keeps 0.5 trials (priors overwritten later for act/bayes).
     if 'block' in split and not is_choicestim_split(split):
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
+    # ITI true-block: label the pre-stimOn[t] window with pLeft[t-1].
+    # Act / Bayes already include trial t-1's observation in priors[t].
+    if _is_true_block_iti_split(split):
+        trials = _apply_true_block_iti_previous_trial_label(trials)
     # rs_range = [0.08, 2]  # discard [long/short] reaction time trials
     # stim_diff = trials['firstMovement_times'] - trials['stimOn_times']
     if lowcontrast: # restrict to low contrast trials only (for block comparisons)
@@ -2984,7 +3051,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             D = dict(D)
             D['trial_exclusion'] = excl_info
         return D
-    if session_shuffle_null and is_act_block_prior_split(split):
+    if session_shuffle_null and (
+            is_act_block_prior_split(split) or _is_true_block_iti_split(split)):
         D = _get_d_vars_block_harris(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid)
@@ -5558,7 +5626,7 @@ if __name__ == '__main__':
 
     # All active splits. Loaded ONCE per insertion via the reordered driver
     # (outer loop = insertions), instead of reloading spikes/trials per split.
-    intertrial_splits = ['block_only', 'act_block_only']
+    intertrial_splits = ['block_only', 'act_block_only', 'bayes_block_only']
     duringtrial_splits = [s for splits in run_align.values() for s in splits]
     all_splits = intertrial_splits + duringtrial_splits
 

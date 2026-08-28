@@ -199,6 +199,10 @@ PRESETS = {
         + ['act_block_only']
     ),
     'act_block_only': ['act_block_only'],
+    'block_only': ['block_only'],
+    'bayes_block_only': ['bayes_block_only'],
+    # ITI prior L–R (stimOn [−400, −100] ms): true-block (lagged t−1), act, Bayes
+    'iti_prior_all': ['block_only', 'act_block_only', 'bayes_block_only'],
     # Unsplit prior L–R (model analog): stim-side only at stimOn; choice-side
     # only at firstMovement. No f1/f2. Harris unique-null via
     # --session-shuffle-null.
@@ -372,8 +376,10 @@ def main():
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
                    help='Harris unique-null session-permutation for '
                         'choice_stim*/choice_duringstim* (choice labels in '
-                        'stim×prior stratum) or act_block_* (prior labels in '
-                        'stim×choice, stim-side, or choice-side stratum). Writes '
+                        'stim×prior stratum), act_block_* / bayes_block_* '
+                        '(prior labels in stim×choice, stim-side, or '
+                        'choice-side stratum), or true-block ITI block_only '
+                        '(lagged t−1 labels, no stratum). Writes '
                         '{split}_harris_unique*.npy; does not overwrite '
                         'legacy {split}_harris*.npy')
     p.add_argument('--actkernel-choice-null', action='store_true', default=False,

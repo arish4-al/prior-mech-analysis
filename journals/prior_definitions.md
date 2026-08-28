@@ -2,9 +2,9 @@
 
 **Scope:** how the prior label is computed for each split family in the real-data pipeline, the split-naming conventions that depend on it, and the two unresolved definition mismatches.
 
-**Status:** action-kernel and Bayes-optimal priors are implemented and wired; a prior-type routing bug for `act_block_*` was found and fixed on 2026-07-27. Two conventions remain open (fixed α vs per-session fit; drop-0.5 timing). Bayes shuffle tables: [Bayesian prior](bayesian_vs_act_prior.md).
+**Status:** action-kernel and Bayes-optimal priors are implemented and wired; a prior-type routing bug for `act_block_*` was found and fixed on 2026-07-27. **2026-08-28:** true-block ITI (`block_only`) labels the pre-stimOn[t] window with `probabilityLeft[t-1]`; act and Bayes were already causal (`priors[t]` includes t−1's observation). Two conventions remain open (fixed α vs per-session fit; drop-0.5 timing). Bayes shuffle tables: [Bayesian prior](bayesian_vs_act_prior.md).
 
-Sources: dated entries 2026-07-12 (Goal 1), 07-12e, 07-12f, 07-12h, 07-20h, 07-27e.
+Sources: dated entries 2026-07-12 (Goal 1), 07-12e, 07-12f, 07-12h, 07-20h, 07-27e, 08-28.
 
 ---
 
@@ -12,7 +12,7 @@ Sources: dated entries 2026-07-12 (Goal 1), 07-12e, 07-12f, 07-12h, 07-20h, 07-2
 
 | Type | Name trigger | Definition |
 |------|--------------|------------|
-| **True block** | default (no `act` / `bayes` in the split name) | `probabilityLeft` from the task (0.8 / 0.2 after dropping 0.5 blocks) |
+| **True block** | default (no `act` / `bayes` in the split name) | `probabilityLeft` from the task (0.8 / 0.2 after dropping 0.5 blocks). **ITI `block_only` only:** label = trial **t−1** (see 2026-08-28). During-trial splits still use trial t. |
 | **Action kernel** | `'act' in split` | EMA over the animal's own choices, binarized |
 | **Bayes-optimal** | `'bayes' in split` | Inferred P(stim left | past stimulus sides) under the IBL generative model, binarized |
 
@@ -80,6 +80,28 @@ python scripts/run_goal2_splits.py --preset stim_lr_bayes_all
 For the choice null schemes (Harris / AK strat / fixed), donor or pseudo-session stratum priors are recomputed via `_stratum_prior_for_stream` → `action_kernel_priors` on that stream's own choices, which is correct. Non-`act` choice splits use true `pleft`; `*bayes*` use Bayes.
 
 **Donor / recipient 0.5 parity:** donors now drop true `probabilityLeft == 0.5` **before** `action_kernel_priors` (the same order as recipient `get_d_vars`), then intersect the conditioning with that keep mask.
+
+---
+
+## 2026-08-28 — ITI prior labels (stimOn [−400, −100] ms)
+
+The window is aligned to **trial t's** `stimOn` but sits after trial t−1's action and before t's stim. Alignment does not pick the prior.
+
+| Split | Label on that window | Status |
+|-------|----------------------|--------|
+| `block_only` | `probabilityLeft[t-1]` | **fixed** — was trial t (equals t−1 except first-in-block) |
+| `act_block_only` | `priors[t]` = kernel of `action[0..t-1]` | already correct |
+| `bayes_block_only` | `priors[t]` = P(left on t \| stims `1..t-1`) | already correct; computed on full history (incl. 0.5) then 0.5-dropped |
+
+True-block lag: after dropping 0.5, drop the first remaining trial (t−1 was the last unbiased trial) and assign each later row the previous remaining trial's `probabilityLeft`. Pseudo-block nulls generate `ntr+1` then take `[1:]`. Harris unique now accepts `block_only` (donor labels lagged the same way). During-stim / during-choice true-block splits are **unchanged** (still trial t).
+
+Rerun (ORCD; do not submit from the laptop):
+
+```bash
+FAMILY=all NULL=both bash scripts/submit_goal2_iti_prior_orcd.sh
+```
+
+`NULL=default` → `{split}.npy` (pseudo-blocks). `NULL=harris` → `{split}_harris_unique.npy` (24G shards). Default **12 shards**, `TIME_SHARD=5:00:00` (~58 insertions/shard; Harris ITI was 1–3 min/insertion). `FAMILY=block|act|bayes`. Smoke: `python scripts/test_iti_true_block_lag.py`.
 
 ---
 

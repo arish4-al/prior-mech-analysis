@@ -1,7 +1,7 @@
 """RT vs signed contrast, concordant vs discordant by act-prior × stim side.
 
 Model: best this-batch baseline (s333). Data: BWM trials, first vs last 50%
-of each session (pooled).
+of each session (pooled) overlaid on one axes.
 """
 from __future__ import annotations
 
@@ -105,6 +105,13 @@ def style_ax(ax, title: str, ylabel: str = "reaction time (s)"):
     ax.spines["right"].set_visible(False)
 
 
+def _save_fig(fig, out_stem: Path):
+    out_stem.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_stem.with_suffix(".svg"), bbox_inches="tight")
+    fig.savefig(out_stem.with_suffix(".png"), dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_two_curves(stats, title, out_stem: Path, prior_label: str):
     fig, ax = plt.subplots(figsize=(6.2, 4.0))
     colors = {"concordant": "#2166ac", "discordant": "#b2182b"}
@@ -120,10 +127,30 @@ def plot_two_curves(stats, title, out_stem: Path, prior_label: str):
         )
     style_ax(ax, title)
     fig.tight_layout()
-    out_stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_stem.with_suffix(".svg"), bbox_inches="tight")
-    fig.savefig(out_stem.with_suffix(".png"), dpi=160, bbox_inches="tight")
-    plt.close(fig)
+    _save_fig(fig, out_stem)
+
+
+def plot_four_curves(st_first, st_last, title, out_stem: Path, prior_label: str):
+    """Overlay first/last 50% × concordant/discordant on one axes."""
+    fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    series = (
+        ("first 50%", st_first, "concordant", "#2166ac", "-o", True),
+        ("first 50%", st_first, "discordant", "#b2182b", "-o", True),
+        ("last 50%", st_last, "concordant", "#67a9cf", "--s", False),
+        ("last 50%", st_last, "discordant", "#ef8a62", "--s", False),
+    )
+    for half, stats, key, color, fmt, filled in series:
+        y, e, _n = stats[key]
+        rel = "=" if key == "concordant" else "≠"
+        ax.errorbar(
+            SIGNED, y, yerr=e, fmt=fmt, color=color,
+            label=f"{half} {key} (stim {rel} {prior_label})",
+            capsize=3, lw=1.6, ms=5,
+            mfc=color if filled else "white",
+        )
+    style_ax(ax, title)
+    fig.tight_layout()
+    _save_fig(fig, out_stem)
 
 
 def model_groups(results, dt_ms: float, prior: str):
@@ -273,18 +300,18 @@ def main():
         )
         g0, g1, n_sess, n0, n1 = data_groups(sessions, prior)
         print(f"sessions used={n_sess}  first-half={n0}  last-half={n1}")
-        plot_two_curves(
+        plot_four_curves(
             mean_sem(g0),
-            f"Data RT  ·  first 50% of trials  ·  {tag} conc/disc",
-            out_dir / "data_rt_first50",
-            prior_label,
-        )
-        plot_two_curves(
             mean_sem(g1),
-            f"Data RT  ·  last 50% of trials  ·  {tag} conc/disc",
-            out_dir / "data_rt_last50",
+            f"Data RT  ·  first vs last 50%  ·  {tag} conc/disc",
+            out_dir / "data_rt_first_last50",
             prior_label,
         )
+        for stem in ("data_rt_first50", "data_rt_last50"):
+            for suf in (".png", ".svg"):
+                old = out_dir / f"{stem}{suf}"
+                if old.exists():
+                    old.unlink()
         dump_table(f"{tag} model", st_model)
         dump_table(f"{tag} first", mean_sem(g0))
         dump_table(f"{tag} last", mean_sem(g1))
