@@ -24,6 +24,9 @@ MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 SPLITS=(
   # act: stim-side only (no choice×feedback), post-stim [0, 0.15]
   act_block_duringstim_l
@@ -46,7 +49,8 @@ echo "Concurrent mem if all shards run: ${n_shard_jobs} × $MEM_SHARD"
 for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
-    JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2_${sp}_s${k}" \
@@ -57,7 +61,8 @@ for sp in "${SPLITS[@]}"; do
   done
   # finalize after all shards for this split
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \

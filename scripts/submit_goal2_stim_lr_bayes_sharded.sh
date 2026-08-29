@@ -33,6 +33,9 @@ MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
 CPUS_FIN="${CPUS_FIN:-2}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export SESSION_SHUFFLE_NULL=0 ACTKERNEL_CHOICE_NULL=0
@@ -73,7 +76,8 @@ for sp in "${SPLITS[@]}"; do
   TAG=$(job_tag "$sp")
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
-    JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g2_${TAG}_s${k}" \
@@ -83,7 +87,8 @@ for sp in "${SPLITS[@]}"; do
     echo "  $sp shard $k/$N_SHARDS -> $JID"
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \

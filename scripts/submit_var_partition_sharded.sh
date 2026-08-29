@@ -26,6 +26,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 N_SHARDS="${N_SHARDS:-4}"
 TARGET="${TARGET:-mixed}"
 WINDOW="${WINDOW:-0.08}"
@@ -65,7 +69,9 @@ echo "      older nrand=0 or p-only caches are auto re-run. RESTART=0 forces all
 
 SHARD_JOBS=()
 for ((k=0; k<N_SHARDS; k++)); do
-  JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  JID=$(sbatch --parsable $SBATCH_EXTRA \
+    --partition="$PARTITION" \
     --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
     --time="$TIME_SHARD" \
     --job-name="varpart_s${k}" \
@@ -76,7 +82,9 @@ for ((k=0; k<N_SHARDS; k++)); do
 done
 
 DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-FID=$(sbatch --parsable \
+# shellcheck disable=SC2086
+FID=$(sbatch --parsable $SBATCH_EXTRA \
+  --partition="$PARTITION" \
   --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
   --time="$TIME_FIN" \
   --dependency=afterok:"$DEP" \

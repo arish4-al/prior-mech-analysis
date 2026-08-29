@@ -31,6 +31,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 # Top-8 regular Stage B seeds by shared-stim fair L_w+L_S (2026-08-13):
 #   101 1.001, 333 1.017, 34 1.023, 12 1.027,
 #   303 1.045, 45 1.072, 7 1.076, 89 1.094.

@@ -33,6 +33,9 @@ NRAND="${NRAND:-2000}"
 N_SHARDS="${N_SHARDS:-12}"
 TIME_SHARD="${TIME_SHARD:-8:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 RESTART="${RESTART:-0}"
 PREFIT="${PREFIT:-0}"
@@ -63,7 +66,8 @@ PREFIT_JID="${PREFIT_JID:-}"
 if [[ "$FAMILY" == "ak" || "$FAMILY" == "both" ]]; then
   if [[ "$PREFIT" == "1" ]]; then
     echo "=== Prefit ActionKernel (once per eid) ==="
-    PREFIT_JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    PREFIT_JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --job-name=g2_ak_prefit \
       --mem="${MEM_PREFIT:-8G}" --cpus-per-task=2 --time="${TIME_PREFIT:-8:00:00}" \

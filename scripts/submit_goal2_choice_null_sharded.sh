@@ -53,6 +53,9 @@ CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
 TIME_SMOKE="${TIME_SMOKE:-2:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 
@@ -202,16 +205,23 @@ job_tag() {
 
 DEP_AFTER=""
 if [[ "$SESSION_SHUFFLE_NULL" == "1" ]]; then
-  DONOR_JID=$(sbatch --parsable \
-    --partition="$PARTITION" \
-    --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
-    --job-name="g2_choice_donors" \
-    --export=ALL,SMOKE_FIRST="$SMOKE_FIRST" \
-    scripts/run_goal2_choice_donors_slurm.sh)
-  echo "choice donors job -> $DONOR_JID"
-  DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  if [[ -n "${DONOR_JID:-}" ]]; then
+    echo "reusing donors job $DONOR_JID"
+    DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  else
+    # shellcheck disable=SC2086
+    DONOR_JID=$(sbatch --parsable $SBATCH_EXTRA \
+      --partition="$PARTITION" \
+      --mem="$MEM_DONORS" --cpus-per-task="$CPUS_DONORS" \
+      --job-name="g2_choice_donors" \
+      --export=ALL,SMOKE_FIRST="$SMOKE_FIRST" \
+      scripts/run_goal2_choice_donors_slurm.sh)
+    echo "choice donors job -> $DONOR_JID"
+    DEP_AFTER="--dependency=afterok:${DONOR_JID}"
+  fi
 elif [[ "$SMOKE_FIRST" == "1" && "$ACTKERNEL_CHOICE_NULL" == "1" ]]; then
-  SMOKE_JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  SMOKE_JID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_SMOKE" --cpus-per-task="$CPUS_SMOKE" --time="$TIME_SMOKE" \
     --job-name="g2_ak_smoke_${CASE_TAG}" \
@@ -235,7 +245,7 @@ for sp in "${SPLITS[@]}"; do
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
     # shellcheck disable=SC2086
-    JID=$(sbatch --parsable \
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
       --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
@@ -246,7 +256,8 @@ for sp in "${SPLITS[@]}"; do
     echo "  $sp shard $k/$N_SHARDS -> $JID"
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \

@@ -13,7 +13,7 @@
 #   bash scripts/submit_goal2_bayes_harris_orcd.sh
 #   FAMILY=local|prior|unsplit|choice|all
 #   PARTITION=mit_preemptable bash scripts/submit_goal2_bayes_harris_orcd.sh
-#     --requeue always; RESTART=1 skips insertions already in stream_acc
+#     --requeue is the default on mit_preemptable / mit_preem (sbatch_defaults.sh)
 #   If you re-run this wrapper after a crash: CLEAR_STREAM=0
 #
 # Label shuffle (stim L–R / choice L–R duringstim, Bayes stratum):
@@ -30,6 +30,9 @@ FAMILY="${FAMILY:-local}"
 NRAND="${NRAND:-2000}"
 N_SHARDS="${N_SHARDS:-4}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 REBUILD_DONORS="${REBUILD_DONORS:-1}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
@@ -37,8 +40,6 @@ export NRAND N_SHARDS PARTITION
 RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 export RESTART CLEAR_STREAM
-SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
-export SBATCH_EXTRA
 
 if [[ "$FAMILY" != "local" && "$FAMILY" != "choice" && "$FAMILY" != "prior" \
       && "$FAMILY" != "unsplit" && "$FAMILY" != "all" ]]; then

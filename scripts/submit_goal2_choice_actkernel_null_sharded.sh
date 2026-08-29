@@ -6,5 +6,10 @@
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
+
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 NULL_SCHEME="${NULL_SCHEME:-pseudo_strat}" \
   bash scripts/submit_goal2_choice_null_sharded.sh

@@ -20,6 +20,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 VARIANTS="${VARIANTS:-sensory:6|7|8|9}"
 SEEDS="${SEEDS:-56 34 78 89 202}"
 PIPELINE="${PIPELINE:-de_cma_local}"
@@ -73,7 +77,9 @@ for VAR in "${VAR_ARR[@]}"; do
   export MTYPE FREEZE
   for SEED in "${SEED_ARR[@]}"; do
     export SEED
-    JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
+      --partition="$PARTITION" \
       --mem="$MEM" --cpus-per-task="$CPUS" --time="$TIME" \
       --job-name="fj_${MTYPE}_m${SLUG}_s${SEED}" \
       --export=ALL \

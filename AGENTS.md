@@ -40,6 +40,8 @@ Source: [research_journal_2026-06-18.md](research_journal_2026-06-18.md) (2026-0
 - **Cursor rule:** `.cursor/rules/prior-distance-analysis.mdc` (auto-loaded for agents)
 - **Experiment history:** `research_journal_*.md` — dated results, not agent defaults
 
+- **ORCD submit scripts:** source `scripts/sbatch_defaults.sh` after `PARTITION` is set and pass `$SBATCH_EXTRA` to every `sbatch`. `PARTITION=mit_preemptable` (or `mit_preem`) defaults `--requeue`.
+
 ### Research journals (`research_journal_*.md`) — develop only
 
 - Journals live **only on the `develop` branch**. Do **not** create, edit, or commit them on `main`.

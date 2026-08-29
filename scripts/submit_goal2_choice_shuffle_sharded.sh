@@ -20,7 +20,6 @@
 #
 # Override: N_SHARDS=3 CLEAR_STREAM=0 MEM_SHARD=8G PARTITION=mit_normal \
 #   bash scripts/submit_goal2_choice_shuffle_sharded.sh
-# PARTITION=mit_preemptable (or mit_preem) defaults SBATCH_EXTRA=--requeue.
 
 set -euo pipefail
 
@@ -45,14 +44,9 @@ else
   TIME_SHARD="${TIME_SHARD:-12:00:00}"
 fi
 PARTITION="${PARTITION:-pi_fiete}"
-# --requeue is the default on preemptable partitions. Explicit SBATCH_EXTRA wins
-# (including SBATCH_EXTRA="" to disable).
-if [[ -z "${SBATCH_EXTRA+x}" ]]; then
-  case "$PARTITION" in
-    mit_preemptable|mit_preem) SBATCH_EXTRA="--requeue" ;;
-    *) SBATCH_EXTRA="" ;;
-  esac
-fi
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 

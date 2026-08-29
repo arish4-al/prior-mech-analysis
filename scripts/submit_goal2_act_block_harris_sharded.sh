@@ -55,19 +55,11 @@ CPUS_FIN="${CPUS_FIN:-2}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
-# --requeue is the default on preemptable partitions. Explicit SBATCH_EXTRA wins
-# (including SBATCH_EXTRA="" to disable). Requeued shards keep stream_acc;
-# RESTART=1 skips insertions already in the shard file. CLEAR_STREAM only
-# runs in this wrapper, not on Slurm requeue.
-if [[ -z "${SBATCH_EXTRA+x}" ]]; then
-  case "$PARTITION" in
-    mit_preemptable|mit_preem) SBATCH_EXTRA="--requeue" ;;
-    *) SBATCH_EXTRA="" ;;
-  esac
-fi
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
-export SBATCH_EXTRA
 
 export SESSION_SHUFFLE_NULL=1
 export ACTKERNEL_CHOICE_NULL=0
