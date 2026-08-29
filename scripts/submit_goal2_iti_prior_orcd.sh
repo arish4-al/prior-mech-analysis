@@ -24,6 +24,7 @@
 #   FAMILY=block NULL=default bash scripts/submit_goal2_iti_prior_orcd.sh
 #   CLEAR_STREAM=0 if re-running this wrapper after a crash
 #   PARTITION=mit_preemptable bash scripts/submit_goal2_iti_prior_orcd.sh
+#     --requeue is the default on mit_preemptable / mit_preem (see sbatch_defaults.sh)
 #
 set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
@@ -37,13 +38,14 @@ NRAND="${NRAND:-2000}"
 N_SHARDS="${N_SHARDS:-12}"
 TIME_SHARD="${TIME_SHARD:-5:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 RESTART="${RESTART:-1}"
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export NRAND N_SHARDS TIME_SHARD PARTITION CLEAR_STREAM RESTART
-SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
-export SBATCH_EXTRA
 
 if [[ "$FAMILY" != "block" && "$FAMILY" != "act" && "$FAMILY" != "bayes" && "$FAMILY" != "all" ]]; then
   echo "ERROR: FAMILY must be block|act|bayes|all (got $FAMILY)" >&2
@@ -66,7 +68,7 @@ if [[ "$FAMILY" == "bayes" || "$FAMILY" == "all" ]]; then
 fi
 
 echo "ITI prior  FAMILY=$FAMILY  NULL=$NULL  presets: ${PRESETS[*]}"
-echo "CLEAR_STREAM=$CLEAR_STREAM  nrand=$NRAND  N_SHARDS=$N_SHARDS  TIME_SHARD=$TIME_SHARD  PARTITION=$PARTITION"
+echo "CLEAR_STREAM=$CLEAR_STREAM  nrand=$NRAND  N_SHARDS=$N_SHARDS  TIME_SHARD=$TIME_SHARD  PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}"
 if [[ "$FAMILY" == "all" || "$FAMILY" == "act" ]]; then
   echo "NOTE: act_block_only CLEAR will replace existing alyx {split}.npy / _harris_unique.npy"
 fi

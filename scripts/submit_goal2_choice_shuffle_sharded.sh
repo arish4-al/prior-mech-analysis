@@ -44,10 +44,11 @@ else
   TIME_SHARD="${TIME_SHARD:-12:00:00}"
 fi
 PARTITION="${PARTITION:-pi_fiete}"
-SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
-export SBATCH_EXTRA
 
 # Plain shuffle: no structured-null flags
 export SESSION_SHUFFLE_NULL=0

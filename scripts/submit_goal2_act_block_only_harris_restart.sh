@@ -38,6 +38,9 @@ TIME_SHARD="${TIME_SHARD:-6:00:00}"
 TIME_FIN="${TIME_FIN:-6:00:00}"
 JOB_PREFIX="${JOB_PREFIX:-g2abh}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbrainlab.org}"
 export SESSION_SHUFFLE_NULL=1 ACTKERNEL_CHOICE_NULL=0
@@ -71,7 +74,8 @@ TAG=$(job_tag "$SPLIT")
 
 SHARD_JOBS=()
 for k in "${SHARD_ARR[@]}"; do
-  JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  JID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" --time="$TIME_SHARD" \
     --job-name="${JOB_PREFIX}_${TAG}_s${k}" \
@@ -82,7 +86,8 @@ for k in "${SHARD_ARR[@]}"; do
 done
 
 DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-FID=$(sbatch --parsable \
+# shellcheck disable=SC2086
+FID=$(sbatch --parsable $SBATCH_EXTRA \
   --partition="$PARTITION" \
   --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time="$TIME_FIN" \
   --dependency=afterok:"$DEP" \

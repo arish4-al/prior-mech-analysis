@@ -50,6 +50,11 @@ or writes under `/orcd/...`. Diagnose from local copies (`res/new`, `res/new_log
 If a submit/restart command is needed, print it for the user — never run it.
 Cursor rule: `.cursor/rules/no-orcd-access.mdc`.
 
+**Submit scripts (`scripts/submit_*.sh`):** source `scripts/sbatch_defaults.sh`
+after `PARTITION` is set, and pass `$SBATCH_EXTRA` to every `sbatch`.
+`PARTITION=mit_preemptable` (or `mit_preem`) defaults `--requeue`.
+Cursor rule: `.cursor/rules/sbatch-preemptable-requeue.mdc`.
+
 ### Phase 4b sanity check
 
 Before trusting new analysis paths, verify split-conditioned Phase 4b matches the retest:

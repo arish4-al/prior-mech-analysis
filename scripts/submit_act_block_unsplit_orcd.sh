@@ -14,6 +14,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 SHUFFLE_DURINGCHOICE="${SHUFFLE_DURINGCHOICE:-1}"
 export NRAND="${NRAND:-1000}"
 

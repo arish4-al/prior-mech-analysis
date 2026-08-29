@@ -32,6 +32,9 @@ FAMILY="${FAMILY:-both}"
 NRAND="${NRAND:-2000}"
 N_SHARDS="${N_SHARDS:-4}"
 PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 # Clean run by default: clear prior _pseudo_strat_sticky stream_acc + res, no resume.
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 RESTART="${RESTART:-0}"
@@ -44,7 +47,8 @@ export NRAND N_SHARDS PARTITION CLEAR_STREAM RESTART PSEUDO_LEN_FACTOR
 PREFIT_JID=""
 if [[ "$PREFIT" == "1" ]]; then
   echo "=== Prefit ActionKernel (once per eid) ==="
-  PREFIT_JID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  PREFIT_JID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
     --job-name=g2_ak_prefit \
     --mem="${MEM_PREFIT:-8G}" --cpus-per-task=2 --time="${TIME_PREFIT:-8:00:00}" \

@@ -1,0 +1,17 @@
+---
+description: Slurm submit scripts default --requeue on mit_preemptable
+globs: scripts/submit*.sh
+alwaysApply: true
+---
+
+# Slurm submit defaults (`mit_preemptable`)
+
+Every `scripts/submit_*.sh` that calls `sbatch` (or wraps one that does) must:
+
+1. Set `PARTITION` (default `pi_fiete`) before sourcing defaults.
+2. Source `scripts/sbatch_defaults.sh`.
+3. Pass `$SBATCH_EXTRA` to **every** `sbatch` (`sbatch --parsable $SBATCH_EXTRA ...`).
+
+`PARTITION=mit_preemptable` or `mit_preem` defaults `SBATCH_EXTRA=--requeue`.
+Do not hardcode `--requeue` or `SBATCH_EXTRA="${SBATCH_EXTRA:---requeue}"`.
+Explicit `SBATCH_EXTRA=""` disables it. Do not submit from the agent (see no-orcd-access).

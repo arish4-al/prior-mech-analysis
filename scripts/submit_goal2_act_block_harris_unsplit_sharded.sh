@@ -27,6 +27,9 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 PRESET="${PRESET:-act_block_harris_unsplit}" \
   JOB_PREFIX="${JOB_PREFIX:-g2ahu}" \
   bash scripts/submit_goal2_act_block_harris_sharded.sh

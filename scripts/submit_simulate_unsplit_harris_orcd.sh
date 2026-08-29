@@ -14,6 +14,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 export ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 export OUTPUT_DIR="${OUTPUT_DIR:-$ONE_CACHE_DIR/manifold_sim/stageB_bwm/unsplit_stim_choice}"
 export SEED="${SEED:-123}"
@@ -27,13 +31,17 @@ export PRIOR_MECH_NO_ONE="${PRIOR_MECH_NO_ONE:-1}"
 echo "ORCD unsplit Harris unique-null (stim strata @ stimOn; choice strata @ movement)"
 echo "OUTPUT_DIR=$OUTPUT_DIR  blocks=$BLOCKS_PER_SESSION nrand=$NRAND extra=$HARRIS_N_EXTRA_DONORS s_window_ms=$S_WINDOW_MS"
 
-J_REG=$(sbatch --parsable \
+# shellcheck disable=SC2086
+J_REG=$(sbatch --parsable $SBATCH_EXTRA \
+  --partition="$PARTITION" \
   --job-name=sim_uhu_reg \
   --export=ALL,VARIANT=regular,CASE=absence \
   scripts/run_simulate_unsplit_harris_slurm.sh)
 echo "  regular absence -> $J_REG"
 
-J_SENS=$(sbatch --parsable \
+# shellcheck disable=SC2086
+J_SENS=$(sbatch --parsable $SBATCH_EXTRA \
+  --partition="$PARTITION" \
   --job-name=sim_uhu_sens \
   --export=ALL,VARIANT=sensory,CASE=s_presence \
   scripts/run_simulate_unsplit_harris_slurm.sh)

@@ -32,6 +32,10 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$HOME/int-brain-lab/prior-mech-analysis}"
 cd "$REPO_DIR"
 
+PARTITION="${PARTITION:-pi_fiete}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
+
 PRESET="${PRESET:-goal3_c0_choice}"
 N_SHARDS="${N_SHARDS:-4}"
 NRAND="${NRAND:-2000}"
@@ -124,7 +128,9 @@ for sp in "${SPLITS[@]}"; do
   TAG=$(job_tag "$sp")
   SHARD_JOBS=()
   for ((k=0; k<N_SHARDS; k++)); do
-    JID=$(sbatch --parsable \
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
+      --partition="$PARTITION" \
       --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" \
       --job-name="g3_${TAG}_s${k}" \
       --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$N_SHARDS",NRAND="$NRAND",RESTART="$RESTART" \
@@ -133,7 +139,9 @@ for sp in "${SPLITS[@]}"; do
     echo "  $sp shard $k/$N_SHARDS -> $JID"
   done
   DEP=$(IFS=:; echo "${SHARD_JOBS[*]}")
-  FID=$(sbatch --parsable \
+  # shellcheck disable=SC2086
+  FID=$(sbatch --parsable $SBATCH_EXTRA \
+    --partition="$PARTITION" \
     --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="g3_fin_${TAG}" \
