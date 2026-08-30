@@ -37,12 +37,10 @@ from model_functions import (  # noqa: E402
     run_model,
 )
 
-NEW = Path.home() / (
-    "Downloads/ONE/alyx.internationalbrainlab.org/models/new"
-)
 BASE = Path.home() / (
     "Downloads/ONE/openalyx.internationalbrainlab.org/models"
 )
+NEW = BASE / "new"
 SEEDS = (7, 12, 34, 45, 89, 101, 303, 333)
 TAU_P = 20.0
 

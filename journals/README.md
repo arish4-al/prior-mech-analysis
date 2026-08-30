@@ -16,7 +16,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Faster model fitting](simulation_fit_speedups.md) | Fit to baseline loss (~0.40) in ≲1–2 h; weights-only ORCD batch / optimizer speedups |
 | [Joint fitting pipeline](joint_fitting_pipeline.md) | Retinal + `g_s`/`d_s` + weights (`L_w+L_S`); regular vs sensory freeze masks; ORCD drivers; joint-direct fair compare |
 | [Retinal then joint](retinal_then_joint_fitting.md) | Pivot: fit retinal @ all prior g/d≈0, then joint with retinal free to tweak; regular/sensory; modernize `fit_retinal` |
-| [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds |
+| [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds; 3× pre-action M (08-30, not yet run) |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
 ## Real data (`block_analysis_allsplits.py`, BWM)

@@ -261,11 +261,16 @@ def build_args(argv=None):
     ap.add_argument("--tied-thresholds", action="store_true", default=False,
                     help="Tie theta_c = theta_d (one free param; freeze theta_d). "
                          "Modeling-details test 4.")
+    ap.add_argument("--m-pre-weight", type=float, default=1.0,
+                    help="Multiply pre-action M nSSE in the traj loss "
+                         "(post-start M stays 1). Default 1.")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
     args = build_args(argv)
+    if args.m_pre_weight < 0:
+        raise SystemExit("--m-pre-weight must be >= 0")
     if (args.w_pp_lo is None) ^ (args.w_pp_hi is None):
         raise SystemExit("--w-pp-lo and --w-pp-hi must be set together")
     if args.w_pp_lo is not None:
@@ -358,7 +363,8 @@ def main(argv=None):
         print("[test3] --set-w-pp skipped (not an external warm start)")
 
     for k, v in (resume_meta_mp or {}).items():
-        if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds"):
+        if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
+                 "m_pre_weight"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -368,6 +374,7 @@ def main(argv=None):
     model_params["p_offset_always_on"] = bool(args.p_offset_always_on)
     model_params["iti_penalty"] = not bool(args.no_iti_penalty)
     model_params["tied_thresholds"] = bool(args.tied_thresholds)
+    model_params["m_pre_weight"] = float(args.m_pre_weight)
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -396,6 +403,7 @@ def main(argv=None):
           f"p_offset_always_on={bool(args.p_offset_always_on)} "
           f"iti_penalty={not bool(args.no_iti_penalty)} "
           f"tied_thresholds={bool(args.tied_thresholds)} "
+          f"m_pre_weight={float(args.m_pre_weight):g} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
           f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
@@ -521,6 +529,7 @@ def main(argv=None):
         p_offset_always_on=bool(args.p_offset_always_on),
         iti_penalty=not bool(args.no_iti_penalty),
         tied_thresholds=bool(args.tied_thresholds),
+        m_pre_weight=float(args.m_pre_weight),
     )
     wall = time.perf_counter() - wall0
 
@@ -537,6 +546,7 @@ def main(argv=None):
         "p_offset_always_on": bool(args.p_offset_always_on),
         "iti_penalty": not bool(args.no_iti_penalty),
         "tied_thresholds": bool(args.tied_thresholds),
+        "m_pre_weight": float(args.m_pre_weight),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
         "resume_source": resume_source,

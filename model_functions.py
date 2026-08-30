@@ -259,6 +259,8 @@ model_params = {
     'iti_penalty': True,
     # If True, discordant action threshold is copied from concordant (one θ).
     'tied_thresholds': False,
+    # Multiplier on pre-action M nSSE in the traj loss (post-start M stays 1).
+    'm_pre_weight': 1.0,
     'dt': _DEFAULT_DT,  # Set default dt in model_params
 }
 
@@ -356,8 +358,19 @@ def apply_tied_action_thresholds(mp):
     return mp
 
 
+def m_pre_weight_of(mp) -> float:
+    """Pre-action M nSSE multiplier. Default 1 (equal to post-start M)."""
+    try:
+        w = float((mp or {}).get("m_pre_weight", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(w) or w < 0.0:
+        return 1.0
+    return w
+
+
 def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
-                               tied_thresholds=None):
+                               tied_thresholds=None, m_pre_weight=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
@@ -369,6 +382,8 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["iti_penalty"] = bool(iti_penalty)
     if tied_thresholds is not None:
         mp["tied_thresholds"] = bool(tied_thresholds)
+    if m_pre_weight is not None:
+        mp["m_pre_weight"] = float(m_pre_weight)
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -4675,6 +4690,9 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
       rt_mode = "correct_split" : RT for congruent / incongruent using correct trials only.
       rt_mode = "combined_all"  : RT combined across all trials (one curve: cc/cw/dc/dw).
       rt_mode = "split_all"     : RT for congruent / incongruent using all trials.
+
+    Model trials match the BWM data mask used for ``behavior.npy``: drop
+    ``choice==0`` (no commit) and, for RT, keep only 0.08–2 s.
     """
 
     stim = np.array([-1, -0.25, -0.125, -0.0625, 0, 0.0625, 0.125, 0.25, 1])
@@ -4694,11 +4712,18 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
     strength_signed = [s * side for s, side in zip(strength_per_trial, side_per_trial)]
     is_congruent = [int(side == block) for side, block in zip(side_per_trial, block_per_trial)]
     groups = {'congruent': [], 'incongruent': []}
+    choices = np.asarray(results.get('choices', np.ones(len(strength_signed))), dtype=float)
 
-    # RT-only correct filtering for correct_split mode
+    # Match behavior.npy / load_trials_and_mask: require a choice, RT in [0.08, 2] s.
     for i, s in enumerate(strength_signed):
-        if metric == "rt" and rt_mode == "correct_split" and not correct_flags[i]:
+        if abs(float(choices[i])) != 1:
             continue
+        if metric == "rt":
+            rt_s = float(values[i]) * float(dt)
+            if not (0.08 <= rt_s <= 2.0):
+                continue
+            if rt_mode == "correct_split" and not correct_flags[i]:
+                continue
         key = 'congruent' if is_congruent[i] else 'incongruent'
         groups[key].append((s, values[i]))
 
@@ -5071,6 +5096,7 @@ def _loss_plot_diff_by_condition_with_data_torch(
 ):
     grad_opts, dtype, device = _resolve_grad_options(model_params, override=grad_options)
     eps = torch.tensor(1e-12, dtype=dtype, device=device)
+    m_pre_w = torch.tensor(m_pre_weight_of(model_params), dtype=dtype, device=device)
 
     def _tensor(value):
         return _ensure_tensor(value, dtype=dtype, device=device, requires_grad=False)
@@ -5277,11 +5303,12 @@ def _loss_plot_diff_by_condition_with_data_torch(
                                         sse_I = sse_I + sse_val
                                         sse_raw['I']['pre'] = sse_raw['I']['pre'] + raw_sse
                                         data_energy['I']['pre'] = data_energy['I']['pre'] + (denom - eps)
+                                        total_sse = total_sse + sse_val
                                     else:
-                                        sse_M = sse_M + sse_val
+                                        sse_M = sse_M + sse_val * m_pre_w
                                         sse_raw['M']['pre'] = sse_raw['M']['pre'] + raw_sse
                                         data_energy['M']['pre'] = data_energy['M']['pre'] + (denom - eps)
-                                    total_sse = total_sse + sse_val
+                                        total_sse = total_sse + sse_val * m_pre_w
 
             arr_iti_prev = {
                 -1: cond_map.get(('iti_prev', ('prev_ch', -1)), None),
@@ -5362,7 +5389,8 @@ def _loss_plot_diff_by_condition_with_data_torch(
         'debug': {
             'energy': data_energy,
             'sse_raw': sse_raw,
-            'iti_penalty': iti_penalties
+            'iti_penalty': iti_penalties,
+            'm_pre_weight': m_pre_w,
         }
     }
 
@@ -5436,6 +5464,7 @@ def loss_plot_diff_by_condition_with_data(
         return f"{s}{b}{c}"
 
     eps = 1e-12
+    m_pre_w = m_pre_weight_of(model_params)
     total_sse = 0.0
     sse_terms = {'I': 0.0, 'M': 0.0, 'P_neg': 0.0, 'P_diff': 0.0}
     sse_raw   = {'I': {'post': 0.0, 'pre': 0.0}, 'M': {'post': 0.0, 'pre': 0.0}}
@@ -5569,6 +5598,7 @@ def loss_plot_diff_by_condition_with_data(
                             m_seg = model_diff_pre[-T_pre:]
                             d_seg = data_pre_norm[-T_pre:]
                             has_nan = np.any(np.isnan(m_seg)) or np.any(np.isnan(d_seg))
+                            w_pre = m_pre_w if vn == "M" else 1.0
                             if has_nan:
                                 sse_terms[vn] += np.nan
                                 total_sse     += np.nan
@@ -5578,8 +5608,8 @@ def loss_plot_diff_by_condition_with_data(
                                 denom   = float(np.sum(d_seg**2) + eps)
                                 raw_sse = float(np.sum((m_seg - d_seg)**2))
                                 sse_val = raw_sse / denom
-                                sse_terms[vn] += sse_val
-                                total_sse     += sse_val
+                                sse_terms[vn] += w_pre * sse_val
+                                total_sse     += w_pre * sse_val
                                 sse_raw[vn]['pre']   += raw_sse
                                 data_energy[vn]['pre'] += (denom - eps)
                             if plot:
@@ -5676,7 +5706,10 @@ def loss_plot_diff_by_condition_with_data(
         'M': {'post': gof_M_post, 'pre': gof_M_pre,
               'total': np.nanmean([gof_M_post, gof_M_pre]) if not (np.isnan(gof_M_post) and np.isnan(gof_M_pre)) else np.nan}
     }
-    sse_terms['debug'] = {'energy': data_energy, 'sse_raw': sse_raw, 'iti_penalty': iti_penalties}
+    sse_terms['debug'] = {
+        'energy': data_energy, 'sse_raw': sse_raw, 'iti_penalty': iti_penalties,
+        'm_pre_weight': m_pre_w,
+    }
 
     # ---- plotting cleanup ----
     if plot:

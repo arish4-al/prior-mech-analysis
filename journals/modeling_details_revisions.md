@@ -14,7 +14,9 @@ Fit *quality* after each ablation is in scope.
 on, `W_pp` box `[0.496, 0.49999]`, two action thresholds. Test 1: keep
 the ITI gate. Test 2: `W_ii`/`W_mm` do **not** slow as hypothesized.
 Test 3: keep the 2.5 s `W_pp` floor (open-floor arms worse). Test 4:
-keep two thresholds (tied θ blows prior / `g_i`).
+keep two thresholds (tied θ blows prior / `g_i`). **2026-08-30:**
+test 5 queued — 3× pre-action M in the traj loss (RT-blind commit
+constraint). Not submitted from this machine.
 
 **Code:** dynamics in [`model_functions.py`](../model_functions.py)
 (`run_model`, `prestim_offset_start`, `p_offset_always_on`,
@@ -638,4 +640,30 @@ In baseline s333 (openalyx `models/…_s333/`):
 
 Same three plots with **true block** (stim vs `probabilityLeft`; 0.5 dropped)
 in `rt_psychometric_trueblock/` next to that.
+
+### 2026-08-30 — Test 5: 3× pre-action M (regular sweep)
+
+Traj loss matches I/M over **T=72 steps = 144 ms** post-stim plus a
+pre-action window. Those two nSSE terms were equal. Mean data RT is
+0.3–0.6 s, so the optimizer never sees |M| near the bound on hard /
+incongruent trials — `θ_d` and `g_i` wander to help early I/M and
+wreck time-to-bound (s333).
+
+**Change:** `model_params['m_pre_weight']` multiplies **only** pre-action
+**M** nSSE. Post-start M, both I windows, P, prior, and the ITI
+penalty stay at 1. CLI `--m-pre-weight` / env `M_PRE_WEIGHT`. Default
+remains 1 (old fits unchanged). R² in the loss debug is still
+unweighted.
+
+**Sweep:** same 8 regular seeds as tests 1–4, `stageB_hold_s89`
+protocol, weight **3**. Driver (do **not** run from the laptop):
+
+```bash
+bash scripts/submit_fit_stage_b_mpre.sh
+```
+
+Override: `M_PRE_WEIGHT=2` (tag becomes `stageB_hold_s89_mpre2`).
+Score after: shared-stim eval tot **and** act-prior RT R² vs baseline
+s101 / s333 / WEIGHTS_REL. Expect `θ_d` closer to `θ_c` and fewer
+incongruent timeouts if the extra M-pre term is doing its job.
 

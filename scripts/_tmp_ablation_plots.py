@@ -1,7 +1,7 @@
 """I/M traj + prior overlays for Stage B model-detail ablations.
 
 Same shared stim as the eval (bps=20, seed 12345, from baseline s101).
-Writes into each run’s model folder (openalyx baseline / alyx models / models/new).
+Writes into each run’s model folder (openalyx models / models/new).
 """
 from __future__ import annotations
 
@@ -28,9 +28,8 @@ import model_functions as mf  # noqa: E402
 from model_functions import int_regs, move_regs  # noqa: E402
 
 SEEDS = (7, 12, 34, 45, 89, 101, 303, 333)
-ALYX = Path.home() / "Downloads/ONE/alyx.internationalbrainlab.org/models"
-NEW = ALYX / "new"
 BASE = Path.home() / "Downloads/ONE/openalyx.internationalbrainlab.org/models"
+NEW = BASE / "new"
 
 
 def latest_final(d: Path) -> Path:
@@ -48,7 +47,7 @@ def arm_dir(arm: str, seed: int) -> Path:
             f"weights_run_fj_stageB_hold_s89_onethr_regular_mask11-12-13_s{seed}"
         )
     if arm in ("poffset", "noiti"):
-        return ALYX / (
+        return BASE / (
             f"weights_run_fj_stageB_hold_s89_{arm}_regular_mask12-13_s{seed}"
         )
     return NEW / (
