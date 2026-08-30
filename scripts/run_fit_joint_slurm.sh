@@ -23,6 +23,7 @@
 #      NO_ITI_PENALTY=1 → --no-iti-penalty (test 2).
 #      W_PP_LO / W_PP_HI / SET_W_PP → --w-pp-lo/hi --set-w-pp (test 3).
 #      TIED_THRESHOLDS=1 → --tied-thresholds (test 4).
+#      M_PRE_WEIGHT → --m-pre-weight (pre-action M nSSE multiplier; default 1).
 
 set -euo pipefail
 
@@ -68,6 +69,7 @@ W_PP_LO="${W_PP_LO:-}"
 W_PP_HI="${W_PP_HI:-}"
 SET_W_PP="${SET_W_PP:-}"
 TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
+M_PRE_WEIGHT="${M_PRE_WEIGHT:-1}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -90,6 +92,7 @@ echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
+echo "M_PRE_WEIGHT=$M_PRE_WEIGHT"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -114,6 +117,7 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$W_PP_HI" ]] && ARGS+=(--w-pp-hi "$W_PP_HI")
 [[ -n "$SET_W_PP" ]] && ARGS+=(--set-w-pp "$SET_W_PP")
 [[ "$TIED_THRESHOLDS" == "1" ]] && ARGS+=(--tied-thresholds)
+ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"

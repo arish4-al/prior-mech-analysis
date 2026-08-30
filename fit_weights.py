@@ -688,7 +688,7 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          blocks_per_session_override=None, verbose=True,
                          stim_rng=None, stimuli_bundle=None,
                          p_offset_always_on=None, iti_penalty=None,
-                         tied_thresholds=None):
+                         tied_thresholds=None, m_pre_weight=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
     Combines trajectory, prior-effect, and behavioral losses.
@@ -729,6 +729,7 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
             p_offset_always_on=p_offset_always_on,
             iti_penalty=iti_penalty,
             tied_thresholds=tied_thresholds,
+            m_pre_weight=m_pre_weight,
         )
 
         # ---------- STIMULI ----------
