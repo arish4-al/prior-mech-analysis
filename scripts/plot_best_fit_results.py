@@ -195,12 +195,15 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
     )
     total = float(loss_traj["total"] + loss_prior["total"])
     L_S = None
+    S_r2 = None
     if avg_mean_R is not None:
         plt.close("all")
         S_avg = mean_S_by_contrast(results, steps_before_obs)
         sse = compute_sse_stim_right(S_avg, avg_mean_R, baseline_R=0)
         raw_ls = sse["total_loss"]
         L_S = float(raw_ls) if np.isfinite(raw_ls) else None
+        sr = sse.get("total_gof_r2")
+        S_r2 = float(sr) if sr is not None and np.isfinite(sr) else None
         plot_S_diff_by_contrast_side_with_data(
             S_avg, {}, avg_mean_R, baseline=0,
             save_dir=str(out_dir), ylim=[-0.14, 0.75], yticks=None,
@@ -212,6 +215,16 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
                 dpi=150, bbox_inches="tight", transparent=False,
             )
         plt.close("all")
+    gI = (loss_traj.get("gof") or {}).get("I") or {}
+    gM = (loss_traj.get("gof") or {}).get("M") or {}
+    pg = loss_prior.get("gof")
+    try:
+        prior_r2 = float(pg) if pg is not None and np.isfinite(float(pg)) else None
+    except (TypeError, ValueError):
+        prior_r2 = None
+    def _g(d, k):
+        v = d.get(k)
+        return float(v) if v is not None and np.isfinite(v) else None
     summary = {
         "json": str(json_path),
         "recorded_loss": float(meta.get("loss", np.nan)),
@@ -219,6 +232,12 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         "traj": float(loss_traj["total"]),
         "prior": float(loss_prior["total"]),
         "L_S": L_S,
+        "gof_I_pre": _g(gI, "pre"),
+        "gof_I_post": _g(gI, "post"),
+        "gof_M_pre": _g(gM, "pre"),
+        "gof_M_post": _g(gM, "post"),
+        "gof_S": S_r2,
+        "gof_prior": prior_r2,
         "g_i": float(mp["g_i"]),
         "d_i": float(mp["d_i"]),
         "g_m": float(mp["g_m"]),

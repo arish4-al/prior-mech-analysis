@@ -101,7 +101,7 @@ Rerun (ORCD; do not submit from the laptop):
 FAMILY=all NULL=both bash scripts/submit_goal2_iti_prior_orcd.sh
 ```
 
-`NULL=default` → `{split}.npy` (pseudo-blocks). `NULL=harris` → `{split}_harris_unique.npy` (24G shards). Default **12 shards**, `TIME_SHARD=5:00:00` (~58 insertions/shard; Harris ITI was 1–3 min/insertion). `FAMILY=block|act|bayes`. Smoke: `python scripts/test_iti_true_block_lag.py`.
+`NULL=default` → `{split}.npy` (pseudo-blocks). `NULL=harris` → `{split}_harris_unique.npy` (24G shards). `NULL=pseudo` → `{split}_pseudosession.npy` (unstratified; per-prior generative labels — see [ITI prior](iti_prior.md)). Default **24 shards**, `TIME_SHARD=5:00:00`. `FAMILY=block|act|bayes`. Smoke: `python scripts/test_iti_true_block_lag.py`.
 
 ---
 

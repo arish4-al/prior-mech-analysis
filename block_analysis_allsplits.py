@@ -554,7 +554,9 @@ ACTKERNEL_NULL_MODES = ('strat', 'fixedstim', 'unconstrained')
 _ACTKERNEL_MODE_SUFFIX = {
     'strat': '_pseudo_strat',
     'fixedstim': '_pseudo_fixed',
-    'unconstrained': '_pseudosession',  # legacy calendar-index into full pseudo
+    # ITI ``*_block_only``: unstratified full-session prior labels.
+    # Choice L–R: legacy calendar-index into a full pseudo (retired).
+    'unconstrained': '_pseudosession',
 }
 # Strat-only: size the BWM pseudo so its *biased* length ≈ factor × real session.
 # ``generate_pseudo_blocks`` always prepends a ~90-trial pLeft=0.5 warm-up block
@@ -609,7 +611,9 @@ def configure_null_file_suffix(
 
     - AK ``strat`` → ``{split}_pseudo_strat*.npy`` (any len_factor)
     - AK ``fixedstim`` → ``{split}_pseudo_fixed*.npy``
-    - AK ``unconstrained`` → ``{split}_pseudosession*.npy`` (legacy)
+    - AK ``unconstrained`` → ``{split}_pseudosession*.npy``
+      (ITI ``*_block_only``: unstratified pseudo-session priors; choice L–R:
+      legacy calendar index)
     - AK + ``late_sticky`` → the same tags with ``_sticky`` appended
       (does **not** overwrite stationary-α AK files)
     - ``--session-shuffle-null`` (Harris unique-null) → ``{split}_harris_unique*.npy``
@@ -810,6 +814,63 @@ def _is_true_block_iti_split(split):
     if _split_uses_act_prior(name) or _split_uses_bayes_prior(name):
         return False
     return name == 'block_only' or name.startswith('block_only_')
+
+
+def _is_iti_prior_only_split(split):
+    '''ITI prior L–R with no stim/choice stratum: the three ``*_block_only``.'''
+    name = split or ''
+    cval = contrast_from_split(name)
+    if cval is not None:
+        name = re.sub(r'(_c)?([0-9]*\.?[0-9]+)$', '', name)
+    return name in ('block_only', 'act_block_only', 'bayes_block_only')
+
+
+def _iti_pseudosession_n_trials(split, trials, pseudo_len_factor=None):
+    '''Pseudo length so biased leftover ≥ n_elig after drop-0.5 (± true-block lag).'''
+    n = _strat_pseudo_n_trials(trials, pseudo_len_factor)
+    if _is_true_block_iti_split(split):
+        n += 1
+    return n
+
+
+def _iti_pseudo_sessions_block_stim(n_trials, n, seed):
+    '''``n`` IBL-like pseudo sessions: stim_side and probabilityLeft only.
+
+    Same blocks + stim-from-pLeft process as
+    ``simulate_synthetic_choices._pseudo_sessions_vectorized``, without
+    contrasts or choices. Used for true-block and Bayes ITI unconstrained.
+    '''
+    np.random.seed(int(seed))
+    n_trials = int(n_trials)
+    pleft = np.stack([generate_pseudo_blocks(n_trials) for _ in range(int(n))])
+    stim_side = np.where(np.random.random((int(n), n_trials)) < pleft, -1.0, 1.0)
+    return stim_side.astype(float), pleft
+
+
+def _iti_pseudosession_prior_left(split, pleft, stim_side=None, choice=None):
+    '''Boolean prior-L on a full IBL pseudo-session, matching ``get_d_vars``.
+
+    Drops pLeft=0.5. True-block ITI lags to t−1. Act: kernel on remaining
+    choices. Bayes: full-history inference, then keep.
+    Returns 1d bool or None if too short.
+    '''
+    pleft = np.asarray(pleft, dtype=float).reshape(-1)
+    keep = ~np.isclose(pleft, 0.5)
+    if _is_true_block_iti_split(split):
+        labels, keep2 = _lag_true_block_iti_donor_labels(pleft, keep)
+        if labels is None:
+            return None
+        return labels[keep2]
+    if int(keep.sum()) < 1:
+        return None
+    if _split_uses_bayes_prior(split):
+        if stim_side is None:
+            raise ValueError('bayes ITI pseudosession needs stim_side')
+        return _block_null_prior_left(split, None, stim_side)[keep]
+    if choice is None:
+        raise ValueError('act ITI pseudosession needs choice')
+    ch = np.asarray(choice, dtype=float).reshape(-1)
+    return _block_null_prior_left(split, ch[keep], None)
 
 
 def _apply_true_block_iti_previous_trial_label(trials):
@@ -2305,21 +2366,25 @@ def _compute_control_D_actkernel_block(
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
         actkernel_null_mode='fixedstim', actkernel_pseudo_len_factor=None,
         actkernel_late_sticky=False):
-    '''Synthetic-prior nulls for act_block / bayes_block (same strata as Harris).
+    '''Synthetic-prior nulls for act_block / bayes_block / ITI true-block.
 
     ``act_block_*``: fit ActionKernel, simulate under θ, labels = act-binary.
-    ``bayes_block_*``: OptimalBayesian choices (no AK); labels = Bayes-binary
-    from stim history. Then optional copy-last.
+    ``bayes_block_*``: labels = Bayes-binary from stim history (choices only
+    if a stim×choice stratum is remade). Then optional copy-last.
+    ITI ``block_only`` unconstrained: labels = lagged pseudo-session pLeft.
 
     - ``fixedstim``: real stim stream; priors at the real stim×choice
       ``elig_idx`` (within-stratum).
     - ``strat``: new pseudo stim/blocks; take priors from the pseudo's own
       stim×choice stratum, length-matched to ``n_elig``.
+    - ``unconstrained``: ITI ``*_block_only`` only — full pseudo-session,
+      no stratum. True-block: real block labels. Act: AK choices → kernel.
+      Bayes: stim sequence → ``bayesian_priors`` (no choice model).
     '''
     mode = _resolve_actkernel_null_mode(True, actkernel_null_mode)
-    if mode == 'unconstrained':
+    if mode == 'unconstrained' and not _is_iti_prior_only_split(split):
         raise ValueError(
-            'act_block AK null does not support unconstrained; '
+            'act_block AK unconstrained is ITI-only (no stratum); '
             'use fixedstim (within-stratum) or strat')
     len_factor = _actkernel_pseudo_len_factor(actkernel_pseudo_len_factor)
     labels_true = np.asarray(labels_true, dtype=bool)
@@ -2352,41 +2417,58 @@ def _compute_control_D_actkernel_block(
 
     _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
 
-    fit = _null_choice_fit(split, eid, trials)
-    choice_model = fit.get('choice_model', 'actkernel')
+    # ITI unconstrained: only act needs a choice model (fitted AK).
+    # True-block uses generate_pseudo_blocks; Bayes uses stim history only.
+    need_choice_fit = not (
+        mode == 'unconstrained' and not _split_uses_act_prior(split))
+    fit = _null_choice_fit(split, eid, trials) if need_choice_fit else None
+    choice_model = (fit.get('choice_model', 'actkernel') if fit is not None
+                    else 'none')
     elig_idx = np.asarray(elig_idx, dtype=int)
     n_elig = len(elig_idx)
-    n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
-                if mode == 'strat' else len(trials))
+    if mode == 'strat':
+        n_pseudo = _strat_pseudo_n_trials(trials, len_factor)
+    elif mode == 'unconstrained':
+        n_pseudo = _iti_pseudosession_n_trials(split, trials, len_factor)
+    else:
+        n_pseudo = len(trials)
+    fit_mode = fit.get('mode') if fit is not None else 'none'
+    fit_params = (np.asarray(fit['params'], dtype=float) if fit is not None
+                  else np.array([]))
     print(f'actkernel-block [{split}]: mode={mode}; '
           f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
           f'(real={len(trials)}, n_elig={n_elig}, '
-          f'biased≈{n_pseudo - ACTKERNEL_PSEUDO_UNBIASED_PAD if mode == "strat" else n_pseudo}, '
-          f'drop-0.5 pseudo strata); '
+          f'biased≈{n_pseudo - ACTKERNEL_PSEUDO_UNBIASED_PAD if mode != "fixedstim" else n_pseudo}, '
+          f'{"unstratified ITI" if mode == "unconstrained" else "drop-0.5 pseudo strata"}); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
-          f'fit mode={fit.get("mode")} '
-          f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
+          f'fit mode={fit_mode} '
+          f'params={np.array2string(fit_params, precision=3) if fit_params.size else "—"}')
 
     def _ok(ys):
         return (ys is not None
                 and int(ys.sum()) >= min_trials_per_side
                 and int((~ys).sum()) >= min_trials_per_side)
 
-    syn = _syn()
+    syn = (_syn() if need_choice_fit else None)
     rng = np.random.default_rng()
     seed_base = int(rng.integers(0, 2**31 - 1))
     n_done = 0
     gen_offset = 0
     gen_at_factor = 0
-    sim_model = fit.get('sim_model')
-    theta = fit['params']
+    sim_model = fit.get('sim_model') if fit is not None else None
+    theta = fit['params'] if fit is not None else None
     max_factor = ACTKERNEL_PSEUDO_LEN_FACTOR_MAX
 
     while n_done < nrand:
         need = nrand - n_done
         n_gen = max(need, min(null_batch_size, need + max(need // 5, 5)))
-        if mode == 'fixedstim':
+        if mode == 'unconstrained' and not _split_uses_act_prior(split):
+            side_mat, pleft_mat = _iti_pseudo_sessions_block_stim(
+                n_pseudo, n_gen, seed=seed_base + gen_offset)
+            ch_mat = signed_mat = None
+            n_rows = side_mat.shape[0]
+        elif mode == 'fixedstim':
             out = syn.synthetic_choices_fixed_stim(
                 trials, params=theta, n=n_gen,
                 seed=seed_base + gen_offset, model=sim_model,
@@ -2395,23 +2477,36 @@ def _compute_control_D_actkernel_block(
             ch_mat = np.asarray(out['choice'], dtype=float)
             if ch_mat.ndim == 1:
                 ch_mat = ch_mat[None, :]
-            side_mat = signed_mat = None
+            side_mat = signed_mat = pleft_mat = None
+            n_rows = ch_mat.shape[0]
         else:
             out = syn.synthetic_sessions_from_trials(
                 trials, n=n_gen, eid=str(eid), subject='bwm',
                 params=theta, seed=seed_base + gen_offset, fast=True,
-                n_trials=(n_pseudo if mode == 'strat' else None),
+                n_trials=(n_pseudo if mode in ('strat', 'unconstrained')
+                          else None),
                 late_sticky=actkernel_late_sticky,
                 choice_model=choice_model)
             ch_mat = np.asarray(out['choice'], dtype=float)
             side_mat = np.asarray(out['stim_side'], dtype=float)
             signed_mat = np.asarray(out['signed_contrast'], dtype=float)
             pleft_mat = np.asarray(out['probabilityLeft'], dtype=float)
+            n_rows = ch_mat.shape[0]
         gen_offset += n_gen
         gen_at_factor += n_gen
 
-        for i in range(ch_mat.shape[0]):
-            if mode == 'strat':
+        for i in range(n_rows):
+            if mode == 'unconstrained':
+                ch_i = None if ch_mat is None else ch_mat[i]
+                prior_l = _iti_pseudosession_prior_left(
+                    split, pleft_mat[i],
+                    stim_side=None if side_mat is None else side_mat[i],
+                    choice=ch_i)
+                if prior_l is None:
+                    continue
+                ys = _ys_from_stratum_labels(
+                    prior_l, np.ones(len(prior_l), dtype=bool), n_elig, rng)
+            elif mode == 'strat':
                 # Match the real act_block path: drop the pseudo's pLeft=0.5
                 # warm-up block before forming the stim×choice stratum, and
                 # cold-start the act-kernel prior on the biased choices (Bayes
@@ -2470,10 +2565,17 @@ def _compute_control_D_actkernel_block(
 
     d_var = (((m0_true - m1_true) / ((v0_true + v1_true) ** 0.5)) ** 2)
     d_euc = (m0_true - m1_true) ** 2
-    scheme = _null_scheme_name({
-        'strat': 'synthetic_prior_pseudo_strat',
-        'fixedstim': 'synthetic_prior_pseudo_fixed',
-    }[mode], actkernel_late_sticky, choice_model)
+    if mode == 'unconstrained' and _is_true_block_iti_split(split):
+        scheme = 'pseudo_block_pseudosession'
+    elif mode == 'unconstrained' and _split_uses_bayes_prior(split):
+        scheme = 'synthetic_bayes_prior_pseudosession'
+    else:
+        scheme = _null_scheme_name({
+            'strat': 'synthetic_prior_pseudo_strat',
+            'fixedstim': 'synthetic_prior_pseudo_fixed',
+            'unconstrained': 'synthetic_prior_pseudosession',
+        }[mode], actkernel_late_sticky,
+            'actkernel' if choice_model in (None, 'none') else choice_model)
     return {
         'acs': acs,
         'acs1': acs1,
@@ -2484,8 +2586,8 @@ def _compute_control_D_actkernel_block(
         'D': D,
         'null_scheme': scheme,
         'actkernel_null_mode': mode,
-        'actkernel_fit_mode': fit.get('mode'),
-        'actkernel_params': np.asarray(fit['params'], dtype=float),
+        'actkernel_fit_mode': fit_mode,
+        'actkernel_params': fit_params,
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
         'actkernel_late_sticky': bool(actkernel_late_sticky),
@@ -2923,10 +3025,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
 
     ``actkernel_choice_null``: if True, use synthetic-choice / synthetic-prior
     nulls. ``*_act`` / ``act_block_*``: fitted ActionKernel choices.
-    ``*bayes*``: IBL OptimalBayesian choices (no AK). Choice L–R: synthetic
+    ``*bayes*``: IBL OptimalBayesian choices (no AK) except ITI unconstrained
+    Bayes (stim sequence only; no choice model). Choice L–R: synthetic
     **choices**. Act/Bayes_block prior L–R: synthetic **priors** (act-binary
-    from choices, or Bayes-binary from stim). Mode via ``actkernel_null_mode``
-    (default ``strat``). Takes precedence over session_shuffle_null.
+    from choices, or Bayes-binary from stim). ITI ``block_only`` with
+    ``actkernel_null_mode='unconstrained'``: lagged pseudo-session block
+    labels (no AK). Mode via ``actkernel_null_mode`` (default ``strat``).
+    Takes precedence over session_shuffle_null.
 
     ``actkernel_pseudo_len_factor``: strat only — multiply BWM pseudo length
     vs the real session (default 3; env ``ACTKERNEL_PSEUDO_LEN_FACTOR``).
@@ -3025,9 +3130,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
 
     # Structured nulls: choice L–R (Harris / AK) or act_block prior L–R
     # (Harris / AK). AK takes precedence over Harris for both families.
+    # ITI true-block unconstrained uses the same block path (no stratum).
     ak_mode = _resolve_actkernel_null_mode(
         actkernel_choice_null, actkernel_null_mode)
-    if ak_mode is not None and is_act_block_prior_split(split):
+    if ak_mode is not None and (
+            is_act_block_prior_split(split)
+            or (_is_true_block_iti_split(split)
+                and ak_mode == 'unconstrained')):
         D = _get_d_vars_block_harris(
             split, trials, spikes, clusters, mapping, control, nrand,
             null_batch_size, donor_bank, eid,

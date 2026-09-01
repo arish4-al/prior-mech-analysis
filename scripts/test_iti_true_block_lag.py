@@ -26,6 +26,10 @@ def test_split_gate():
     assert ba.is_harris_eligible_split('block_only')
     assert ba.is_harris_eligible_split('act_block_only')
     assert ba.is_harris_eligible_split('bayes_block_only')
+    for name in ('block_only', 'act_block_only', 'bayes_block_only'):
+        assert ba._is_iti_prior_only_split(name)
+    assert not ba._is_iti_prior_only_split('act_block_duringstim_l')
+    assert not ba._is_iti_prior_only_split('block_duringstim_l')
 
 
 def test_true_block_lag_on_trials():
@@ -235,6 +239,95 @@ def test_harris_block_only_tiny():
           f'unique={n_stored}')
 
 
+def test_iti_pseudosession_labels_per_prior():
+    '''True = lagged pLeft; Bayes = stim history; act = choices. No stratum.'''
+    pleft = np.concatenate([np.full(10, 0.5), np.full(15, 0.8), np.full(15, 0.2)])
+    # Stim follows the opposite of the block so Bayes ≠ true-block after drop.
+    stim_side = np.where(pleft > 0.5, 1.0, -1.0)
+    stim_side[:10] = np.where(np.arange(10) % 2 == 0, -1.0, 1.0)
+    # Choices follow the block (so act ≈ true after drop, ≠ Bayes).
+    choice = np.where(pleft > 0.5, 1.0, -1.0)
+    choice[:10] = 1.0
+
+    ys_true = ba._iti_pseudosession_prior_left('block_only', pleft)
+    assert ys_true is not None and ys_true.shape == (29,)  # 30 biased − first
+    # First remaining biased trial dropped; next 14 of 0.8 + first 0.2 labeled 0.8.
+    assert int(ys_true.sum()) == 15
+
+    ys_bayes = ba._iti_pseudosession_prior_left(
+        'bayes_block_only', pleft, stim_side=stim_side)
+    assert ys_bayes is not None and ys_bayes.shape == (30,)
+    ys_act = ba._iti_pseudosession_prior_left(
+        'act_block_only', pleft, choice=choice)
+    assert ys_act is not None and ys_act.shape == (30,)
+    # Three generative labels must not collapse to one another.
+    assert not np.array_equal(ys_true, ys_bayes[:29])
+    assert not np.array_equal(ys_act, ys_bayes)
+
+
+def test_get_d_vars_iti_pseudosession_three_splits():
+    '''Unconstrained ITI: block + Bayes need no AK; act uses a fake choice model.'''
+    trials = _synthetic_trials()
+    cached = _synthetic_cache(trials)
+    nrand = 3
+
+    class _FakeSyn:
+        def synthetic_sessions_from_trials(self, trials_df, n=3, **kw):
+            n_tr = int(kw.get('n_trials') or len(trials_df))
+            rng = np.random.default_rng(1)
+            pleft = np.stack([
+                ba.generate_pseudo_blocks(n_tr) for _ in range(int(n))])
+            side = np.where(rng.random(pleft.shape) < pleft, -1.0, 1.0)
+            choice = np.where(side < 0, 1.0, -1.0)
+            return dict(
+                choice=choice, stim_side=side,
+                signed_contrast=np.abs(side), probabilityLeft=pleft)
+
+    orig_syn = ba._syn
+    orig_fit = ba._null_choice_fit
+    ba._syn = lambda: _FakeSyn()
+    ba._null_choice_fit = lambda *a, **k: {
+        'eid': 'eidA', 'params': np.array([0.2, 0.1, 0.05, 0.05]),
+        'mode': 'fake', 'choice_model': 'actkernel', 'sim_model': None,
+    }
+    try:
+        expected = {
+            'block_only': 'pseudo_block_pseudosession',
+            'bayes_block_only': 'synthetic_bayes_prior_pseudosession',
+            'act_block_only': 'synthetic_prior_pseudosession',
+        }
+        for split, scheme in expected.items():
+            D = ba.get_d_vars(
+                split, cached['pid'], control=True, nrand=nrand,
+                cached=cached, actkernel_null_mode='unconstrained')
+            assert D.get('null_scheme') == scheme, (split, D.get('null_scheme'))
+            assert D.get('actkernel_null_mode') == 'unconstrained', split
+            if split == 'act_block_only':
+                assert D.get('null_choice_model') == 'actkernel'
+            else:
+                assert D.get('null_choice_model') == 'none'
+            reg = next(iter(D['D']))
+            n_stored = len(D['D'][reg]['d_eucs'])
+            assert n_stored == nrand + 1, (split, n_stored)
+            print(f'  unconstrained {split}: scheme={scheme} n_curves={n_stored}')
+        dummy_b = np.zeros((10, 2, 3))
+        dummy_acs = np.array(['VISp', 'VISp'])
+        try:
+            ba._compute_control_D_actkernel_block(
+                dummy_b, dummy_acs, dummy_acs,
+                np.array([True] * 5 + [False] * 5),
+                np.ones(10, dtype=bool), np.zeros(10, dtype=bool),
+                10, 2, 'act_block_duringstim_l',
+                trials=None, elig_idx=np.arange(10), eid='x',
+                actkernel_null_mode='unconstrained')
+            raise AssertionError('during-trial unconstrained should raise')
+        except ValueError as exc:
+            assert 'ITI-only' in str(exc)
+    finally:
+        ba._syn = orig_syn
+        ba._null_choice_fit = orig_fit
+
+
 if __name__ == '__main__':
     test_split_gate()
     test_true_block_lag_on_trials()
@@ -244,8 +337,10 @@ if __name__ == '__main__':
     test_null_labels_length()
     test_act_kernel_includes_previous_action_not_current()
     test_bayes_includes_previous_stim_not_current()
+    test_iti_pseudosession_labels_per_prior()
     print('unit ok — running get_d_vars smoke')
     test_get_d_vars_iti_three_splits_tiny()
     test_harris_block_only_tiny()
+    test_get_d_vars_iti_pseudosession_three_splits()
     print('SMOKE PASSED')
 
