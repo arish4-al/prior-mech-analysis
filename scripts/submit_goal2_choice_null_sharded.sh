@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submit sharded Goal 2 choice L–R jobs for one structured null scheme.
 #
-#   NULL_SCHEME=pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|harris \
+#   NULL_SCHEME=pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|harris|pseudosession \
 #     bash scripts/submit_goal2_choice_null_sharded.sh
 #
 # Schemes (journal 2026-07-23b / 2026-07-24 / 2026-08-22):
@@ -13,6 +13,8 @@
 #   pseudo_fixed_sticky / strat_sticky — fitted AK + copy-last (_sticky suffix)
 #   harris / harris_unique — opt 3 unique-null: writes {split}_harris_unique*
 #                   (does NOT overwrite legacy with-replacement _harris)
+#   pseudosession / unconstrained — ITI *_block_only unstratified priors
+#                   ({split}_pseudosession.npy). See journals/iti_prior.md.
 #
 # Strat rerun (recommended):
 #   bash scripts/submit_goal2_choice_strat_x3_sharded.sh
@@ -51,6 +53,7 @@ CPUS_FIN="${CPUS_FIN:-2}"
 CPUS_SMOKE="${CPUS_SMOKE:-2}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_SHARD="${TIME_SHARD:-12:00:00}"
+TIME_FIN="${TIME_FIN:-2:00:00}"
 TIME_SMOKE="${TIME_SMOKE:-2:00:00}"
 PARTITION="${PARTITION:-pi_fiete}"
 # shellcheck disable=SC1091
@@ -129,8 +132,21 @@ case "$_ORIG_SCHEME" in
       MEM_SHARD=6G
     fi
     ;;
+  pseudosession|unconstrained|pseudo)
+    # ITI *_block_only: unstratified full-session prior labels.
+    # true-block = lagged generate_pseudo_blocks; act = AK choices → kernel;
+    # Bayes = stim sequence → bayesian_priors (no choice model).
+    NULL_SCHEME=pseudosession
+    ACTKERNEL_CHOICE_NULL=1
+    ACTKERNEL_NULL_MODE=unconstrained
+    CASE_TAG=pseudosession
+    SUFFIX=_pseudosession
+    JOB_PREFIX="${JOB_PREFIX:-g2itp}"
+    PSEUDO_LEN_FACTOR=""
+    CLEAR_STREAM="${CLEAR_STREAM:-1}"
+    ;;
   *)
-    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|pseudo_strat_sticky|harris_unique (got $_ORIG_SCHEME)" >&2
+    echo "ERROR: NULL_SCHEME must be pseudo_strat|pseudo_fixed|pseudo_fixed_sticky|pseudo_strat_sticky|harris_unique|pseudosession (got $_ORIG_SCHEME)" >&2
     exit 1
     ;;
 esac
@@ -259,7 +275,7 @@ for sp in "${SPLITS[@]}"; do
   # shellcheck disable=SC2086
   FID=$(sbatch --parsable $SBATCH_EXTRA \
     --partition="$PARTITION" \
-    --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" \
+    --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time="$TIME_FIN" \
     --dependency=afterok:"$DEP" \
     --job-name="${JOB_PREFIX}_fin_${TAG}" \
     --export=ALL,SPLIT="$sp",ACTKERNEL_CHOICE_NULL="$ACTKERNEL_CHOICE_NULL",ACTKERNEL_NULL_MODE="$ACTKERNEL_NULL_MODE",ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}",ACTKERNEL_LATE_STICKY="$ACTKERNEL_LATE_STICKY",SESSION_SHUFFLE_NULL="$SESSION_SHUFFLE_NULL" \

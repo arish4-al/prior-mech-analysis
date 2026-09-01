@@ -392,7 +392,9 @@ def main():
                    help='AK null variant: strat=new pseudo + remade stratum '
                         '(opt 1); fixedstim=real stim, labels at the real '
                         'shuffle-stratum elig_idx (opt 2, within-stratum); '
-                        'unconstrained=legacy (choice only). '
+                        'unconstrained=ITI *_block_only unstratified '
+                        'pseudo-session priors (true-block / AK / Bayes); '
+                        'legacy calendar index for choice L–R. '
                         'Implies AK null even without --actkernel-choice-null')
     p.add_argument('--prefit-actkernel', action='store_true',
                    help='MCMC-fit ActionKernel on all BWM sessions and cache '
