@@ -5,6 +5,7 @@ bps=20 session (same stimuli for every model).
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 import matplotlib
@@ -134,8 +135,22 @@ def load_plot_model(json_path: Path):
     return mp, meta
 
 
+def alias_prior_effects(out_dir: Path) -> None:
+    """Copy the long param-name SVG/PNG onto stable ``prior_effects.*`` names."""
+    hits = [
+        p for p in out_dir.glob("prior_effects_*.svg") if p.name != "prior_effects.svg"
+    ]
+    if not hits:
+        return
+    newest = max(hits, key=lambda p: p.stat().st_mtime)
+    shutil.copy2(newest, out_dir / "prior_effects.svg")
+    png = newest.with_suffix(".png")
+    if png.is_file():
+        shutil.copy2(png, out_dir / "prior_effects.png")
+
+
 def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path,
-             avg_mean_R=None):
+             avg_mean_R=None, include_stim=False):
     mp, meta = load_plot_model(json_path)
     (
         stimuli,
@@ -171,16 +186,20 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         plot=True,
         save_dir=str(out_dir),
     )
+    T_prior, plot_win, custom_prior_win = mf.resolve_prior_distance_window(
+        mp, T=72, plot_window=80)
+    if include_stim and not custom_prior_win:
+        plot_win = 150
     loss_prior = loss_prior_effect(
         regions=prior_regions,
         results=results,
         model_params=mp,
         steps_before_obs=steps_before_obs,
-        T=72,
+        T=T_prior,
         model_metric="l2",
         timeframes=("act_block_duringstim", "act_block_duringchoice"),
         ptype="p_mean_c",
-        plot_window=80,
+        plot_window=plot_win,
         reload=False,
         label_A="integrator",
         label_B="move",
@@ -190,9 +209,19 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         scale_factors=[1, 1, 1],
         include_all_trials=True,
         save_dir=str(out_dir),
-        plot_stim=False,
+        plot_stim=include_stim,
         lump_all=False,
+        include_stim=include_stim,
     )
+    prior_fig = plt.gcf()
+    prior_fig.savefig(
+        out_dir / "prior_effects.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor="white",
+        transparent=False,
+    )
+    alias_prior_effects(out_dir)
     total = float(loss_traj["total"] + loss_prior["total"])
     L_S = None
     S_r2 = None
@@ -246,6 +275,11 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         "theta_d": float(mp["action_thresholds"]["discordant"][0.0]),
         "out_dir": str(out_dir),
     }
+    if include_stim:
+        stim_tf = loss_prior.get("act_block_duringstim") or {}
+        summary["prior_S"] = stim_tf.get("stim")
+        summary["prior_I_stim"] = stim_tf.get("integrator")
+        summary["prior_M_stim"] = stim_tf.get("move")
     return summary
 
 
@@ -271,6 +305,11 @@ def main():
         type=Path,
         default=FIT_DATA_DIR,
         help="dir with mean_data_results.npy + data_act_block_*.npy (default: repo fit_targets/)",
+    )
+    ap.add_argument(
+        "--include-stim-prior",
+        action="store_true",
+        help="overlay the unsplit-80 ms S prior-distance sidecar (data + model S)",
     )
     args = ap.parse_args()
 
@@ -310,7 +349,7 @@ def main():
         out_dir = (args.out_root / tag) if args.out_root is not None else jp.parent
         print(f"\n=== {tag} ===")
         s = plot_one(jp, stim_bundle, mean_data, prior_regions, out_dir,
-                     avg_mean_R=avg_mean_R)
+                     avg_mean_R=avg_mean_R, include_stim=args.include_stim_prior)
         ls = s.get("L_S")
         ls_txt = f" L_S={ls:.4f}" if ls is not None else ""
         print(
@@ -320,7 +359,14 @@ def main():
             f"g_i={s['g_i']:.3g} d_i={s['d_i']:.3g}  "
             f"plots -> {s['out_dir']}"
         )
+        if s.get("prior_S") is not None:
+            print(
+                f"  duringstim nSSE  S={s['prior_S']:.4f}  "
+                f"I={s['prior_I_stim']:.4f}  M={s['prior_M_stim']:.4f}"
+            )
         for f in sorted(out_dir.glob("*.svg")):
+            print(f"  {f.name}")
+        for f in sorted(out_dir.glob("prior_effects.png")):
             print(f"  {f.name}")
 
 

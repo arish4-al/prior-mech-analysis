@@ -16,6 +16,7 @@
 #   # One arm:
 #   ABLATIONS=wppsmall bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=onethr bash scripts/submit_fit_stage_b_model_ablations.sh
+#   ABLATIONS=im150 bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 #   # Smoke:
 #   SEEDS=999 ABLATIONS=wppsmall OUT_TAG=stageB_ablate_wppsmall_smoke \
@@ -23,8 +24,8 @@
 #     PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 TIME=1:00:00 \
 #     bash scripts/submit_fit_stage_b_model_ablations.sh
 #
-# Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr),
-#      plus all submit_fit_stage_b_sharded.sh knobs.
+# Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr /
+#      im150), plus all submit_fit_stage_b_sharded.sh knobs.
 
 set -euo pipefail
 
@@ -58,7 +59,7 @@ W_PP_LARGE=0.499    # τ_Δ = 10 s
 W_PP_SMALL=0.45     # τ_Δ = 200 ms
 
 _reset_ablation_env() {
-  unset W_PP_LO W_PP_HI SET_W_PP
+  unset W_PP_LO W_PP_HI SET_W_PP PRIOR_WINDOW_MS
   export P_OFFSET_ALWAYS_ON=0
   export NO_ITI_PENALTY=0
   export TIED_THRESHOLDS=0
@@ -107,9 +108,15 @@ for ABLATION in "${ABL_ARR[@]}"; do
       export VARIANTS="regular:11|12|13"
       TAG="${OUT_TAG_ONETHR:-stageB_hold_s89_onethr}"
       ;;
+    im150)
+      # Test 6: I/M prior-distance uses the full 150 ms after stimOn and
+      # before movement (legacy is T=72 = 144 ms / plot_window=80).
+      export PRIOR_WINDOW_MS=150
+      TAG="${OUT_TAG_IM150:-stageB_hold_s89_im150}"
+      ;;
     *)
       echo "ERROR: unknown ABLATION='$ABLATION'" >&2
-      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr" >&2
+      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150" >&2
       exit 1
       ;;
   esac
@@ -119,6 +126,7 @@ for ABLATION in "${ABL_ARR[@]}"; do
   echo "    P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON  NO_ITI_PENALTY=$NO_ITI_PENALTY"
   echo "    SET_W_PP=${SET_W_PP:-} W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-}"
   echo "    TIED_THRESHOLDS=$TIED_THRESHOLDS"
+  echo "    PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-}"
   bash scripts/submit_fit_stage_b_sharded.sh
   unset OUT_TAG
 done

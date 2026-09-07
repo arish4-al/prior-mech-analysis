@@ -16,8 +16,12 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+SCRIPTS = Path(__file__).resolve().parent
+for _p in (REPO_ROOT, SCRIPTS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from summarize_prior_earlystim import _obs_nulls, n_bins_le_tmax  # noqa: E402
 
 
 CONTRASTS = [1.0, 0.25, 0.125, 0.0625, 0.0]
@@ -291,6 +295,123 @@ def print_retention_tables(pth_res: Path):
     return tables
 
 
+def _load_combined_regde(pth_res: Path, splits: list[str]) -> dict:
+    """Existing combine, reversed name, or in-memory sum. Does not write."""
+    path = pth_res / f'combined_regde_{"_".join(splits)}.npy'
+    if path.exists():
+        return np.load(path, allow_pickle=True).item()
+    rev = list(reversed(splits))
+    path = pth_res / f'combined_regde_{"_".join(rev)}.npy'
+    if path.exists():
+        return np.load(path, allow_pickle=True).item()
+    combined: dict = {}
+    for split in splits:
+        split_path = pth_res / f'{split}_regde.npy'
+        if not split_path.exists():
+            raise FileNotFoundError(split_path)
+        split_regde = np.load(split_path, allow_pickle=True).item()
+        for reg, curves in split_regde.items():
+            true = np.asarray(curves[0], dtype=float)
+            nulls = np.asarray(curves[1:], dtype=float)
+            if reg not in combined:
+                combined[reg] = [true.copy(), nulls.copy()]
+            else:
+                combined[reg][0] += true
+                combined[reg][1] += nulls
+    return combined
+
+
+def _curve_stats(obs: np.ndarray, nulls: np.ndarray, alpha: float, t_max_s: float):
+    """p_mean / p_gain / p_offset + amp on a (possibly sliced) curve."""
+    obs = np.asarray(obs, dtype=float).reshape(-1)
+    nulls = np.asarray(nulls, dtype=float)
+    if nulls.ndim == 1:
+        nulls = nulls.reshape(1, -1)
+    stacked = np.concatenate([obs.reshape(1, -1), nulls], axis=0)
+    p_mean = float(np.mean(np.mean(stacked, axis=1) >= np.mean(stacked[0])))
+    mean_first5 = np.mean(stacked[:, :5], axis=1)
+    p_offset = float(np.mean(mean_first5 >= mean_first5[0]))
+    p_offset_effect = float(mean_first5[0] - np.mean(mean_first5[1:]))
+    offset = p_offset_effect if p_offset < alpha else 0.0
+    r_shifted = stacked[0] - offset
+    r_new = stacked[:, 4:].copy()
+    r_new[0] = r_shifted[4:]
+    max_idx = int(np.argmax(r_new[0]))
+    p_gain = float(np.mean(np.mean(r_new, axis=1) >= np.mean(r_new[0])))
+    p_gain_effect = float(np.max(r_new[0]) - np.mean(r_new[:, max_idx]))
+    amp_real = float(np.max(obs) - np.min(obs))
+    amp_controls = [float(np.max(c) - np.min(c)) for c in nulls]
+    p_euc = float(np.mean(np.asarray(amp_controls) >= amp_real))
+    d_euc = obs - np.min(obs)
+    amp_euc = float(np.max(d_euc))
+    loc = np.where(d_euc > 0.7 * amp_euc)[0]
+    if len(loc) == 0:
+        lat_euc = np.nan
+    else:
+        t = np.linspace(0.0, t_max_s, len(d_euc))
+        lat_euc = float(t[loc[0]])
+    if len(obs) >= 2:
+        amp_slope = float(np.polyfit(np.linspace(0.0, t_max_s, len(obs)), obs, 1)[0])
+    else:
+        amp_slope = np.nan
+    return {
+        'd_euc': d_euc,
+        'amp_euc': amp_euc,
+        'p_euc': p_euc,
+        'lat_euc': lat_euc,
+        'p_mean': p_mean,
+        'p_gain': p_gain,
+        'p_offset': p_offset,
+        'p_gain_effect': p_gain_effect,
+        'p_offset_effect': p_offset_effect,
+        'amp_slope': amp_slope,
+        'slope_last': np.nan,
+        'amp_loc': int(np.argmax(obs)) if len(obs) else np.nan,
+        'slope_last_5': np.nan,
+        'slope_last_10': np.nan,
+        'amp_last5_is_global_max': np.nan,
+    }
+
+
+def write_earlystim_combined(
+    pth_res: Path,
+    splits: list[str],
+    t_max_ms: float,
+    window_ms: float,
+    alpha: float,
+) -> str:
+    """Slice existing duringstim combine to t<=t_max; write a *new* combined npy.
+
+    Does not overwrite the 150 ms ``combined_*`` / ``combined_regde_*`` files.
+    """
+    from statsmodels.stats.multitest import multipletests
+
+    regde = _load_combined_regde(pth_res, splits)
+    sample = _obs_nulls(next(iter(regde.values())))[0]
+    n_full = int(np.asarray(sample).reshape(-1).shape[0])
+    n_keep = n_bins_le_tmax(n_full, window_ms, t_max_ms)
+    if n_keep < 5:
+        raise ValueError(f'early-stim keep={n_keep} bins is too short for gain/offset')
+    t_max_s = float(t_max_ms) / 1000.0
+    d = {}
+    for reg, entry in regde.items():
+        obs, nulls = _obs_nulls(entry)
+        d[reg] = _curve_stats(obs[:n_keep], nulls[:, :n_keep], alpha, t_max_s)
+    for ptype in ('p_mean', 'p_gain', 'p_offset'):
+        pvals = [d[reg][ptype] for reg in d]
+        _, pvals_c, _, _ = multipletests(pvals, alpha, method='fdr_bh')
+        for reg, p_c in zip(d, pvals_c):
+            d[reg][f'{ptype}_c'] = float(p_c)
+    combined_name = 'combined_' + '_'.join(splits) + f'_earlystim{int(t_max_ms)}'
+    np.save(Path(pth_res, f'{combined_name}.npy'), d, allow_pickle=True)
+    n_sig = sum(1 for rec in d.values() if rec['p_mean_c'] <= alpha)
+    print(
+        f'earlystim t≤{t_max_ms:g} ms: {n_keep}/{n_full} bins, '
+        f'{n_sig}/{len(d)} FDR p_mean_c ≤ {alpha:g} → {combined_name}.npy'
+    )
+    return combined_name
+
+
 def combine_splits(pth_res: Path, splits: list[str], pre_post=(0.0, 0.15)) -> str:
     """Union-sum combine of per-split regde (same logic as d_var_stacked_multi)."""
     combined_regde: dict = {}
@@ -391,13 +512,16 @@ def compute_p_and_fdr_combined(af, timeframe: str, alpha: float):
         print(f'  {ptype}: FDR {n_sig}/{len(regs)} ≤ {alpha}')
 
 
-def plot_gain_offset_table(af, timeframe: str, alpha: float, out_path: Path):
+def plot_gain_offset_table(
+    af, timeframe: str, alpha: float, out_path: Path, skip_amp_slope: bool = False,
+):
     """Gain/offset columns only (no SC), same styling as plot_combined_table_summary."""
     splits = af.run_align[timeframe]
     split_name_ = 'combined_' + '_'.join(splits)
     ptype = 'p_mean_c'
 
-    af.compute_amp_slope(timeframe, n=20)
+    if not skip_amp_slope:
+        af.compute_amp_slope(timeframe, n=20)
     res = af.manifold_to_csv(split_name_, alpha, ptype, sample=False)
     res = res.fillna(0)
 
@@ -456,6 +580,7 @@ def plot_gain_offset_table(af, timeframe: str, alpha: float, out_path: Path):
         beryl_palette=beryl_palette,
         colormap_lookup=colormap_lookup,
         out_path=out_path,
+        col_labels=['region', 'gain', 'offset'],
     )
     n_sig = int(res['significant'].sum())
     n_gain = int(((res['p_gain'] < alpha) & (res['significant'] == 1)).sum())
@@ -477,6 +602,8 @@ def run_splits(
     meta_dir: Path,
     file_tag: str | None = None,
     prior: str = 'act',
+    earlystim_ms: float | None = None,
+    window_ms: float = 150.0,
 ):
     """prior: 'act' or 'bayes' — used in output filename (replaces act↔bayes)."""
     missing = [
@@ -489,10 +616,23 @@ def run_splits(
     if missing:
         raise FileNotFoundError(f'missing finalized splits: {missing}')
 
-    combine_splits(pth_res, splits)
-    af.run_align[timeframe] = list(splits)
-    print(f'[{timeframe}] p-values + FDR...')
-    compute_p_and_fdr_combined(af, timeframe, alpha)
+    skip_amp_slope = False
+    if earlystim_ms is not None:
+        write_earlystim_combined(
+            pth_res, splits, earlystim_ms, window_ms, alpha,
+        )
+        # Dummy last token so plot_gain_offset_table finds the sliced combine.
+        af.run_align[timeframe] = list(splits) + [f'earlystim{int(earlystim_ms)}']
+        skip_amp_slope = True
+        if file_tag:
+            file_tag = f'{file_tag}_earlystim{int(earlystim_ms)}'
+        else:
+            file_tag = f'earlystim{int(earlystim_ms)}'
+    else:
+        combine_splits(pth_res, splits)
+        af.run_align[timeframe] = list(splits)
+        print(f'[{timeframe}] p-values + FDR...')
+        compute_p_and_fdr_combined(af, timeframe, alpha)
 
     # Match analysis_figs naming: table_{prior}_block_combined_summary_{prior}_...
     # Optional suffix only for variants (stim_lr, c1, …) — never repeat prior name.
@@ -504,7 +644,9 @@ def run_splits(
         out_name = f'{out_name}_{file_tag}'
     out_name = f'{out_name}.png'
     out_path = meta_dir / out_name
-    plot_gain_offset_table(af, timeframe, alpha, out_path)
+    plot_gain_offset_table(
+        af, timeframe, alpha, out_path, skip_amp_slope=skip_amp_slope,
+    )
     return out_path
 
 
@@ -590,6 +732,31 @@ def main():
         help='Combine bayes_block_duringstim_{l,r} (no choice×feedback)',
     )
     ap.add_argument(
+        '--earlystim-ms',
+        type=float,
+        default=None,
+        help='Slice duringstim curves to t<=this many ms before FDR/table '
+             '(does not overwrite the 150 ms combine). Typical: 80.',
+    )
+    ap.add_argument(
+        '--combined-regtype-prior',
+        action='store_true',
+        help='Rebuild the SC region-type + prior (duringstim/duringchoice) '
+             'overall table; with --earlystim-ms add the stim-side 80 ms row.',
+    )
+    ap.add_argument(
+        '--combined-earlystim-type',
+        action='store_true',
+        help='Table of duringstim SC type + earlystim overall / offset / gain '
+             '(defaults --earlystim-ms to 80).',
+    )
+    ap.add_argument(
+        '--earlystim-res',
+        type=Path,
+        default=None,
+        help='Directory of the earlystim combined npy (default: alyx res/new).',
+    )
+    ap.add_argument(
         '--tag',
         default=None,
         help='Optional output filename tag (e.g. openalyx_ref)',
@@ -614,6 +781,8 @@ def main():
         args.stim_side,
         args.bayes_choice,
         args.bayes_stim_side,
+        args.combined_regtype_prior,
+        args.combined_earlystim_type,
         args.retention_only,
         args.skip_retention,
     ])
@@ -633,6 +802,10 @@ def main():
         return plot_goal3_c0_choice_tables(pth_res, args.meta_dir, alphas)
 
     tables = None
+    if args.combined_regtype_prior or args.combined_earlystim_type:
+        args.skip_retention = True
+    if args.combined_earlystim_type and args.earlystim_ms is None:
+        args.earlystim_ms = 80.0
     if not args.skip_retention:
         tables = print_retention_tables(pth_res)
     if args.retention_only:
@@ -648,48 +821,104 @@ def main():
     if open_order.exists() and not local_order.exists():
         local_order.write_text(open_order.read_text())
 
-    alpha = 0.01 if args.alpha is None else args.alpha
+    if args.alpha is not None:
+        alphas = [args.alpha]
+    elif args.earlystim_ms is not None and (
+        args.stim_side or args.bayes_stim_side or args.bayes_choice
+    ):
+        alphas = [0.01, 0.05]
+    else:
+        alphas = [0.01]
+
+    if args.combined_regtype_prior or args.combined_earlystim_type:
+        sc_res = Path(
+            '/Users/ariliu/Downloads/ONE/openalyx.internationalbrainlab.org'
+            '/manifold/res'
+        )
+        es_res = args.earlystim_res or Path(
+            '/Users/ariliu/Downloads/ONE/alyx.internationalbrainlab.org'
+            '/manifold/res/new'
+        )
+        af.pth_res = sc_res
+        sc_times = [
+            'stim_duringstim_act', 'choice_duringstim_act',
+            'stim_duringchoice_act', 'choice_duringchoice_act',
+        ]
+        displays = []
+        if args.combined_regtype_prior:
+            displays.append((
+                'overall',
+                ['act_block_duringchoice', 'act_block_duringstim'],
+                'combined regtype + prior overall',
+            ))
+        if args.combined_earlystim_type:
+            displays.append((
+                'type_offset_gain',
+                [],
+                'duringstim type + earlystim overall/offset/gain',
+            ))
+        for display, timing_splits, label in displays:
+            for alpha in alphas:
+                print(f'\n======== {label} α={alpha:g} ========')
+                print(f'  SC res: {sc_res}')
+                print(f'  earlystim res: {es_res}')
+                af.plot_combined_table_summary(
+                    sc_times, timing_splits, ptype='p_mean_c', alpha=alpha,
+                    alpha_sc=alpha, combined_p=True, sc_threshold=0.0,
+                    slope_threshold=0.05, amp_loc_threshold=67, n=20,
+                    stim_restr=True, display=display,
+                    earlystim_ms=args.earlystim_ms,
+                    earlystim_res=es_res,
+                )
+        return tables
+
     if args.stim_side:
-        print('\n======== stim-side only (no choice restriction) ========')
-        run_splits(
-            af, pth_res, STIM_SIDE_SPLITS,
-            timeframe='act_block_duringstim_stimlr',
-            alpha=alpha,
-            meta_dir=af.meta_pth,
-            file_tag=args.tag or 'stim_lr',
-            prior='act',
-        )
+        for alpha in alphas:
+            print(f'\n======== stim-side only (no choice restriction) α={alpha:g} ========')
+            run_splits(
+                af, pth_res, STIM_SIDE_SPLITS,
+                timeframe='act_block_duringstim_stimlr',
+                alpha=alpha,
+                meta_dir=af.meta_pth,
+                file_tag=args.tag or 'stim_lr',
+                prior='act',
+                earlystim_ms=args.earlystim_ms,
+            )
     elif args.bayes_choice:
-        print('\n======== bayes choice×feedback 4-split ========')
-        run_splits(
-            af, pth_res, BAYES_CHOICE_SPLITS,
-            timeframe='bayes_block_duringstim_choice',
-            alpha=alpha,
-            meta_dir=af.meta_pth,
-            file_tag=args.tag,  # default None → …_gain_offset.png
-            prior='bayes',
-        )
+        for alpha in alphas:
+            print(f'\n======== bayes choice×feedback 4-split α={alpha:g} ========')
+            run_splits(
+                af, pth_res, BAYES_CHOICE_SPLITS,
+                timeframe='bayes_block_duringstim_choice',
+                alpha=alpha,
+                meta_dir=af.meta_pth,
+                file_tag=args.tag,
+                prior='bayes',
+                earlystim_ms=args.earlystim_ms,
+            )
     elif args.bayes_stim_side:
-        print('\n======== bayes stim-side only ========')
-        run_splits(
-            af, pth_res, BAYES_STIM_SIDE_SPLITS,
-            timeframe='bayes_block_duringstim_stimlr',
-            alpha=alpha,
-            meta_dir=af.meta_pth,
-            file_tag=args.tag or 'stim_lr',
-            prior='bayes',
-        )
+        for alpha in alphas:
+            print(f'\n======== bayes stim-side only α={alpha:g} ========')
+            run_splits(
+                af, pth_res, BAYES_STIM_SIDE_SPLITS,
+                timeframe='bayes_block_duringstim_stimlr',
+                alpha=alpha,
+                meta_dir=af.meta_pth,
+                file_tag=args.tag or 'stim_lr',
+                prior='bayes',
+                earlystim_ms=args.earlystim_ms,
+            )
     elif args.all_contrast:
         print('\n======== all-contrast (unconditioned 4-split) ========')
         run_contrast(
-            af, pth_res, None, alpha, af.meta_pth,
-            tag=args.tag,  # None → plain …_gain_offset.png
+            af, pth_res, None, alphas[0], af.meta_pth,
+            tag=args.tag,
         )
     else:
         contrasts = args.contrasts if args.contrasts is not None else CONTRASTS
         for c in contrasts:
             print(f'\n======== contrast {c} ========')
-            run_contrast(af, pth_res, c, alpha, af.meta_pth, tag=args.tag)
+            run_contrast(af, pth_res, c, alphas[0], af.meta_pth, tag=args.tag)
 
     return tables
 

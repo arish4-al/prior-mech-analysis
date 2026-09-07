@@ -37,12 +37,14 @@ try:
         ensure_fit_data_links,
         load_validated_mean_data,
         load_avg_mean_r,
+        load_s_unsplit80,
     )
 except ImportError:
     from scripts._fit_data import (
         ensure_fit_data_links,
         load_validated_mean_data,
         load_avg_mean_r,
+        load_s_unsplit80,
     )
 
 from model_functions import (
@@ -203,9 +205,16 @@ def _parse_local_refine_idx(spec):
 
 def build_args(argv=None):
     ap = argparse.ArgumentParser(description="Joint fit: retinal + g_s/d_s + weights.")
-    ap.add_argument("--mtype", type=str, default="sensory")
-    ap.add_argument("--freeze", type=str, default="6,7,8,9",
-                    help="comma indices to freeze (0..20); default 6,7,8,9 = g_i,g_m,d_i,d_m")
+    ap.add_argument("--mtype", type=str, default="sensory",
+                    help="regular (freeze g_s/d_s) | sensory (freeze I/M) | "
+                         "full (all prior gains free)")
+    ap.add_argument("--freeze", type=str, default=None,
+                    help="comma indices to freeze (0..20). Default by --mtype: "
+                         "sensory=6,7,8,9; regular=12,13; full=none")
+    ap.add_argument("--include-stim-prior", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help="Add S prior-distance nSSE (unsplit 80 ms sidecar). "
+                         "Default on for --mtype full, off otherwise.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-jobs", type=int, default=_default_n_jobs())
     ap.add_argument("--pipeline", choices=["de_cma_local", "de_cma", "cma_only"],
@@ -264,6 +273,10 @@ def build_args(argv=None):
     ap.add_argument("--m-pre-weight", type=float, default=1.0,
                     help="Multiply pre-action M nSSE in the traj loss "
                          "(post-start M stays 1). Default 1.")
+    ap.add_argument("--prior-window-ms", type=float, default=None,
+                    help="I/M prior-distance window after stimOn and before "
+                         "movement (ms). Default unset = legacy T=72 (144 ms) "
+                         "/ plot_window=80. Modeling-details test 6: 150.")
     return ap.parse_args(argv)
 
 
@@ -271,11 +284,26 @@ def main(argv=None):
     args = build_args(argv)
     if args.m_pre_weight < 0:
         raise SystemExit("--m-pre-weight must be >= 0")
+    if args.prior_window_ms is not None and (
+            not np.isfinite(args.prior_window_ms) or args.prior_window_ms <= 0):
+        raise SystemExit("--prior-window-ms must be a positive duration in ms")
     if (args.w_pp_lo is None) ^ (args.w_pp_hi is None):
         raise SystemExit("--w-pp-lo and --w-pp-hi must be set together")
     if args.w_pp_lo is not None:
         set_w_pp_native_bounds(args.w_pp_lo, args.w_pp_hi)
-    freeze_idx = _parse_freeze(args.freeze)
+    freeze_defaults = {
+        "sensory": [6, 7, 8, 9],
+        "regular": [12, 13],
+        "full": [],
+    }
+    if args.freeze is None:
+        freeze_idx = list(freeze_defaults.get(args.mtype, freeze_defaults["sensory"]))
+    else:
+        freeze_idx = _parse_freeze(args.freeze)
+    include_stim = (
+        bool(args.include_stim_prior) if args.include_stim_prior is not None
+        else args.mtype == "full"
+    )
     if args.tied_thresholds and THETA_D_IDX not in freeze_idx:
         freeze_idx = sorted(set(freeze_idx) | {THETA_D_IDX})
     slug = _mask_slug(freeze_idx)
@@ -297,10 +325,17 @@ def main(argv=None):
     avg_path, avg_data_R = load_avg_mean_r()
     print(f"[fit-data] avg_mean_R={avg_path}")
     behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
+    stim_regs = ["VISpm", "FRP", "VISal"]
+    stim_curve_path = None
+    if include_stim:
+        stim_curve_path, stim_payload = load_s_unsplit80()
+        stim_regs = list(stim_payload.get("regs_stim") or stim_regs)
+        print(f"[fit-data] S unsplit80={stim_curve_path} "
+              f"n_reg={len(stim_regs)} n_cells={stim_payload.get('n_cells')}")
     prior_regions = {
         "int_regs_choice": int_regs, "int_regs_stim": int_regs,
         "move_regs_choice": move_regs, "move_regs_stim": move_regs,
-        "stim_regs": ["VISpm", "FRP", "VISal"],
+        "stim_regs": stim_regs,
     }
 
     resume_meta_mp = {}
@@ -364,7 +399,7 @@ def main(argv=None):
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
-                 "m_pre_weight"):
+                 "m_pre_weight", "prior_window_ms"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -375,6 +410,8 @@ def main(argv=None):
     model_params["iti_penalty"] = not bool(args.no_iti_penalty)
     model_params["tied_thresholds"] = bool(args.tied_thresholds)
     model_params["m_pre_weight"] = float(args.m_pre_weight)
+    model_params["prior_window_ms"] = (
+        None if args.prior_window_ms is None else float(args.prior_window_ms))
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -396,6 +433,7 @@ def main(argv=None):
         print(f"[stage1-hold-retinal] DE holds {held or 'none (already frozen)'}; "
               f"CMA/polish unfreeze retinal")
     print(f"variant mtype={args.mtype} mask={slug} ({frozen or 'none'}) "
+          f"include_stim={include_stim} "
           f"pipeline={args.pipeline} seed={args.seed} n_jobs={args.n_jobs} "
           f"backend={args.backend} D={D_JOINT} "
           f"bps1={args.bps_stage1} bps2={args.bps_stage2} "
@@ -404,6 +442,7 @@ def main(argv=None):
           f"iti_penalty={not bool(args.no_iti_penalty)} "
           f"tied_thresholds={bool(args.tied_thresholds)} "
           f"m_pre_weight={float(args.m_pre_weight):g} "
+          f"prior_window_ms={args.prior_window_ms} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
           f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
@@ -530,6 +569,12 @@ def main(argv=None):
         iti_penalty=not bool(args.no_iti_penalty),
         tied_thresholds=bool(args.tied_thresholds),
         m_pre_weight=float(args.m_pre_weight),
+        prior_window_ms=(
+            None if args.prior_window_ms is None else float(args.prior_window_ms)),
+        loss_extra_kwargs={
+            "include_stim": include_stim,
+            "stim_curve_path": str(stim_curve_path) if stim_curve_path else None,
+        },
     )
     wall = time.perf_counter() - wall0
 
@@ -538,6 +583,7 @@ def main(argv=None):
         "mtype": args.mtype,
         "mask": slug,
         "frozen": frozen,
+        "include_stim": include_stim,
         "pipeline": args.pipeline,
         "seed": args.seed,
         "layout": "joint21",
@@ -547,6 +593,8 @@ def main(argv=None):
         "iti_penalty": not bool(args.no_iti_penalty),
         "tied_thresholds": bool(args.tied_thresholds),
         "m_pre_weight": float(args.m_pre_weight),
+        "prior_window_ms": (
+            None if args.prior_window_ms is None else float(args.prior_window_ms)),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
         "resume_source": resume_source,

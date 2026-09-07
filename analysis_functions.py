@@ -215,6 +215,9 @@ run_align = {
                             'act_block_stim_l_duringchoice_r_f2', 'act_block_stim_r_duringchoice_l_f2'
                             ],
     'act_block_duringstim_unsplit': ['act_block_duringstim_l', 'act_block_duringstim_r'],
+    'act_block_duringstim_earlystim80': [
+        'act_block_duringstim_r', 'act_block_duringstim_l', 'earlystim80',
+    ],
     'act_block_duringchoice_unsplit': ['act_block_duringchoice_l', 'act_block_duringchoice_r'],
     'stim_duringstim': ['stim_choice_r_block_r', 'stim_choice_l_block_l', 
              'stim_choice_r_block_l', 'stim_choice_l_block_r'],
@@ -1337,13 +1340,14 @@ def get_sc_table(times, ptype, stim_time=None, alpha=0.05, n=72, combined_p=True
 
     return res
 
-def plot_table_with_styles(df, beryl_palette, colormap_lookup, out_path):
+def plot_table_with_styles(df, beryl_palette, colormap_lookup, out_path,
+                           col_labels=None):
     fig, ax = plt.subplots()
     ax.axis('off')
 
     table = ax.table(
         cellText=df.values,
-        colLabels=None,           # no headers
+        colLabels=col_labels,
         cellLoc='center',
         loc='center'
     )
@@ -1352,6 +1356,19 @@ def plot_table_with_styles(df, beryl_palette, colormap_lookup, out_path):
     table.scale(1.2, 1.3)
 
     nrows, ncols = df.shape
+    row0 = 1 if col_labels is not None else 0
+    if col_labels is not None:
+        for c in range(ncols):
+            hdr = table[0, c]
+            hdr.set_facecolor('#ffffff')
+            hdr.set_linewidth(0.5)
+            hdr.set_edgecolor('white')
+            hdr.get_text().set_fontsize(8)
+            hdr.get_text().set_weight('bold')
+            if c == 0:
+                hdr.set_width(0.18)
+            else:
+                hdr.set_width(0.12)
 
     def _is_num(v):
         return isinstance(v, (int, float, np.integer, np.floating)) or (
@@ -1360,7 +1377,7 @@ def plot_table_with_styles(df, beryl_palette, colormap_lookup, out_path):
 
     for r in range(nrows):
         for c in range(ncols):
-            cell = table[r, c]
+            cell = table[r + row0, c]
             col_name = df.columns[c]
             val = df.iat[r, c]
 
@@ -1462,12 +1479,89 @@ def plot_table(times, alpha=0.05, ptype='p_euc_c', datatype='true_block'):
     return df_to_plot
 
 
+def _earlystim_prior_from_npy(npy_path, regions, alpha, ptype='p_mean_c'):
+    """Align an earlystim combined npy to ``regions`` (amp × FDR, then 0–1 scale)."""
+    d = np.load(npy_path, allow_pickle=True).flat[0]
+    amp = []
+    gain = []
+    offset = []
+    for reg in regions:
+        rec = d.get(reg)
+        if rec is None:
+            amp.append(0.0)
+            gain.append(0.0)
+            offset.append(0.0)
+            continue
+        p = float(rec.get(ptype, rec.get('p_mean_c', 1.0)) or 1.0)
+        sig = float(p <= alpha)
+        a = float(rec.get('amp_euc', 0.0) or 0.0)
+        amp.append(a * sig)
+        g = float(rec.get('p_gain_effect', 0.0) or 0.0)
+        o = float(rec.get('p_offset_effect', 0.0) or 0.0)
+        pg = float(rec.get('p_gain', 1.0) or 1.0)
+        po = float(rec.get('p_offset', 1.0) or 1.0)
+        gain.append(g * sig * float(pg < alpha))
+        offset.append(o * sig * float(po < alpha))
+    amp = pd.Series(amp, dtype=float)
+    lo, hi = float(amp.min()), float(amp.max())
+    if hi > lo:
+        amp = (amp - lo) / (hi - lo) + 1e-4
+        amp = amp.where(amp > 1e-4, 0.0)
+    return amp, pd.Series(gain, dtype=float), pd.Series(offset, dtype=float)
+
+
+def _combined_timing_frame(split_name, alpha, ptype='p_mean_c'):
+    """Load a combined npy as a timing-split frame; fill FDR ``*_c`` if missing."""
+    d = np.load(Path(pth_res, f'{split_name}.npy'), allow_pickle=True).flat[0]
+    regs = [r for r in d if isinstance(d[r], dict)]
+    sample = d[regs[0]]
+    if ptype not in sample:
+        raw = ptype[:-2] if ptype.endswith('_c') else ptype
+        if raw not in sample:
+            raise KeyError(f'{split_name}: neither {ptype} nor {raw}')
+        pvals = [float(d[r].get(raw, 1.0) or 1.0) for r in regs]
+        _, pc, _, _ = multipletests(pvals, alpha=alpha, method='fdr_bh')
+        for r, p_c in zip(regs, pc):
+            d[r][ptype] = float(p_c)
+        print(f'  filled {ptype} via BH-FDR on {raw} for {split_name} ({len(regs)} regions)')
+    rows = []
+    for r in regs:
+        rec = d[r]
+        rows.append({
+            'region': r,
+            ptype: rec[ptype],
+            'amp_euc': rec.get('amp_euc', 0.0) or 0.0,
+            'p_gain': rec.get('p_gain', 1.0) or 1.0,
+            'p_offset': rec.get('p_offset', 1.0) or 1.0,
+            'p_gain_effect': rec.get('p_gain_effect', 0.0) or 0.0,
+            'p_offset_effect': rec.get('p_offset_effect', 0.0) or 0.0,
+            'significant': int(float(rec[ptype]) <= alpha),
+        })
+    return pd.DataFrame(rows)
+
+
+def _find_earlystim_combined(res_dir, t_max_ms):
+    tag = f'earlystim{int(t_max_ms)}'
+    candidates = [
+        Path(res_dir, f'combined_act_block_duringstim_r_act_block_duringstim_l_{tag}.npy'),
+        Path(res_dir, f'combined_act_block_duringstim_l_act_block_duringstim_r_{tag}.npy'),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f'earlystim combine not found under {res_dir} (tried {[p.name for p in candidates]})'
+    )
+
+
 def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha=0.05, alpha_sc=0.05, combined_p=True, 
                                 sc_threshold=0.6, slope_threshold=0, amp_loc_threshold=67, n=72, stim_restr=True,
-                                display='overall'):
+                                display='overall', earlystim_ms=None, earlystim_res=None):
 
     '''
-    display: overall, gain_offset
+    display: overall, gain_offset, type_offset_gain
+    earlystim_ms: if set, add stim-side unsplit prior sliced to t≤this (ms)
+    type_offset_gain: duringstim SC type + earlystim overall / offset / gain
     '''
 
     if stim_restr: # if stim regions are restricted to those without any significant choice coding
@@ -1485,7 +1579,8 @@ def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha
         if combined_p:
             splits = run_align[timing_split]
             split_name = 'combined_'+"_".join(splits)
-            res = manifold_to_csv(split_name, alpha, ptype)
+            res = _combined_timing_frame(split_name, alpha, ptype)
+            res = res.set_index('region').reindex(table['region']).reset_index()
             min_val = res['amp_euc'].min()
             max_val = res['amp_euc'].max()
             res['amp_euc'] = (res['amp_euc'] - min_val) / (max_val - min_val) + 1e-4
@@ -1510,6 +1605,21 @@ def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha
                     table[timing_split] = res['amp_euc']
                 else:
                     table[timing_split] += res['amp_euc']
+
+    timing_splits = list(timing_splits)
+    if earlystim_ms is not None:
+        es_dir = Path(earlystim_res) if earlystim_res is not None else Path(pth_res)
+        es_key = f'act_block_duringstim_earlystim{int(earlystim_ms)}'
+        es_path = _find_earlystim_combined(es_dir, earlystim_ms)
+        amp, gain, offset = _earlystim_prior_from_npy(
+            es_path, table['region'].to_numpy(), alpha, ptype,
+        )
+        table[es_key] = amp
+        table[es_key + '_gain_sig'] = gain
+        table[es_key + '_offset_sig'] = offset
+        if es_key not in timing_splits:
+            timing_splits.append(es_key)
+        print(f'earlystim t≤{earlystim_ms:g} ms from {es_path.name} → column {es_key}')
 
     # Create DataFrame
     df = pd.DataFrame(table)
@@ -1542,7 +1652,18 @@ def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha
             display_cols = ['region'] + choice_time + ['sc_duringchoice_regtype'] + stim_time + ['sc_duringstim_regtype']
         else:
             display_cols = ['region'] + choice_time + ['sc_duringchoice_regtype'] + stim_time + ['sc_duringstim_regtype'] + ['sc_stim_regtype']
-    else: 
+    elif display == 'type_offset_gain':
+        if earlystim_ms is None:
+            raise ValueError('display=type_offset_gain requires earlystim_ms')
+        es_key = f'act_block_duringstim_earlystim{int(earlystim_ms)}'
+        display_cols = [
+            'region',
+            'sc_duringstim_regtype',
+            es_key,
+            es_key + '_offset_sig',
+            es_key + '_gain_sig',
+        ]
+    else:
         # display only gain and offset
         choice_time = [time+'_gain_sig' for time in timing_splits if 'duringchoice' in time]
         stim_time = [item for time in timing_splits if 'duringstim' in time 
@@ -1552,21 +1673,43 @@ def plot_combined_table_summary(sc_times, timing_splits, ptype='p_mean_c', alpha
 
     colormap_lookup = {name: get_cmap_(name) for name in column_names}
 
-    if 'act' in timing_splits[0]:
+    first_timing = timing_splits[0] if timing_splits else (
+        sc_times[0] if sc_times else ''
+    )
+    if 'act' in first_timing:
         block_type = 'act_block'
     else:
         block_type = 'true_block'
 
     if 'act' in sc_times[0]:
-        out_path = Path(meta_pth, f'table_{block_type}_combined_summary_act_{ptype}_combinedp{combined_p}_{alpha}_{display}.png')
-    else: 
-        out_path = Path(meta_pth, f'table_{block_type}_combined_summary_{ptype}_combinedp{combined_p}_{alpha}_{display}.png')
+        out_name = f'table_{block_type}_combined_summary_act_{ptype}_combinedp{combined_p}_{alpha}_{display}'
+    else:
+        out_name = f'table_{block_type}_combined_summary_{ptype}_combinedp{combined_p}_{alpha}_{display}'
+    if earlystim_ms is not None:
+        out_name = f'{out_name}_earlystim{int(earlystim_ms)}'
+    out_path = Path(meta_pth, f'{out_name}.png')
+    col_labels = None
+    if display == 'overall' and earlystim_ms is not None:
+        col_labels = ['region', 'prior_choice', 'type_choice', 'prior_stim',
+                      f'prior_{int(earlystim_ms)}ms', 'type_stim']
+        if not stim_restr:
+            col_labels.append('type_stim_early')
+        if len(col_labels) != len(display_cols):
+            col_labels = None
+    elif display == 'type_offset_gain':
+        col_labels = [
+            'region', 'type_stim',
+            f'prior_{int(earlystim_ms)}ms',
+            'offset', 'gain',
+        ]
     plot_table_with_styles(
         df=df_to_plot,
         beryl_palette=beryl_palette,
         colormap_lookup=colormap_lookup,
-        out_path=out_path
+        out_path=out_path,
+        col_labels=col_labels,
     )
+    print(f'wrote {out_path}')
 
     if display == 'gain_offset':
         return df.reset_index(drop=True)

@@ -9,6 +9,7 @@ and plot/bench helpers. Same files as `paper-brain-wide-map/model_test.ipynb`.
 | `data_act_block_duringstim.npy` | Prior-effect data (stim window) |
 | `data_act_block_duringchoice.npy` | Prior-effect data (choice window) |
 | `avg_mean_R.npy` | Right-stim S curves for `L_S` |
+| `data_act_block_duringstim_s_unsplit80.npy` | S prior-distance target for `--mtype full` (unsplit 80 ms FDR@0.01 ∩ stim/stim_early) |
 
 Do **not** replace these with ONE `manifold/res` flat mean_data or
 `manifold/figs` prior curves (see journals 2026-08-12c).

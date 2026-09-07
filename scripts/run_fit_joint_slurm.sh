@@ -24,6 +24,7 @@
 #      W_PP_LO / W_PP_HI / SET_W_PP → --w-pp-lo/hi --set-w-pp (test 3).
 #      TIED_THRESHOLDS=1 → --tied-thresholds (test 4).
 #      M_PRE_WEIGHT → --m-pre-weight (pre-action M nSSE multiplier; default 1).
+#      PRIOR_WINDOW_MS → --prior-window-ms (I/M prior window; test 6: 150).
 
 set -euo pipefail
 
@@ -37,8 +38,16 @@ export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbra
 export PRIOR_MECH_NO_ONE="${PRIOR_MECH_NO_ONE:-1}"
 
 MTYPE="${MTYPE:-sensory}"
-FREEZE="${FREEZE:-6|7|8|9}"
+if [[ "$MTYPE" == "full" ]]; then
+  FREEZE="${FREEZE-}"
+else
+  FREEZE="${FREEZE:-6|7|8|9}"
+fi
 FREEZE="${FREEZE//|/,}"
+INCLUDE_STIM_PRIOR="${INCLUDE_STIM_PRIOR:-}"
+if [[ "$MTYPE" == "full" && -z "$INCLUDE_STIM_PRIOR" ]]; then
+  INCLUDE_STIM_PRIOR=1
+fi
 SEED="${SEED:-0}"
 PIPELINE="${PIPELINE:-de_cma_local}"
 OUT_TAG="${OUT_TAG:-}"
@@ -70,6 +79,7 @@ W_PP_HI="${W_PP_HI:-}"
 SET_W_PP="${SET_W_PP:-}"
 TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
 M_PRE_WEIGHT="${M_PRE_WEIGHT:-1}"
+PRIOR_WINDOW_MS="${PRIOR_WINDOW_MS:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -78,7 +88,8 @@ cd "$REPO_DIR"
 # Ensure fit targets from repo fit_targets/ (Python drivers also refresh these).
 if [[ -d "$REPO_DIR/fit_targets" ]]; then
   for name in avg_mean_R.npy mean_data_results.npy \
-              data_act_block_duringstim.npy data_act_block_duringchoice.npy; do
+              data_act_block_duringstim.npy data_act_block_duringchoice.npy \
+              data_act_block_duringstim_s_unsplit80.npy; do
     if [[ -f "$REPO_DIR/fit_targets/$name" ]]; then
       ln -sfn "$REPO_DIR/fit_targets/$name" "$name"
     fi
@@ -87,12 +98,12 @@ fi
 
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline 2>/dev/null || true
-echo "MTYPE=$MTYPE FREEZE='${FREEZE}' SEED=$SEED PIPELINE=$PIPELINE OUT_TAG=${OUT_TAG:-none}"
+echo "MTYPE=$MTYPE FREEZE='${FREEZE}' INCLUDE_STIM_PRIOR=${INCLUDE_STIM_PRIOR:-0} SEED=$SEED PIPELINE=$PIPELINE OUT_TAG=${OUT_TAG:-none}"
 echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
-echo "M_PRE_WEIGHT=$M_PRE_WEIGHT"
+echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-}"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -117,7 +128,13 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$W_PP_HI" ]] && ARGS+=(--w-pp-hi "$W_PP_HI")
 [[ -n "$SET_W_PP" ]] && ARGS+=(--set-w-pp "$SET_W_PP")
 [[ "$TIED_THRESHOLDS" == "1" ]] && ARGS+=(--tied-thresholds)
+if [[ "$INCLUDE_STIM_PRIOR" == "1" ]]; then
+  ARGS+=(--include-stim-prior)
+elif [[ "$INCLUDE_STIM_PRIOR" == "0" ]]; then
+  ARGS+=(--no-include-stim-prior)
+fi
 ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
+[[ -n "$PRIOR_WINDOW_MS" ]] && ARGS+=(--prior-window-ms "$PRIOR_WINDOW_MS")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"
