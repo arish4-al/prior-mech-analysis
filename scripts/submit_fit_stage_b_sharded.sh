@@ -22,12 +22,14 @@
 #   WEIGHTS_JSON  WEIGHTS_REL (default: openalyx 0p4044)
 #   HYBRID_JSON   output / resume path (default: models/stage_b_hybrid_*.json)
 #   VARIANTS      default "regular:12|13 sensory:6|7|8|9"
+#                 full (all prior gains + S curve): VARIANTS="full:" INCLUDE_STIM_PRIOR=1
 #   LOCAL_REFINE_IDX  default prior → ∩ mask ∪ retinal when STAGE1_HOLD_RETINAL=1
 #   STAGE1_HOLD_RETINAL  default 1 (DE holds Stage-A retinal; CMA unfreezes)
 #   BPS_STAGE1        default 20 (DE); BPS_STAGE2 default 20 (CMA)
 #   plus all submit_fit_joint_sharded.sh knobs (SEEDS PIPELINE OUT_TAG FORCE …)
 #   P_OFFSET_ALWAYS_ON=1 / NO_ITI_PENALTY=1 — modeling-detail ablations
 #   W_PP_LO / W_PP_HI / SET_W_PP / TIED_THRESHOLDS — tests 3–4
+#   PRIOR_WINDOW_MS=150 — test 6 (I/M prior at full 150 ms)
 #     (prefer scripts/submit_fit_stage_b_model_ablations.sh)
 
 set -euo pipefail
@@ -108,7 +110,8 @@ for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
           STAGE2_N_STIM_SEEDS STAGE2_STIM_AGGREGATE VAL_SEED \
           LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME \
           P_OFFSET_ALWAYS_ON NO_ITI_PENALTY \
-          W_PP_LO W_PP_HI SET_W_PP TIED_THRESHOLDS M_PRE_WEIGHT; do
+          W_PP_LO W_PP_HI SET_W_PP TIED_THRESHOLDS M_PRE_WEIGHT \
+          PRIOR_WINDOW_MS; do
   if [[ -n "${!_k:-}" ]]; then
     export "$_k"
   fi

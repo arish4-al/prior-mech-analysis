@@ -261,6 +261,9 @@ model_params = {
     'tied_thresholds': False,
     # Multiplier on pre-action M nSSE in the traj loss (post-start M stays 1).
     'm_pre_weight': 1.0,
+    # If set (ms), I/M prior-distance uses this window after stimOn and
+    # before movement. None → legacy T=72 (144 ms) / plot_window=80.
+    'prior_window_ms': None,
     'dt': _DEFAULT_DT,  # Set default dt in model_params
 }
 
@@ -369,8 +372,52 @@ def m_pre_weight_of(mp) -> float:
     return w
 
 
+def prior_window_ms_of(mp):
+    """I/M prior-distance window in ms, or None for the legacy T=72 path."""
+    v = (mp or {}).get("prior_window_ms")
+    if v is None:
+        return None
+    try:
+        w = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(w) or w <= 0.0:
+        return None
+    return w
+
+
+def resolve_prior_distance_window(mp, T=72, plot_window=80):
+    """T (steps) and plot_window (ms) for ``loss_prior_effect``.
+
+    Legacy (``prior_window_ms`` unset): keep the caller's T=72 / plot_window=80.
+    When set: T = round(window_ms / dt), plot_window = window_ms.
+    The third flag is True when the model curve should be resampled onto the
+    data bin count so the full window is scored (75 steps @ 2 ms → 72 data bins).
+    """
+    w = prior_window_ms_of(mp)
+    if w is None:
+        return int(T), float(plot_window), False
+    dt = float((mp or {}).get("dt", _DEFAULT_DT))
+    if not np.isfinite(dt) or dt <= 0.0:
+        dt = _DEFAULT_DT
+    t_use = max(1, int(round(w / dt)))
+    return t_use, float(w), True
+
+
+def _resample_to_len(y, n):
+    """Linear resample a 1-d trajectory onto ``n`` bins (endpoints preserved)."""
+    y = np.asarray(y, dtype=float)
+    n = int(n)
+    if y.size == n or y.size == 0 or n <= 0:
+        return y
+    x_src = np.linspace(0.0, 1.0, y.size)
+    x_dst = np.linspace(0.0, 1.0, n)
+    return np.interp(x_dst, x_src, y)
+
+
 def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
-                               tied_thresholds=None, m_pre_weight=None):
+                               tied_thresholds=None, m_pre_weight=None,
+                               prior_window_ms=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
@@ -384,6 +431,8 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["tied_thresholds"] = bool(tied_thresholds)
     if m_pre_weight is not None:
         mp["m_pre_weight"] = float(m_pre_weight)
+    if prior_window_ms is not None:
+        mp["prior_window_ms"] = float(prior_window_ms)
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -4390,7 +4439,7 @@ def loss_prior_effect(
     label_A='integrator', label_B='move', label_S='stim', plot_stim=False,
     do_plot=False, save_dir=save_dir, shift_baseline=False, plot_shifted=False, ylim=None,
     scale_factors=[1, 1, 1], include_all_trials=True, lump_all=False, correction='simple',
-    gradient_mode=False, grad_options=None
+    gradient_mode=False, grad_options=None, include_stim=False, stim_curve_path=None,
 ):
     """
     Overlay real-data region-group curves with model prior-distance curves (I, M, and S for duringstim),
@@ -4404,6 +4453,9 @@ def loss_prior_effect(
 
     if isinstance(timeframes, str):
         timeframes = (timeframes,)
+
+    T, plot_window, resample_to_data = resolve_prior_distance_window(
+        model_params, T=T, plot_window=plot_window)
 
     eps = 1e-12  # for normalization stability
 
@@ -4458,6 +4510,7 @@ def loss_prior_effect(
             plot_window=plot_window, shift_baseline=shift_baseline,
             scale_factors=scale_factors, include_all_trials=include_all_trials,
             lump_all=lump_all, correction=correction,
+            include_stim=include_stim, stim_curve_path=stim_curve_path,
             grad_options=grad_options or model_params.get('grad_options', {}))
         if do_plot:
             results_np = _detach_to_numpy(results)
@@ -4489,6 +4542,8 @@ def loss_prior_effect(
                 correction=correction,
                 gradient_mode=False,
                 grad_options=grad_options,
+                include_stim=include_stim,
+                stim_curve_path=stim_curve_path,
             )
         return out
 
@@ -4549,12 +4604,20 @@ def loss_prior_effect(
             r_int = save_data['r_int']
             r_move = save_data['r_move']
             r_stim = save_data['r_stim']
+        if include_stim and (not is_choice):
+            stim_path = Path(stim_curve_path) if stim_curve_path else Path(
+                'data_act_block_duringstim_s_unsplit80.npy')
+            if stim_path.is_file():
+                stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
+                if isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None:
+                    r_stim = np.asarray(stim_payload['r_stim'], dtype=float)
+                    regs_stim = list(stim_payload.get('regs_stim', regs_stim))
         
-        # plot_window is now in milliseconds. Use data's actual length for time axis
-        # Data bin size is ~2.08ms, so calculate expected bins, but use actual data length
-        # data_length = len(r_int) if r_int is not None and len(r_int) > 0 else int(round(plot_window / 2.08))
-        data_length = int(round(plot_window / 2))
-        # time_axis_for: time_window is number of bins, duration_ms is the duration in ms
+        # plot_window is milliseconds. Prefer the data's bin count so 150 ms → 72 bins.
+        data_length = (
+            len(r_int) if r_int is not None and len(r_int) > 0
+            else int(round(plot_window / 2))
+        )
         times_full = time_axis_for(timeframe, time_window=data_length, duration_ms=plot_window)
         # print(len(times_full))
 
@@ -4575,7 +4638,28 @@ def loss_prior_effect(
             if L <= 0:
                 return np.nan
 
-            if is_choice:
+            if name == 'S' and (not is_choice):
+                # Sidecar is the 80 ms prefix; do not stretch it across plot_window.
+                L = min(len(m_model), len(r_data))
+                t = np.linspace(0.0, 80.0, L)
+                y_m = m_model[:L]
+                y_d_src = r_data[:L]
+            elif resample_to_data and r_data is not None and getattr(m_model, "size", 0):
+                # Full prior_window_ms: map the model window onto the data bins
+                # (e.g. 75 steps @ 2 ms → 72 BWM bins over 150 ms).
+                m_use = _resample_to_len(m_model, len(r_data))
+                L = min(len(m_use), len(r_data), len(times_full))
+                if L <= 0:
+                    return np.nan
+                if is_choice:
+                    t = times_full[-L:]
+                    y_m = m_use[-L:]
+                    y_d_src = r_data[-L:]
+                else:
+                    t = times_full[:L]
+                    y_m = m_use[:L]
+                    y_d_src = r_data[:L]
+            elif is_choice:
                 t = times_full[-L:]
                 y_m = m_model[-L:]
                 y_d_src = r_data[-L:]
@@ -4606,12 +4690,14 @@ def loss_prior_effect(
 
             return sse_norm
 
-        # compute/plot I, M, and S (S only during stim)
+        # compute/plot I, M, and S (S only during stim when include_stim)
         sse_int  = _proc('I', r_int,  m_I, color='gold',   label=label_A, baseline_mode="min",  plot_flag=True)
         sse_move = _proc('M', r_move, m_M, color='tomato', label=label_B, baseline_mode="min",  plot_flag=True)
-        # sse_stim = 0.0 if is_choice else _proc('S', r_stim, m_S, color='C0', label=label_S,
-        #                                        baseline_mode="mean", plot_flag=plot_stim)
-        sse_stim = 0.0
+        if include_stim and (not is_choice):
+            sse_stim = _proc('S', r_stim, m_S, color='C0', label=label_S,
+                             baseline_mode="mean", plot_flag=plot_stim or include_stim)
+        else:
+            sse_stim = 0.0
 
         # update totals (unchanged)
         rel_sses = [sse_int, sse_move, sse_stim]
@@ -4627,10 +4713,16 @@ def loss_prior_effect(
         # --- GoF (energy-normalized): GoF = 1 - SSE_norm ---
         gof_I = (1.0 - sse_int)  if np.isfinite(sse_int)  else np.nan
         gof_M = (1.0 - sse_move) if np.isfinite(sse_move) else np.nan
-        # gof_S = (1.0 - sse_stim) if np.isfinite(sse_stim) else np.nan
-        # gof_tf_mean = float(np.nanmean([gof_I, gof_M, gof_S])) if not (np.isnan(gof_I) and np.isnan(gof_M) and np.isnan(gof_S)) else np.nan
-        gof_tf_mean = float(np.nanmean([gof_I, gof_M])) if not (np.isnan(gof_I) and np.isnan(gof_M)) else np.nan
-        sse[timeframe]['gof'] = {'integrator': gof_I, 'move': gof_M, 'mean': gof_tf_mean}
+        gof_S = (1.0 - sse_stim) if (include_stim and np.isfinite(sse_stim)) else np.nan
+        if include_stim:
+            gof_tf_mean = float(np.nanmean([gof_I, gof_M, gof_S])) if not (
+                np.isnan(gof_I) and np.isnan(gof_M) and np.isnan(gof_S)
+            ) else np.nan
+        else:
+            gof_tf_mean = float(np.nanmean([gof_I, gof_M])) if not (
+                np.isnan(gof_I) and np.isnan(gof_M)
+            ) else np.nan
+        sse[timeframe]['gof'] = {'integrator': gof_I, 'move': gof_M, 'stim': gof_S, 'mean': gof_tf_mean}
         if np.isfinite(gof_tf_mean):
             gof_over_timeframes.append(gof_tf_mean)
 
@@ -4638,6 +4730,10 @@ def loss_prior_effect(
         if do_plot:
             if ylim is not None:
                 ax.set_ylim(ylim[0], ylim[1])
+            if is_choice:
+                ax.set_xlim(-float(plot_window), 0.0)
+            else:
+                ax.set_xlim(0.0, float(plot_window))
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             ax.set_facecolor('none')
@@ -4660,6 +4756,8 @@ def loss_prior_effect(
             fontsize=12, color='k',
             bbox=dict(facecolor='none', edgecolor='none', alpha=0.7, pad=2)
         )
+        if include_stim:
+            axs[0].legend(frameon=False, fontsize=8, loc="upper left")
         if save_dir:
             param_name = (
                 f"gi{model_params['g_i']}_gm{model_params['g_m']}_gs{model_params['g_s']}_"
@@ -4688,7 +4786,10 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
     metric="rt"      : reaction time; rt_mode controls RT definition:
 
       rt_mode = "correct_split" : RT for congruent / incongruent using correct trials only.
-      rt_mode = "combined_all"  : RT combined across all trials (one curve: cc/cw/dc/dw).
+      rt_mode = "combined_all"  : one pooled RT-vs-contrast curve, no con/inc split.
+        Data: trial-count weighted mean of cc+cw+dc+dw. Model: mean RT of all
+        committed trials at each signed contrast (not the average of the two
+        split curves).
       rt_mode = "split_all"     : RT for congruent / incongruent using all trials.
 
     Model trials match the BWM data mask used for ``behavior.npy``: drop
@@ -4861,7 +4962,7 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
                 ax.text(0.3, 0.10, f"R$^2$ incon: {sse['gof']['incongruent']:.4f}",
                         transform=ax.transAxes, fontsize=10, color=colors['incongruent'])
 
-        # ---- Mode B: combined_all (one RT curve across all trials) ----
+        # ---- Mode B: combined_all (one pooled RT curve, no con/inc split) ----
         elif rt_mode == "combined_all":
             beh_all = (
                 np.asarray(res['cc']) + np.asarray(res['cw']) +
@@ -4871,7 +4972,16 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
                 np.asarray(total['dc']) + np.asarray(total['dw'])
             )
 
-            model_all = np.nanmean(np.vstack([model_cong, model_disc]), axis=0)
+            all_pairs = groups['congruent'] + groups['incongruent']
+            signed_all = [x[0] for x in all_pairs]
+            vals_all = [x[1] for x in all_pairs]
+            unique_all = sorted(set(signed_all))
+            mean_all = []
+            for s in unique_all:
+                v = [vals_all[i] for i, st in enumerate(signed_all) if st == s]
+                mean_all.append(float(np.mean(v) * dt))
+            model_curves['all'] = (unique_all, mean_all)
+            model_all = align_to_stim(model_curves['all'], stim)
 
             sse_all, gof_all, _ = _sse_and_gof(beh_all, model_all)
 
@@ -4923,6 +5033,7 @@ def loss_perf_with_data(results, behavior, model_params, metric="correct", dt=2,
             all_x = np.array(
                 list(model_curves['congruent'][0])
                 + list(model_curves['incongruent'][0])
+                + list(model_curves.get('all', ([], []))[0])
                 + list(stim),
                 dtype=float
             )
@@ -5770,10 +5881,14 @@ def loss_plot_diff_by_condition_with_data(
 def _loss_prior_effect_torch(
     regions, results, model_params, steps_before_obs, T, model_metric,
     timeframes, alpha, ptype, plot_window, shift_baseline,
-    scale_factors, include_all_trials, lump_all, correction, grad_options
+    scale_factors, include_all_trials, lump_all, correction, grad_options,
+    include_stim=False, stim_curve_path=None,
 ):
     grad_opts, dtype, device = _resolve_grad_options(model_params, override=grad_options)
     eps = torch.tensor(1e-12, dtype=dtype, device=device)
+
+    T, plot_window, resample_to_data = resolve_prior_distance_window(
+        model_params, T=T, plot_window=plot_window)
 
     model_dists = _prior_distance_I_M_both_alignments_torch(
         results, steps_before_obs, T=T, metric=model_metric,
@@ -5822,6 +5937,13 @@ def _loss_prior_effect_torch(
         r_move = torch.tensor(np.asarray(save_data['r_move'], dtype=float), dtype=dtype, device=device)
         if not is_choice:
             r_stim_np = save_data['r_stim']
+            if include_stim:
+                stim_path = Path(stim_curve_path) if stim_curve_path else Path(
+                    'data_act_block_duringstim_s_unsplit80.npy')
+                if stim_path.is_file():
+                    stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
+                    if isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None:
+                        r_stim_np = stim_payload['r_stim']
             r_stim = None if r_stim_np is None else torch.tensor(np.asarray(r_stim_np, dtype=float), dtype=dtype, device=device)
         else:
             r_stim = None
@@ -5865,7 +5987,8 @@ def _loss_prior_effect_torch(
             if m_model is None or r_data is None or m_model.numel() == 0 or r_data.numel() == 0:
                 return torch.tensor(float('nan'), dtype=dtype, device=device)
             # Interpolate model to match data length if needed
-            if m_model.shape[0] < r_data.shape[0]:
+            if m_model.shape[0] < r_data.shape[0] or (
+                    resample_to_data and m_model.shape[0] != r_data.shape[0]):
                 m_model = _interpolate_torch(m_model, r_data.shape[0])
             L = min(int(m_model.shape[0]), int(r_data.shape[0]), int(times_full.shape[0]))
             if L <= 0:
@@ -5884,9 +6007,10 @@ def _loss_prior_effect_torch(
 
         sse_int = _proc(m_I, r_int, baseline_mode="min")
         sse_move = _proc(m_M, r_move, baseline_mode="min")
-        sse_stim = torch.tensor(0.0, dtype=dtype, device=device) if is_choice else (
-            _proc(m_S, r_stim, baseline_mode="mean") if m_S is not None and r_stim is not None else torch.tensor(0.0, dtype=dtype, device=device)
-        )
+        if include_stim and (not is_choice) and m_S is not None and r_stim is not None:
+            sse_stim = _proc(m_S, r_stim, baseline_mode="mean")
+        else:
+            sse_stim = torch.tensor(0.0, dtype=dtype, device=device)
 
         losses = [v for v in (sse_int, sse_move, sse_stim) if not torch.isnan(v)]
         if len(losses) > 0:
