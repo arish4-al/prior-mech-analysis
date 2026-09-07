@@ -26,7 +26,8 @@ FIT_PRIOR_NAMES = (
     "data_act_block_duringchoice.npy",
 )
 FIT_AVG_MEAN_R = "avg_mean_R.npy"
-FIT_TARGET_NAMES = (FIT_MEAN_NAME,) + FIT_PRIOR_NAMES + (FIT_AVG_MEAN_R,)
+FIT_S_UNSPLIT80 = "data_act_block_duringstim_s_unsplit80.npy"
+FIT_TARGET_NAMES = (FIT_MEAN_NAME,) + FIT_PRIOR_NAMES + (FIT_AVG_MEAN_R, FIT_S_UNSPLIT80)
 
 
 def resolve_fit_targets_dir(explicit=None):
@@ -110,6 +111,9 @@ def ensure_fit_data_links(
         names.extend(FIT_PRIOR_NAMES)
     if require_avg_mean_r:
         names.append(FIT_AVG_MEAN_R)
+    s_unsplit = targets / FIT_S_UNSPLIT80
+    if s_unsplit.is_file():
+        names.append(FIT_S_UNSPLIT80)
 
     for name in names:
         src = targets / name
@@ -147,6 +151,24 @@ def load_validated_mean_data(path=None):
     mean_data = np.load(mean_path, allow_pickle=True).flat[0]
     validate_mean_data_results(mean_data, source=str(mean_path))
     return mean_path, mean_data
+
+
+def load_s_unsplit80(path=None):
+    """Load the unsplit-80 ms S prior-distance sidecar (regs + r_stim)."""
+    if path is not None:
+        p = Path(path)
+    else:
+        cwd_p = Path.cwd() / FIT_S_UNSPLIT80
+        p = cwd_p if cwd_p.exists() else (resolve_fit_targets_dir() / FIT_S_UNSPLIT80)
+    p = p.resolve()
+    if not p.is_file():
+        raise FileNotFoundError(
+            f"Missing {p}. Run scripts/build_s_prior_curve_unsplit80.py"
+        )
+    payload = np.load(p, allow_pickle=True).flat[0]
+    if not isinstance(payload, dict) or payload.get("r_stim") is None:
+        raise ValueError(f"{p}: expected dict with r_stim")
+    return p, payload
 
 
 def load_avg_mean_r(path=None):

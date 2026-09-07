@@ -37,15 +37,20 @@ try:
         ensure_fit_data_links,
         load_validated_mean_data,
         load_avg_mean_r,
-        load_s_unsplit80,
     )
 except ImportError:
     from scripts._fit_data import (
         ensure_fit_data_links,
         load_validated_mean_data,
         load_avg_mean_r,
-        load_s_unsplit80,
     )
+try:
+    from _fit_data import load_s_unsplit80
+except ImportError:
+    try:
+        from scripts._fit_data import load_s_unsplit80
+    except ImportError:
+        load_s_unsplit80 = None
 
 from model_functions import (
     pth_res,
@@ -328,6 +333,10 @@ def main(argv=None):
     stim_regs = ["VISpm", "FRP", "VISal"]
     stim_curve_path = None
     if include_stim:
+        if load_s_unsplit80 is None:
+            raise SystemExit(
+                "--include-stim-prior needs load_s_unsplit80 "
+                "(copy scripts/_fit_data.py onto this checkout)")
         stim_curve_path, stim_payload = load_s_unsplit80()
         stim_regs = list(stim_payload.get("regs_stim") or stim_regs)
         print(f"[fit-data] S unsplit80={stim_curve_path} "
