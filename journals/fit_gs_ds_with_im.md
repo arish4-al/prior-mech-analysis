@@ -9,8 +9,8 @@ mean-activity curves.
 **Not in scope:** changing I/M traj targets, `avg_mean_R` / Stage A, Harris /
 Bayes priors, or the default regular/sensory freeze masks.
 
-**Status:** region set + S curve built 2026-09-02. Fit variant wired
-(`--mtype full`, `--include-stim-prior`). No ORCD campaign submitted.
+**Status:** 8/8 full campaign `FIT_DONE` (2026-09-08). Best shared-stim
+fair tot **s101 = 1.076** (S nSSE **0.018**).
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -181,3 +181,51 @@ Rebuilt with `/ 2`. Same 13 regions / 9,504 cells / 38 bins.
 
 Overwrote alyx `meta/` npy+PNG and `fit_targets/` copy. Regenerated regular
 s101 `prior_effects` with the scaled S overlay (I/M 150 ms; S first 80 ms).
+
+---
+
+## 2026-09-08 — full campaign (openalyx, 8/8)
+
+Local copies: openalyx `models/`
+`weights_run_fj_stageB_hold_s89_full_full_masknone_s{7,12,34,45,89,101,303,333}/`.
+All **8/8 `FIT_DONE`**, `fit_status=ok`, `include_stim=true`, `mask=none`,
+`prior_stratum` unset (I/M stim×choice; model S forced `stratum_s=stim`).
+
+**Eval:** `bps=20`, stim seed **12345**, stim from baseline regular
+**s101**, nested `fit_targets/` + unsplit-80 S sidecar. Dump:
+`models/stageB_hold_s89_full_eval.json`. Regular on the same seeds is
+scored with `include_stim=True` so S nSSE is visible even though it was
+not in that arm’s fit. JSON `final_loss` is own-stim — not comparable.
+
+Fair tot = traj + I/M prior + S prior nSSE + retinal `L_S`.
+Fair without S = production regular objective.
+
+| seed | full rec | traj | I/M | S | L_S | fair | w/o S | g_s | d_s | g_i |
+|-----:|---------:|-----:|----:|--:|----:|-----:|------:|----:|----:|----:|
+| 7 | 1.866 | 0.393 | 0.255 | 0.676 | 0.496 | 1.820 | 1.144 | 1.87 | 0.32 | 184 |
+| 12 | 1.496 | 0.479 | 0.106 | 0.241 | 0.447 | 1.274 | **1.032** | 27.7 | 65.4 | 190 |
+| 34 | 1.641 | 0.410 | 0.301 | 0.474 | 0.476 | 1.661 | 1.187 | 0.60 | 12.9 | 166 |
+| 45 | 1.378 | 0.489 | 0.315 | 0.045 | 0.422 | 1.272 | 1.227 | 0.32 | 2.60 | 37 |
+| 89 | 1.664 | 0.410 | 0.153 | 0.706 | 0.498 | 1.766 | 1.060 | 3.47 | 0.06 | 116 |
+| **101** | 1.360 | 0.378 | 0.250 | **0.018** | 0.429 | **1.076** | 1.057 | 37.3 | 45.7 | **0.15** |
+| 303 | 2.252 | 0.356 | 0.460 | 0.079 | 0.482 | 1.377 | 1.298 | 50.5 | 27.2 | 187 |
+| 333 | 1.882 | 0.357 | 0.367 | 0.034 | 0.434 | 1.191 | 1.157 | 0.17 | 53.5 | 96 |
+
+Regular S nSSE (same stim, g_s≈0) is **0.56–0.75**. Production tot
+without S: regular best **1.015** (s333), median **1.051**.
+
+| arm | best fair | median fair | best w/o S | median S nSSE |
+|-----|----------:|------------:|-----------:|--------------:|
+| full | **1.076** (s101) | 1.326 | 1.032 (s12) | **0.160** |
+| regular (S scored) | 1.642 (s303) | 1.726 | **1.015** (s333) | 0.680 |
+
+S-success (nSSE &lt; 0.1): **s101, s45, s333, s303**. Two routes —
+large g_s+d_s (s101 37/46, s303 51/27) or g_s near the 0.1 floor plus
+offset (s45 0.32/2.6, s333 0.17/54). Failed S (still ~0.68): s7, s89.
+Partial: s12 (0.241), s34 (0.474).
+
+Tradeoff: best S fit **s101** collapsed `g_i` to 0.15 (regular 196).
+s45 dropped `g_i` to 37. s303 kept `g_i=187` but I/M prior rose to
+0.46. `g_m`/`d_m` stayed ~0 (free in DE/CMA, not in default polish).
+`L_S` on S-success seeds is intact or slightly better (0.42–0.43 vs
+regular ~0.50).

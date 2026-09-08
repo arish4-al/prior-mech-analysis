@@ -601,8 +601,8 @@ def _log_bounds_weights_v2():
     bW_pi = (1e-7, 1e-1)
     bW_mi = (1e-3, 10)
 
-    # gains: g_i kept away from zero; g_m may be negligible (paper / ckpt ≈ 0)
-    bG_i = (1e-1, 2e2)
+    # gains: same floor as g_m (may be negligible; paper / ckpt g_m ≈ 0)
+    bG_i = (1e-12, 2e2)
     bG_m = (1e-12, 2e2)
     # offsets: d_i kept; d_m may be negligible
     bD_i = (1e-5, 1e2)
@@ -934,7 +934,7 @@ def _loss_active_de_worker(x_act):
         th_full[~train_mask] = LOG_ZERO
 
     # Clamp FREE dims only. Clamping frozen dims would pull LOG_ZERO up to the
-    # lower bound (e.g. g_i → 0.1 instead of ~0), breaking --freeze semantics.
+    # lower bound (e.g. g_i → 1e-12 instead of ~0), breaking --freeze semantics.
     Lb_full = np.array([L for (L, U) in full_bounds], float)
     Ub_full = np.array([U for (L, U) in full_bounds], float)
     th_full[train_mask] = np.minimum(
