@@ -604,8 +604,8 @@ def _log_bounds_weights_v2():
     # gains: same floor as g_m (may be negligible; paper / ckpt g_m ≈ 0)
     bG_i = (1e-12, 2e2)
     bG_m = (1e-12, 2e2)
-    # offsets: d_i kept; d_m may be negligible
-    bD_i = (1e-5, 1e2)
+    # offsets: same 1e-12 floor as g_i / g_m / d_m (d_i was 1e-5)
+    bD_i = (1e-12, 1e2)
     bD_m = (1e-12, 1e2)
 
     # thresholds (set around amplitude of M neurons; allow discordant a bit higher)

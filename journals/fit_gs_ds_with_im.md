@@ -10,7 +10,8 @@ mean-activity curves.
 Bayes priors, or the default regular/sensory freeze masks.
 
 **Status:** 8/8 full campaign `FIT_DONE` (2026-09-08). Best shared-stim
-fair tot **s101 = 1.076** (S nSSE **0.018**).
+fair tot **s101 = 1.076** (S nSSE **0.018**). Rerun queued with
+`g_*`/`d_*` floor **1e-12** + im150 / im150stim / stimonly arms.
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -229,3 +230,41 @@ s45 dropped `g_i` to 37. s303 kept `g_i=187` but I/M prior rose to
 0.46. `g_m`/`d_m` stayed ~0 (free in DE/CMA, not in default polish).
 `L_S` on S-success seeds is intact or slightly better (0.42–0.43 vs
 regular ~0.50).
+
+---
+
+## 2026-09-08b — `g_*`/`d_*` floor 1e-12 + I/M-window arms
+
+Native floors were mixed: `g_s` **0.1**, `d_s`/`d_i` **1e-5**,
+`g_i`/`g_m`/`d_m` **1e-12**. That clipped a hybrid `g_s≈0` warm start
+to 0.1 and blocked a true near-zero S coupling. All six now share
+**1e-12**:
+
+| param | old lo | new lo | hi |
+|-------|-------:|-------:|---:|
+| `g_i`, `g_m`, `g_s` | 1e-12 / 1e-12 / **0.1** | **1e-12** | 200 |
+| `d_i`, `d_m`, `d_s` | **1e-5** / 1e-12 / **1e-5** | **1e-12** | 100 |
+
+`d_i` is the weights-v2 box (`fit_weights._log_bounds_weights_v2`);
+`g_s`/`d_s` are joint-only (`NATIVE_BOUNDS`).
+
+Submit wrapper
+[`scripts/submit_fit_stage_b_full_s_prior.sh`](../scripts/submit_fit_stage_b_full_s_prior.sh):
+`VARIANTS=full:` + `INCLUDE_STIM_PRIOR=1`. `FORCE=1` replaces
+`stageB_hold_s89_full_*`. New arms use new OUT_TAGs so they do not
+overwrite regular im150 / im150stim / stimonly.
+
+| arm | I/M window | I/M stratum | OUT_TAG |
+|-----|------------|-------------|---------|
+| `full` | legacy T=72 / `plot_window=80` | stim×choice | `stageB_hold_s89_full` (replace) |
+| `im150` | 150 ms | stim×choice | `stageB_hold_s89_full_im150` |
+| `im150stim` | 150 ms | `stim` | `stageB_hold_s89_full_im150stim` |
+| `stimonly` | legacy | `stim` | `stageB_hold_s89_full_stimonly` |
+
+Model S stays `stratum_s=stim` (2-split sidecar) on every arm. Same 8
+seeds. User pastes (agents do not run Slurm):
+
+```bash
+PARTITION=mit_preemptable FORCE=1 \
+  bash scripts/submit_fit_stage_b_full_s_prior.sh
+```

@@ -23,6 +23,8 @@
 #   HYBRID_JSON   output / resume path (default: models/stage_b_hybrid_*.json)
 #   VARIANTS      default "regular:12|13 sensory:6|7|8|9"
 #                 full (all prior gains + S curve): VARIANTS="full:" INCLUDE_STIM_PRIOR=1
+#                 or scripts/submit_fit_stage_b_full_s_prior.sh (full / im150 /
+#                 im150stim / stimonly)
 #   LOCAL_REFINE_IDX  default prior → ∩ mask ∪ retinal when STAGE1_HOLD_RETINAL=1
 #   STAGE1_HOLD_RETINAL  default 1 (DE holds Stage-A retinal; CMA unfreezes)
 #   BPS_STAGE1        default 20 (DE); BPS_STAGE2 default 20 (CMA)
