@@ -460,6 +460,7 @@ def main(argv=None):
           f"m_pre_weight={float(args.m_pre_weight):g} "
           f"prior_window_ms={args.prior_window_ms} "
           f"prior_stratum={args.prior_stratum} "
+          f"g_i_bounds={tuple(NATIVE_BOUNDS['g_i'])} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
           f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
@@ -614,6 +615,7 @@ def main(argv=None):
         "prior_window_ms": (
             None if args.prior_window_ms is None else float(args.prior_window_ms)),
         "prior_stratum": args.prior_stratum,
+        "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
         "resume_source": resume_source,

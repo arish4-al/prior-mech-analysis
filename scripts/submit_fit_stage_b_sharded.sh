@@ -30,7 +30,7 @@
 #   P_OFFSET_ALWAYS_ON=1 / NO_ITI_PENALTY=1 — modeling-detail ablations
 #   W_PP_LO / W_PP_HI / SET_W_PP / TIED_THRESHOLDS — tests 3–4
 #   PRIOR_WINDOW_MS=150 — test 6 (I/M prior at full 150 ms)
-#   PRIOR_STRATUM=stim — revised test 6 (stim-only prior-distance)
+#   PRIOR_STRATUM=stim — stim-only prior-distance (im150stim / stimonly)
 #     (prefer scripts/submit_fit_stage_b_model_ablations.sh)
 
 set -euo pipefail

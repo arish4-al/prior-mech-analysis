@@ -18,6 +18,7 @@
 #   ABLATIONS=onethr bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=im150 bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=im150stim bash scripts/submit_fit_stage_b_model_ablations.sh
+#   ABLATIONS=stimonly bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 #   # Smoke:
 #   SEEDS=999 ABLATIONS=wppsmall OUT_TAG=stageB_ablate_wppsmall_smoke \
@@ -26,7 +27,7 @@
 #     bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 # Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr /
-#      im150 / im150stim), plus all submit_fit_stage_b_sharded.sh knobs.
+#      im150 / im150stim / stimonly), plus all submit_fit_stage_b_sharded.sh knobs.
 
 set -euo pipefail
 
@@ -120,9 +121,14 @@ for ABLATION in "${ABL_ARR[@]}"; do
       export PRIOR_STRATUM=stim
       TAG="${OUT_TAG_IM150STIM:-stageB_hold_s89_im150stim}"
       ;;
+    stimonly)
+      # Legacy I/M window (prior_window_ms unset) + stim-only stratum.
+      export PRIOR_STRATUM=stim
+      TAG="${OUT_TAG_STIMONLY:-stageB_hold_s89_stimonly}"
+      ;;
     *)
       echo "ERROR: unknown ABLATION='$ABLATION'" >&2
-      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150 | im150stim" >&2
+      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150 | im150stim | stimonly" >&2
       exit 1
       ;;
   esac

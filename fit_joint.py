@@ -69,7 +69,7 @@ THETA_D_IDX = 11
 NATIVE_BOUNDS = {
     "W_ii": (2e-1, 0.49), "W_pp": (0.496, 0.49999), "W_mm": (1e-1, 0.40),
     "W_is": (1e-4, 5.0), "W_pi": (1e-7, 1e-1), "W_mi": (1e-3, 10.0),
-    "g_i": (1e-1, 2e2), "g_m": (1e-12, 2e2),
+    "g_i": (1e-12, 2e2), "g_m": (1e-12, 2e2),
     "d_i": (1e-5, 1e2), "d_m": (1e-12, 1e2),
     "theta_c": (0.1, 0.99999), "theta_d": (0.1, 0.99999),
     "g_s": (1e-1, 2e2), "d_s": (1e-5, 1e2),
@@ -166,7 +166,7 @@ def _bounds_retinal_opt():
 def _log_bounds_joint():
     """Full 21-d optimizer bounds: weight block + g_s/d_s + retinal."""
     b_w = fw._log_bounds_weights_v2()
-    # g_s like g_i (away from 0); d_s like d_i — matches NATIVE_BOUNDS
+    # g_s kept away from 0; d_s like d_i — matches NATIVE_BOUNDS
     b_gs = (np.log(NATIVE_BOUNDS["g_s"][0]), np.log(NATIVE_BOUNDS["g_s"][1]))
     b_ds = (np.log(NATIVE_BOUNDS["d_s"][0]), np.log(NATIVE_BOUNDS["d_s"][1]))
     b_ret = _bounds_retinal_opt()
