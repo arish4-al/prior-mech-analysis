@@ -25,6 +25,7 @@
 #      TIED_THRESHOLDS=1 → --tied-thresholds (test 4).
 #      M_PRE_WEIGHT → --m-pre-weight (pre-action M nSSE multiplier; default 1).
 #      PRIOR_WINDOW_MS → --prior-window-ms (I/M prior window; test 6: 150).
+#      PRIOR_STRATUM → --prior-stratum (stim_choice | stim | all).
 
 set -euo pipefail
 
@@ -80,6 +81,7 @@ SET_W_PP="${SET_W_PP:-}"
 TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
 M_PRE_WEIGHT="${M_PRE_WEIGHT:-1}"
 PRIOR_WINDOW_MS="${PRIOR_WINDOW_MS:-}"
+PRIOR_STRATUM="${PRIOR_STRATUM:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -103,7 +105,7 @@ echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
-echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-}"
+echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -135,6 +137,7 @@ elif [[ "$INCLUDE_STIM_PRIOR" == "0" ]]; then
 fi
 ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
 [[ -n "$PRIOR_WINDOW_MS" ]] && ARGS+=(--prior-window-ms "$PRIOR_WINDOW_MS")
+[[ -n "$PRIOR_STRATUM" ]] && ARGS+=(--prior-stratum "$PRIOR_STRATUM")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"

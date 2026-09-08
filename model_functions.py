@@ -264,6 +264,9 @@ model_params = {
     # If set (ms), I/M prior-distance uses this window after stimOn and
     # before movement. None → legacy T=72 (144 ms) / plot_window=80.
     'prior_window_ms': None,
+    # I/M prior-distance trial stratum. None / 'stim_choice' = stim × choice
+    # (production). 'stim' = stim side only. 'all' = no stim/choice (lump).
+    'prior_stratum': None,
     'dt': _DEFAULT_DT,  # Set default dt in model_params
 }
 
@@ -372,6 +375,22 @@ def m_pre_weight_of(mp) -> float:
     return w
 
 
+def prior_stratum_of(mp):
+    """I/M prior-distance stratum: ``stim_choice`` (default), ``stim``, or ``all``."""
+    v = (mp or {}).get("prior_stratum")
+    if v is None or v == "":
+        return "stim_choice"
+    s = str(v).strip().lower().replace("-", "_")
+    if s in ("stim_choice", "choice", "split"):
+        return "stim_choice"
+    if s == "stim":
+        return "stim"
+    if s in ("all", "lump", "fully"):
+        return "all"
+    raise ValueError(
+        f"prior_stratum={v!r}; use 'stim_choice', 'stim', or 'all'")
+
+
 def prior_window_ms_of(mp):
     """I/M prior-distance window in ms, or None for the legacy T=72 path."""
     v = (mp or {}).get("prior_window_ms")
@@ -417,11 +436,13 @@ def _resample_to_len(y, n):
 
 def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
                                tied_thresholds=None, m_pre_weight=None,
-                               prior_window_ms=None):
+                               prior_window_ms=None, prior_stratum=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
     through ``loss_extra_kwargs`` and applying them here is what the workers see.
+    ``prior_window_ms=None`` / ``prior_stratum=None`` leave the current values
+    (they do not clear a previous 150 / stim).
     """
     if p_offset_always_on is not None:
         mp["p_offset_always_on"] = bool(p_offset_always_on)
@@ -433,6 +454,8 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["m_pre_weight"] = float(m_pre_weight)
     if prior_window_ms is not None:
         mp["prior_window_ms"] = float(prior_window_ms)
+    if prior_stratum is not None:
+        mp["prior_stratum"] = prior_stratum_of({"prior_stratum": prior_stratum})
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -3959,7 +3982,8 @@ def plot_diff_by_condition(avg_dict, var_names=("S","I","P","M"), dt=2, reaction
 
 def prior_distance_I_M_both_alignments(
     results, steps_before_obs, T=75, metric="l2",
-    include_all_trials=True, lump_all=False
+    include_all_trials=True, lump_all=False, stratum=None,
+    stratum_s=None,
 ):
     """
     Prior-distance (sp=+1 vs sp=-1) under:
@@ -3970,8 +3994,13 @@ def prior_distance_I_M_both_alignments(
     If include_all_trials is False (default): use CORRECT trials only (ts == ch). [Original behavior]
     If include_all_trials is True: include ALL trials with a realized choice (ch ∈ {±1}).
     If lump_all is True: IGNORE trial side and choice side; pool all qualifying trials by prior side only.
-      Otherwise (default), compute within each (trial_side, choice_side) combo, average equally across combos
-      for each sp, then take the distance between the two balanced means (sp=+1 vs sp=-1).
+      Otherwise (default ``stratum='stim_choice'``), compute within each
+      (trial_side, choice_side) combo, average equally across combos
+      for each sp, then take the distance between the two balanced means.
+    ``stratum='stim'``: same but drop choice — within stim side only, then
+      equal-weight the two stim-side means. ``stratum='all'`` = ``lump_all``.
+    ``stratum_s`` is the same choice for S only (default ``'stim'``) so model
+    S matches the 2-split ``act_block_duringstim_{l,r}`` data sidecar.
 
     Rules (unchanged):
       • Require m_i >= steps_before_obs + _min_trial_steps(); shorter trials skipped.
@@ -3983,6 +4012,17 @@ def prior_distance_I_M_both_alignments(
       - 'l2'  : Euclidean over the two channels at each time
       - 'side': |(R−L)_sp=+1 − (R−L)_sp=−1|
     """
+
+    if lump_all:
+        stratum = "all"
+    elif stratum is None:
+        stratum = "stim_choice"
+    if stratum not in ("stim_choice", "stim", "all"):
+        raise ValueError("stratum must be 'stim_choice', 'stim', or 'all'")
+    if stratum_s is None:
+        stratum_s = "stim"
+    if stratum_s not in ("stim_choice", "stim", "all"):
+        raise ValueError("stratum_s must be 'stim_choice', 'stim', or 'all'")
 
     choices       = results['choices']
     trial_sides   = results['trial_sides']
@@ -4004,7 +4044,7 @@ def prior_distance_I_M_both_alignments(
             'S': {'start': nanT.copy(), 'action': np.array([])}
         }
 
-    def _segments_by_bucket(var_name, mode):
+    def _segments_by_bucket(var_name, mode, strat):
         """
         Collect aligned segments.
         Returns dict[(ts, ch, sp)] -> list of (T,2) arrays, or (sp,) if lump_all=True.
@@ -4063,37 +4103,48 @@ def prior_distance_I_M_both_alignments(
 
             # subjective prior sign
             sp = 1 if sub_prior[i][0] < 0 else -1
-            key = (sp,) if lump_all else (ts, ch, sp)
+            if strat == "all":
+                key = (sp,)
+            elif strat == "stim":
+                key = (ts, sp)
+            else:
+                key = (ts, ch, sp)
             buckets.setdefault(key, []).append(seg)
 
         return buckets
 
-    def _mean_for_sp(buckets, sp_sign):
+    def _mean_for_sp(buckets, sp_sign, strat):
         """
-        If lump_all: mean across ALL qualifying trials with given sp (key = (sp,))
-        Else: balanced mean across present (ts, ch) ∈ {±1}×{±1} for given sp.
-        Returns (T,2) or None.
+        Balanced mean for this prior sign, then one distance vs the other sign.
+        ``all``: pool every trial. ``stim``: equal-weight stim L/R.
+        ``stim_choice``: equal-weight the four (ts, ch) cells.
         """
-        if lump_all:
+        if strat == "all":
             key = (sp_sign,)
             if key not in buckets or len(buckets[key]) == 0:
                 return None
             return np.mean(np.stack(buckets[key], axis=0), axis=0)
         bucket_means = []
-        for ts in (+1, -1):
-            for ch in (+1, -1):
-                key = (ts, ch, sp_sign)
+        if strat == "stim":
+            for ts in (+1, -1):
+                key = (ts, sp_sign)
                 if key in buckets and len(buckets[key]) > 0:
-                    B = np.mean(np.stack(buckets[key], axis=0), axis=0)
-                    bucket_means.append(B)
+                    bucket_means.append(np.mean(np.stack(buckets[key], axis=0), axis=0))
+        else:
+            for ts in (+1, -1):
+                for ch in (+1, -1):
+                    key = (ts, ch, sp_sign)
+                    if key in buckets and len(buckets[key]) > 0:
+                        bucket_means.append(
+                            np.mean(np.stack(buckets[key], axis=0), axis=0))
         if not bucket_means:
             return None
         return np.mean(np.stack(bucket_means, axis=0), axis=0)
 
-    def _balanced_prior_distance(var_name, mode):
-        buckets = _segments_by_bucket(var_name, mode)
-        A_pos = _mean_for_sp(buckets, +1)
-        A_neg = _mean_for_sp(buckets, -1)
+    def _balanced_prior_distance(var_name, mode, strat):
+        buckets = _segments_by_bucket(var_name, mode, strat)
+        A_pos = _mean_for_sp(buckets, +1, strat)
+        A_neg = _mean_for_sp(buckets, -1, strat)
         if A_pos is None or A_neg is None:
             return np.array([])
         if metric == "l2":
@@ -4104,13 +4155,13 @@ def prior_distance_I_M_both_alignments(
             raise ValueError("metric must be 'l2' or 'side'")
 
     out = {'I': {}, 'M': {}, 'S': {}}
-    # I, M: both alignments
+    # I, M: both alignments (``stratum``; default stim×choice)
     for vn in ('I', 'M'):
-        out[vn]['start']  = _balanced_prior_distance(vn, "post_start")
-        out[vn]['action'] = _balanced_prior_distance(vn, "pre_action")
+        out[vn]['start']  = _balanced_prior_distance(vn, "post_start", stratum)
+        out[vn]['action'] = _balanced_prior_distance(vn, "pre_action", stratum)
 
-    # S: start-only
-    out['S']['start']  = _balanced_prior_distance('S', "post_start")
+    # S: start-only, stim-side by default (2-split data)
+    out['S']['start']  = _balanced_prior_distance('S', "post_start", stratum_s)
     out['S']['action'] = np.array([])
 
     return out
@@ -4118,9 +4169,21 @@ def prior_distance_I_M_both_alignments(
 
 def _prior_distance_I_M_both_alignments_torch(
     results, steps_before_obs, T=75, metric="l2",
-    include_all_trials=True, lump_all=False,
+    include_all_trials=True, lump_all=False, stratum=None,
+    stratum_s=None,
     dtype=torch.float32, device=torch.device('cpu')
 ):
+    if lump_all:
+        stratum = "all"
+    elif stratum is None:
+        stratum = "stim_choice"
+    if stratum not in ("stim_choice", "stim", "all"):
+        raise ValueError("stratum must be 'stim_choice', 'stim', or 'all'")
+    if stratum_s is None:
+        stratum_s = "stim"
+    if stratum_s not in ("stim_choice", "stim", "all"):
+        raise ValueError("stratum_s must be 'stim_choice', 'stim', or 'all'")
+
     def _tensor(value):
         return _ensure_tensor(value, dtype=dtype, device=device, requires_grad=False)
 
@@ -4154,7 +4217,7 @@ def _prior_distance_I_M_both_alignments_torch(
             'S': {'start': nan_vec.clone(), 'action': torch.empty(0, dtype=dtype, device=device)}
         }
 
-    def _segments_by_bucket(var_name, mode):
+    def _segments_by_bucket(var_name, mode, strat):
         var_array = var_tensors[var_name]
         buckets = {}
         for i in range(n):
@@ -4202,30 +4265,43 @@ def _prior_distance_I_M_both_alignments_torch(
                     continue
 
             sp_val = 1 if sub_prior[i][0] < 0 else -1
-            key = (sp_val,) if lump_all else (ts_val, ch_val, sp_val)
+            if strat == "all":
+                key = (sp_val,)
+            elif strat == "stim":
+                key = (ts_val, sp_val)
+            else:
+                key = (ts_val, ch_val, sp_val)
             buckets.setdefault(key, []).append(seg)
         return buckets
 
-    def _mean_for_sp(buckets, sp_sign):
-        if lump_all:
+    def _mean_for_sp(buckets, sp_sign, strat):
+        if strat == "all":
             key = (sp_sign,)
             if key not in buckets or not buckets[key]:
                 return None
             return torch.mean(torch.stack(buckets[key], dim=0), dim=0)
         bucket_means = []
-        for ts in (+1, -1):
-            for ch in (+1, -1):
-                key = (ts, ch, sp_sign)
+        if strat == "stim":
+            for ts in (+1, -1):
+                key = (ts, sp_sign)
                 if key in buckets and buckets[key]:
-                    bucket_means.append(torch.mean(torch.stack(buckets[key], dim=0), dim=0))
+                    bucket_means.append(
+                        torch.mean(torch.stack(buckets[key], dim=0), dim=0))
+        else:
+            for ts in (+1, -1):
+                for ch in (+1, -1):
+                    key = (ts, ch, sp_sign)
+                    if key in buckets and buckets[key]:
+                        bucket_means.append(
+                            torch.mean(torch.stack(buckets[key], dim=0), dim=0))
         if not bucket_means:
             return None
         return torch.mean(torch.stack(bucket_means, dim=0), dim=0)
 
-    def _balanced_prior_distance(var_name, mode):
-        buckets = _segments_by_bucket(var_name, mode)
-        A_pos = _mean_for_sp(buckets, +1)
-        A_neg = _mean_for_sp(buckets, -1)
+    def _balanced_prior_distance(var_name, mode, strat):
+        buckets = _segments_by_bucket(var_name, mode, strat)
+        A_pos = _mean_for_sp(buckets, +1, strat)
+        A_neg = _mean_for_sp(buckets, -1, strat)
         if A_pos is None or A_neg is None:
             return torch.full((0,), float('nan'), dtype=dtype, device=device)
         if metric == "l2":
@@ -4238,9 +4314,9 @@ def _prior_distance_I_M_both_alignments_torch(
 
     out = {'I': {}, 'M': {}, 'S': {}}
     for vn in ('I', 'M'):
-        out[vn]['start'] = _balanced_prior_distance(vn, "post_start")
-        out[vn]['action'] = _balanced_prior_distance(vn, "pre_action")
-    out['S']['start'] = _balanced_prior_distance('S', "post_start")
+        out[vn]['start'] = _balanced_prior_distance(vn, "post_start", stratum)
+        out[vn]['action'] = _balanced_prior_distance(vn, "pre_action", stratum)
+    out['S']['start'] = _balanced_prior_distance('S', "post_start", stratum_s)
     out['S']['action'] = torch.empty(0, dtype=dtype, device=device)
     return out
 
@@ -4456,6 +4532,7 @@ def loss_prior_effect(
 
     T, plot_window, resample_to_data = resolve_prior_distance_window(
         model_params, T=T, plot_window=plot_window)
+    stratum = "all" if lump_all else prior_stratum_of(model_params)
 
     eps = 1e-12  # for normalization stability
 
@@ -4550,7 +4627,9 @@ def loss_prior_effect(
     # model distances
     model_dists = prior_distance_I_M_both_alignments(
         results, steps_before_obs, T=T, metric=model_metric,
-        include_all_trials=include_all_trials, lump_all=lump_all
+        include_all_trials=include_all_trials, lump_all=lump_all,
+        stratum=stratum,
+        stratum_s="stim",  # 2-split S sidecar is stim-side only
     )
 
     # parse scaling
@@ -4607,17 +4686,25 @@ def loss_prior_effect(
         if include_stim and (not is_choice):
             stim_path = Path(stim_curve_path) if stim_curve_path else Path(
                 'data_act_block_duringstim_s_unsplit80.npy')
-            if stim_path.is_file():
-                stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
-                if isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None:
-                    r_stim = np.asarray(stim_payload['r_stim'], dtype=float)
-                    regs_stim = list(stim_payload.get('regs_stim', regs_stim))
+            if not stim_path.is_file():
+                raise FileNotFoundError(
+                    f"include_stim requires S sidecar {stim_path}"
+                )
+            stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
+            if not (isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None):
+                raise ValueError(f"{stim_path}: expected dict with r_stim")
+            r_stim = np.asarray(stim_payload['r_stim'], dtype=float)
+            regs_stim = list(stim_payload.get('regs_stim', regs_stim))
         
-        # plot_window is milliseconds. Prefer the data's bin count so 150 ms → 72 bins.
-        data_length = (
-            len(r_int) if r_int is not None and len(r_int) > 0
-            else int(round(plot_window / 2))
-        )
+        # Legacy (plot_window=80): 40 bins at 2 ms, matching tests 1–5.
+        # prior_window_ms=150: use the data's 72 bins so the full window is scored.
+        if resample_to_data:
+            data_length = (
+                len(r_int) if r_int is not None and len(r_int) > 0
+                else int(round(plot_window / 2))
+            )
+        else:
+            data_length = int(round(plot_window / 2))
         times_full = time_axis_for(timeframe, time_window=data_length, duration_ms=plot_window)
         # print(len(times_full))
 
@@ -5889,10 +5976,12 @@ def _loss_prior_effect_torch(
 
     T, plot_window, resample_to_data = resolve_prior_distance_window(
         model_params, T=T, plot_window=plot_window)
+    stratum = "all" if lump_all else prior_stratum_of(model_params)
 
     model_dists = _prior_distance_I_M_both_alignments_torch(
         results, steps_before_obs, T=T, metric=model_metric,
         include_all_trials=include_all_trials, lump_all=lump_all,
+        stratum=stratum, stratum_s="stim",
         dtype=dtype, device=device
     )
 
@@ -5940,10 +6029,14 @@ def _loss_prior_effect_torch(
             if include_stim:
                 stim_path = Path(stim_curve_path) if stim_curve_path else Path(
                     'data_act_block_duringstim_s_unsplit80.npy')
-                if stim_path.is_file():
-                    stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
-                    if isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None:
-                        r_stim_np = stim_payload['r_stim']
+                if not stim_path.is_file():
+                    raise FileNotFoundError(
+                        f"include_stim requires S sidecar {stim_path}"
+                    )
+                stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
+                if not (isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None):
+                    raise ValueError(f"{stim_path}: expected dict with r_stim")
+                r_stim_np = stim_payload['r_stim']
             r_stim = None if r_stim_np is None else torch.tensor(np.asarray(r_stim_np, dtype=float), dtype=dtype, device=device)
         else:
             r_stim = None
