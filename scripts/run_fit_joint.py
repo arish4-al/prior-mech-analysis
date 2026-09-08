@@ -211,6 +211,7 @@ def _parse_local_refine_idx(spec):
 def build_args(argv=None):
     ap = argparse.ArgumentParser(description="Joint fit: retinal + g_s/d_s + weights.")
     ap.add_argument("--mtype", type=str, default="sensory",
+                    choices=["regular", "sensory", "full"],
                     help="regular (freeze g_s/d_s) | sensory (freeze I/M) | "
                          "full (all prior gains free)")
     ap.add_argument("--freeze", type=str, default=None,
@@ -282,6 +283,11 @@ def build_args(argv=None):
                     help="I/M prior-distance window after stimOn and before "
                          "movement (ms). Default unset = legacy T=72 (144 ms) "
                          "/ plot_window=80. Modeling-details test 6: 150.")
+    ap.add_argument("--prior-stratum", type=str, default=None,
+                    choices=("stim_choice", "stim", "all"),
+                    help="I/M prior-distance trial stratum. Default unset = "
+                         "stim×choice (production). 'stim' = stim side only "
+                         "(revised test 6).")
     return ap.parse_args(argv)
 
 
@@ -408,7 +414,7 @@ def main(argv=None):
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
-                 "m_pre_weight", "prior_window_ms"):
+                 "m_pre_weight", "prior_window_ms", "prior_stratum"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -421,6 +427,7 @@ def main(argv=None):
     model_params["m_pre_weight"] = float(args.m_pre_weight)
     model_params["prior_window_ms"] = (
         None if args.prior_window_ms is None else float(args.prior_window_ms))
+    model_params["prior_stratum"] = args.prior_stratum
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -452,6 +459,7 @@ def main(argv=None):
           f"tied_thresholds={bool(args.tied_thresholds)} "
           f"m_pre_weight={float(args.m_pre_weight):g} "
           f"prior_window_ms={args.prior_window_ms} "
+          f"prior_stratum={args.prior_stratum} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
           f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
@@ -580,6 +588,7 @@ def main(argv=None):
         m_pre_weight=float(args.m_pre_weight),
         prior_window_ms=(
             None if args.prior_window_ms is None else float(args.prior_window_ms)),
+        prior_stratum=args.prior_stratum,
         loss_extra_kwargs={
             "include_stim": include_stim,
             "stim_curve_path": str(stim_curve_path) if stim_curve_path else None,
@@ -604,6 +613,7 @@ def main(argv=None):
         "m_pre_weight": float(args.m_pre_weight),
         "prior_window_ms": (
             None if args.prior_window_ms is None else float(args.prior_window_ms)),
+        "prior_stratum": args.prior_stratum,
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
         "resume_source": resume_source,

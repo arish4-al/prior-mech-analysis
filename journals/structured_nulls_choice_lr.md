@@ -728,7 +728,7 @@ python scripts/plot_goal3_c0_summary_table.py --combined-regtype-prior --earlyst
 python scripts/plot_earlystim_sensory_prior_distance.py
 ```
 
-Alyx `manifold/figs/earlystim80_sensory_prior/`: per-region `{reg}_act_block_duringstim_unsplit_p_mean_c_dist.svg`, `combined_sensory_…_dist_avg.svg`, `sensory_earlystim80_grid.png`.
+Alyx `manifold/figs/earlystim80_sensory_prior/`: per-region `{reg}_act_block_duringstim_unsplit_p_mean_c_dist.svg`, `combined_sensory_…_dist_avg.svg`, `sensory_earlystim80_grid.png`. Shuffle-mean-subtracted grid (`obs/shuffles − \overline{shuffle}(t)`): `sensory_earlystim80_grid_baseline_sub.png`. Cell-weighted mean of those residuals: `sensory_earlystim80_combined_baseline_sub.png`.
 
 **2026-09-07b — duringstim type + earlystim overall/offset/gain table.** Same unsplit-80 act-prior and SC `type_stim` as the overall table, without duringchoice or 150 ms prior columns.
 

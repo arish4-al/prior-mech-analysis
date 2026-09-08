@@ -193,6 +193,51 @@ def plot_combined(times, r_avg, d, out_path: Path, n_reg: int, n_cells: int):
     plt.close(fig)
 
 
+def _subtract_shuffle_mean(r: np.ndarray) -> np.ndarray:
+    """Each trace minus the per-bin mean of that region's shuffles."""
+    return r - np.mean(r[1:], axis=0, keepdims=True)
+
+
+def _annotate_p(ax, d: dict):
+    p_val = float(d.get("p_mean_c", d.get("p_mean", np.nan)))
+    ptype = "p_mean_c" if "p_mean_c" in d else "p_mean"
+    ax.text(
+        0.04, 0.96, f"{ptype}={p_val:.4f}",
+        transform=ax.transAxes,
+        color="red" if (np.isfinite(p_val) and p_val <= ALPHA) else "black",
+        fontsize=11, ha="left", va="top",
+    )
+    y_ann = 0.84
+    if "p_gain" in d:
+        pg = float(d["p_gain"])
+        ax.text(
+            0.04, y_ann, f"p_gain={pg:.4f}",
+            transform=ax.transAxes,
+            color="red" if pg <= ALPHA else "purple",
+            fontsize=9, ha="left", va="top",
+        )
+        y_ann -= 0.12
+    if "p_offset" in d:
+        po = float(d["p_offset"])
+        ax.text(
+            0.04, y_ann, f"p_offset={po:.4f}",
+            transform=ax.transAxes,
+            color="red" if po <= ALPHA else "#5f7ea3",
+            fontsize=9, ha="left", va="top",
+        )
+
+
+def _plot_residual_traces(ax, times, r_b: np.ndarray, n_shuf_show: int = 25):
+    n_show = min(n_shuf_show, r_b.shape[0] - 1)
+    for j in range(1, n_show + 1):
+        ax.plot(times, r_b[j], c="gray", alpha=0.2, linewidth=0.5)
+    ax.plot(times, r_b[0], c="black", linewidth=1.5)
+    ax.axhline(0, color="k", lw=0.5, alpha=0.35)
+    ax.axvline(0, color="k", lw=0.6, alpha=0.4)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
 def plot_grid(panels: list[tuple], times, out_path: Path):
     n = len(panels)
     ncols = 5
@@ -220,6 +265,58 @@ def plot_grid(panels: list[tuple], times, out_path: Path):
     plt.close(fig)
 
 
+def plot_grid_baseline_sub(panels: list[tuple], times, out_path: Path):
+    """Same 13-region grid; each trace minus that region's shuffle mean(t)."""
+    n = len(panels)
+    ncols = 5
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(3.2 * ncols, 2.6 * nrows), dpi=160,
+        sharex=True, sharey=True,
+    )
+    axes = np.atleast_2d(axes)
+    for i, (reg, r, d) in enumerate(panels):
+        ax = axes[i // ncols, i % ncols]
+        _plot_residual_traces(ax, times, _subtract_shuffle_mean(r))
+        _annotate_p(ax, d)
+        ax.set_title(reg, fontsize=12)
+        ax.set_xticks([0, 40, 80])
+        ax.set_xlabel("")
+        if i % ncols == 0:
+            ax.set_ylabel(r"$d_{\mathrm{euc}}-\overline{\mathrm{shuffle}}$", fontsize=10)
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+    fig.suptitle(
+        "Unsplit 80 ms act-prior, sensory FDR@0.01 "
+        r"(obs and shuffles minus region shuffle mean at each $t$)",
+        fontsize=13, y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_combined_baseline_sub(
+    times, r_avg_b, d, out_path: Path, n_reg: int, n_cells: int,
+):
+    """Cell-weighted mean of per-region (curve − shuffle mean(t))."""
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=250)
+    _plot_residual_traces(ax, times, r_avg_b, n_shuf_show=40)
+    _annotate_p(ax, d)
+    ax.set_xticks([0, 40, 80])
+    ax.set_xlabel("time from stimOn (ms)", fontsize=10)
+    ax.set_ylabel(r"$d_{\mathrm{euc}}-\overline{\mathrm{shuffle}}$", fontsize=10)
+    ax.set_title(
+        rf"sensory combined $d^{{\mathrm{{prior}},s}}$ "
+        rf"(shuffle-mean subtracted, then cell-weighted; n={n_reg}/{n_cells} cells)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--res", type=Path, default=_default_res())
@@ -227,6 +324,11 @@ def main():
     ap.add_argument("--out-dir", type=Path, default=_default_out_dir())
     ap.add_argument("--regtype-csv", type=Path, default=REGTYPE_CSV)
     ap.add_argument("--alpha", type=float, default=ALPHA)
+    ap.add_argument(
+        "--only-baseline-grid",
+        action="store_true",
+        help="Only write shuffle-mean-subtracted grid and cell-weighted avg",
+    )
     args = ap.parse_args()
 
     payload = build_curve(
@@ -259,10 +361,11 @@ def main():
         d = _p_on_slice(r)
         d["p_mean_c"] = float(fdr.get(reg, d["p_mean"]))
         n = int(nclus.get(reg, 0))
-        plot_one_region(
-            times, r, d, rf"{reg}  $d^{{\mathrm{{prior}},s}}$ (80 ms)",
-            out_dir / f"{reg}_{TIMEFRAME}_p_mean_c_dist.svg",
-        )
+        if not args.only_baseline_grid:
+            plot_one_region(
+                times, r, d, rf"{reg}  $d^{{\mathrm{{prior}},s}}$ (80 ms)",
+                out_dir / f"{reg}_{TIMEFRAME}_p_mean_c_dist.svg",
+            )
         print(f"  {reg}: p_c={d['p_mean_c']:.4g}  p={d['p_mean']:.4g}  "
               f"off={d['p_offset']:.4g}  gain={d['p_gain']:.4g}  nclus={n}")
         if n > 0:
@@ -273,17 +376,44 @@ def main():
 
     r_avg = weighted / n_cells
     d_avg = _p_on_slice(r_avg)
-    plot_combined(
-        times, r_avg, d_avg,
-        out_dir / f"combined_sensory_{TIMEFRAME}_p_mean_c_dist_avg.svg",
-        n_reg=len(used), n_cells=n_cells,
+    if not args.only_baseline_grid:
+        plot_combined(
+            times, r_avg, d_avg,
+            out_dir / f"combined_sensory_{TIMEFRAME}_p_mean_c_dist_avg.svg",
+            n_reg=len(used), n_cells=n_cells,
+        )
+        print(
+            f"combined: n_reg={len(used)} n_cells={n_cells}  "
+            f"p={d_avg['p_mean']:.4g}  off={d_avg['p_offset']:.4g}  "
+            f"gain={d_avg['p_gain']:.4g}"
+        )
+        plot_grid(grid, times, out_dir / "sensory_earlystim80_grid.png")
+    plot_grid_baseline_sub(
+        grid, times, out_dir / "sensory_earlystim80_grid_baseline_sub.png",
+    )
+    weighted_b = None
+    n_cells_b = 0
+    n_used_b = 0
+    for reg, r, _d in grid:
+        n = int(nclus.get(reg, 0))
+        if n <= 0:
+            continue
+        r_b = _subtract_shuffle_mean(r)
+        weighted_b = r_b * n if weighted_b is None else weighted_b + r_b * n
+        n_cells_b += n
+        n_used_b += 1
+    r_avg_b = weighted_b / n_cells_b
+    d_avg_b = dict(d_avg)
+    plot_combined_baseline_sub(
+        times, r_avg_b, d_avg_b,
+        out_dir / "sensory_earlystim80_combined_baseline_sub.png",
+        n_reg=n_used_b, n_cells=n_cells_b,
     )
     print(
-        f"combined: n_reg={len(used)} n_cells={n_cells}  "
-        f"p={d_avg['p_mean']:.4g}  off={d_avg['p_offset']:.4g}  "
-        f"gain={d_avg['p_gain']:.4g}"
+        f"combined residual: n_reg={n_used_b} n_cells={n_cells_b}  "
+        f"min={float(r_avg_b[0].min()):.4f} max={float(r_avg_b[0].max()):.4f}  "
+        f"max-min={float(r_avg_b[0].max()-r_avg_b[0].min()):.4f}"
     )
-    plot_grid(grid, times, out_dir / "sensory_earlystim80_grid.png")
     print(f"wrote {out_dir}")
 
 

@@ -9,18 +9,20 @@ ablate them and decide what to keep.
 fit *speed* ([simulation_fit_speedups.md](simulation_fit_speedups.md)).
 Fit *quality* after each ablation is in scope.
 
-**Status:** tests 1–5 run (2026-08-27 / 08-27c / 08-31). **Test 6 wired**
-(2026-09-07; not yet submitted). **Regular only**
-(P→I/M; `g_s`/`d_s` frozen). Defaults stay: ITI gate on, ITI penalty
-on, `W_pp` box `[0.496, 0.49999]`, two action thresholds, `m_pre_weight=1`,
-`prior_window_ms` unset (legacy T=72).
+**Status:** tests 1–6 run (2026-08-27 / 08-27c / 08-31 / 09-07).
+**Test 6 revised** (`im150stim`; 150 ms + stim-only stratum; not yet
+submitted). **Regular only** (P→I/M; `g_s`/`d_s` frozen). Defaults stay:
+ITI gate on, ITI penalty on, `W_pp` box `[0.496, 0.49999]`, two action
+thresholds, `m_pre_weight=1`, `prior_window_ms` unset (legacy T=72 /
+plot_window=80), `prior_stratum` unset (stim×choice).
 Test 1: keep the ITI gate. Test 2: `W_ii`/`W_mm` do **not** slow as
 hypothesized. Test 3: keep the 2.5 s `W_pp` floor (open-floor arms worse).
 Test 4: keep two thresholds (tied θ blows prior / `g_i`). Test 5: 3×
 pre-action M does **not** beat regular’s best pooled act-prior RT R²
 (mpre3 s303 **0.772** vs regular s101 **0.787**; both beat WEIGHTS_REL
-**0.730**). Test 6: I/M prior-distance at the full 150 ms after stimOn
-and before movement (`--prior-window-ms 150`).
+**0.730**). Test 6 (stim×choice, 150 ms): did **not** beat regular
+(im150→legacy median **1.225** vs baseline **1.051**). Revised arm
+drops the choice cell.
 
 **Code:** dynamics in [`model_functions.py`](../model_functions.py)
 (`run_model`, `prestim_offset_start`, `p_offset_always_on`,
@@ -30,7 +32,8 @@ and before movement (`--prior-window-ms 150`).
 [`fit_joint.py`](../fit_joint.py). Drivers:
 [`scripts/run_fit_joint.py`](../scripts/run_fit_joint.py)
 (`--p-offset-always-on`, `--no-iti-penalty`, `--w-pp-lo`/`--w-pp-hi`/
-`--set-w-pp`, `--tied-thresholds`, `--m-pre-weight`, `--prior-window-ms`);
+`--set-w-pp`, `--tied-thresholds`, `--m-pre-weight`, `--prior-window-ms`,
+`--prior-stratum`);
 [`scripts/submit_fit_stage_b_model_ablations.sh`](../scripts/submit_fit_stage_b_model_ablations.sh).
 
 ---
@@ -810,4 +813,165 @@ SEEDS=999 ABLATIONS=im150 OUT_TAG=stageB_ablate_im150_smoke \
 finite. Prior nSSE **0.785 → 0.821**; joint **1.839 → 1.875** (Δ **+0.036**
 is entirely the prior term). Flag rides `loss_joint_core` /
 `apply_model_ablation_flags`.
+
+### 2026-09-07b — Test 6 results (openalyx, 8/8)
+
+Local copies: openalyx `models/`
+`weights_run_fj_stageB_hold_s89_im150_regular_mask12-13_s{7,12,34,45,89,101,303,333}/`.
+All **8/8 `FIT_DONE`**, `fit_status=ok`, `prior_window_ms=150` in
+`run_fit_joint_report.json` and `weights_final_*.json`.
+
+**Eval:** same protocol as tests 1–5 — `bps=20`, stim seed **12345**,
+stim from baseline **s101**, nested `fit_targets/`. Driver:
+`scripts/_tmp_im150_eval.py`. Dump:
+`models/stageB_hold_s89_im150_eval.json`. Rank on **eval tot**
+(traj + prior + S). JSON `final_loss` is own-stim — not comparable.
+
+Score each arm **as fitted** and on the other window:
+
+| Column | Fit | What is reported |
+|--------|-----|------------------|
+| **im150 150** | `prior_window_ms=150` | eval tot as fitted (75 steps resampled onto 72 BWM bins) |
+| **im150 → leg** | `prior_window_ms=150` | same weights, production T=72 / 40-bin `plot_window=80` |
+| **base leg** | unset | production eval tot (tests 1–5 column) |
+| **base → 150** | unset | same weights, scored on the 150 ms objective |
+
+`loss_prior_effect` briefly used `len(r_int)` (72 bins) even when the
+flag was unset, which inflated baseline prior ~4–6× vs the 08-31
+table. Restored: unset → `data_length = round(plot_window/2)` = **40**;
+`prior_window_ms=150` still uses the data’s 72 bins. After the restore,
+baseline **s333 = 1.015** / median **1.051** match tests 1–5.
+
+#### Eval total loss
+
+| seed | im150 fit | im150 150 | im150 → leg | base fit | base leg | base → 150 | im150 `g_i` | base `g_i` |
+|-----:|----------:|----------:|------------:|---------:|---------:|-----------:|----------:|----------:|
+| 7 | 1.436 | 1.780 | 1.144 | 0.996 | 1.076 | 1.717 | 200 | 200 |
+| 12 | 1.195 | 1.414 | 1.284 | 0.960 | 1.026 | 1.458 | 161 | 188 |
+| 34 | 1.224 | 1.504 | **1.080** | 0.952 | 1.026 | 1.593 | 188 | 166 |
+| **45** | 2.035 | **1.313** | 1.253 | 1.524 | 1.114 | 1.450 | 200 | 178 |
+| 89 | 1.356 | 1.384 | 1.122 | 1.149 | 1.095 | **1.364** | 193 | **0.3** |
+| 101 | 1.393 | 1.429 | 1.280 | 1.131 | 1.017 | 1.461 | 160 | 196 |
+| 303 | 1.975 | 1.335 | 1.196 | 1.030 | 1.083 | 1.633 | 200 | 182 |
+| 333 | 1.044 | 1.517 | 1.375 | 0.962 | **1.015** | 1.914 | 194 | 143 |
+
+| arm | best eval tot | median | mean |
+|-----|----------:|-------:|-----:|
+| baseline (legacy) | **1.015** (s333) | **1.051** | 1.056 |
+| im150 → legacy | 1.080 (s34) | 1.225 | 1.217 |
+| im150 as fitted (150) | **1.313** (s45) | 1.422 | 1.460 |
+| baseline → 150 | 1.364 (s89†) | 1.527 | 1.574 |
+
+† baseline s89 has collapsed `g_i=0.3` — not a usable fit. Next-best
+baseline-on-150 is s45 **1.450**.
+
+`L_S` stays ~0.490–0.510 except im150 s45 **0.461** (CMA/polish can
+unfreeze retinal). Traj on im150 is in the same band as regular
+(~0.28–0.44). The extra loss is **prior**: as-fitted 150 nSSE
+0.49–1.01 vs baseline legacy 0.11–0.25.
+
+Best im150 **s45** as fitted: traj 0.302 + prior 0.550 + S 0.461 =
+**1.313**. Same weights on the production window: 1.253. Best
+transfer to production is s34 (**1.080** = 0.383 + 0.200 + 0.497) —
+still above baseline s333 **1.015**.
+
+#### Test 6 — full 150 ms I/M prior
+
+Hypothesis: scoring model I/M prior-distance on the same 150 ms
+post-stimOn / pre-movement window as the BWM targets (instead of the
+legacy T=72 / `plot_window=80` = 40 bins) should lower `L_w`.
+
+**Not on the production metric.** Median eval tot on the legacy
+window is **1.225** vs baseline **1.051**. Best single seed is also
+worse (1.080 vs 1.015). On the new 150 ms objective, im150 beats
+baseline-at-150 (median 1.422 vs 1.527; best 1.313 vs 1.364) — that
+is the loss they were trained on, and even there the prior term stays
+large (best prior nSSE **0.493**, GoF 0.88). `g_i` stays healthy
+(160–200); no s89-style collapse. `θ_d` 0.33–0.43 vs baseline
+0.37–0.47. `W_pp` still sits on the 2.5 s floor.
+
+Plots (as fitted, 150 ms axis) in each im150 run dir:
+`prior_effects.svg` / `.png`, `IM_pre.svg`, `IM_post.svg`, `P_fit.svg`,
+`S_fit.png`.
+
+**Why movement-aligned model curves start low (09-07b):** not a
+panel-swap / axis bug. Stim-aligned t=0 is stimOn for every trial
+(I/M still hold the last 100 ms prestim `P_offset`). Movement-aligned
+t=−150 ms is `RT−150` — the same clock only when RT=150 ms. On s45
+(bps=20, stim 12345) median RT is **170 ms** and **39%** of committed
+trials have RT < 150 ms; those snippets start in the ITI, but
+restricting to RT≥150 ms makes `action[0]` *lower* (I 0.016 → 0.005),
+so the dip is the long-RT majority, sampled well after stimOn, where
+model I prior-distance has faded. Data I also drops a little
+(duringstim 0.050 → duringchoice 0.038); the model overdoes it
+(0.051 → 0.016). Legacy scoring only kept the last **80 ms** before
+movement, where model I/M have risen again (`action[-1]` I 0.063,
+M 0.159) — that is why this hole was hidden in tests 1–5.
+
+#### Act-prior RT (same protocol as test 5)
+
+10 sessions × 20 blocks, stim seed 12345. Data: action-kernel α=0.2.
+Model: binarized trial-average P. Driver: `scripts/_tmp_im150_actprior_rt.py`.
+Plots: each run’s `psychometric_model_vs_data_actprior/`. Dump:
+`models/stageB_hold_s89_im150_actprior_rt.json`.
+
+| seed | im150 comb | im150 con | im150 inc | im150 perf |
+|-----:|-----------:|----------:|----------:|-----------:|
+| 7 | 0.597 | 0.733 | −1.79 | 0.798 |
+| 12 | 0.768 | 0.696 | −0.52 | 0.722 |
+| 34 | 0.686 | 0.887 | −3.84 | 0.611 |
+| 45 | 0.771 | 0.855 | −1.52 | 0.755 |
+| 89 | 0.820 | 0.824 | −0.07 | 0.848 |
+| **101** | **0.874** | **0.951** | −0.76 | 0.829 |
+| 303 | 0.771 | 0.354 | −2.83 | 0.028 |
+| 333 | 0.762 | 0.641 | −0.45 | 0.684 |
+
+Best pooled RT R² is im150 s101 **0.874** vs this-batch regular s101
+**0.787** vs mpre3 s303 **0.772** vs WEIGHTS_REL **0.730**. Incongruent
+is still negative (s101 **−0.76** vs regular s101 **−0.21** vs
+WEIGHTS_REL **+0.18**). s303’s choice R² collapsed (0.028).
+
+**Keep `prior_window_ms` unset** for the stim×choice 150 ms arm. The
+BWM I/M curves are 150 ms, but fitting to that full window does not
+beat regular on the loss used for tests 1–5. Leave
+`--prior-window-ms 150` as an opt-in.
+
+### 2026-09-07c — Test 6 revised: 150 ms + stim-only stratum
+
+The stim×choice im150 model I/M prior **drops after ~80 ms** because I
+becomes choice-locked and the loss conditions on choice. Dropping the
+choice cell (`stratum='stim'`) removes that drop (s45 I 0.065 → 0.158
+at 150 ms). Data targets stay the 4-split `act_block_duringstim` /
+`duringchoice` curves.
+
+**Change:** `model_params['prior_stratum']`: unset / `stim_choice`
+(production) vs `stim` (stim side only; equal-weight L/R means, then
+one L2) vs `all` (`lump_all`). Rides `loss_extra_kwargs` →
+`apply_model_ablation_flags`. CLI `--prior-stratum` / env
+`PRIOR_STRATUM`. `None` does **not** clear a previous `stim` (same
+footgun as `prior_window_ms`).
+
+**Sweep:** same 8 regular seeds, `stageB_hold_s89` protocol. New run
+dirs so the stim×choice im150 jobs are not overwritten:
+
+`weights_run_fj_stageB_hold_s89_im150stim_regular_mask12-13_s<seed>/`
+
+```bash
+ABLATIONS=im150stim bash scripts/submit_fit_stage_b_model_ablations.sh
+```
+
+`ABLATIONS=im150` is still the old stim×choice 150 ms arm.
+
+Score later on shared-stim eval tot **as fitted** (150 + stim) and
+with `prior_stratum` / `prior_window_ms` cleared (production
+stim×choice T=72 / 40-bin).
+
+Smoke:
+
+```bash
+SEEDS=999 ABLATIONS=im150stim OUT_TAG=stageB_ablate_im150stim_smoke \
+  DE1_MAXITER=2 DE2_MAXITER=3 POPSIZE=8 SOBOL_COUNT=4 \
+  PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 TIME=1:00:00 \
+  bash scripts/submit_fit_stage_b_model_ablations.sh
+```
 

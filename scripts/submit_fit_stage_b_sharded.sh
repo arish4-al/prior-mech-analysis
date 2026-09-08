@@ -30,6 +30,7 @@
 #   P_OFFSET_ALWAYS_ON=1 / NO_ITI_PENALTY=1 — modeling-detail ablations
 #   W_PP_LO / W_PP_HI / SET_W_PP / TIED_THRESHOLDS — tests 3–4
 #   PRIOR_WINDOW_MS=150 — test 6 (I/M prior at full 150 ms)
+#   PRIOR_STRATUM=stim — revised test 6 (stim-only prior-distance)
 #     (prefer scripts/submit_fit_stage_b_model_ablations.sh)
 
 set -euo pipefail
@@ -111,7 +112,7 @@ for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
           LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME \
           P_OFFSET_ALWAYS_ON NO_ITI_PENALTY \
           W_PP_LO W_PP_HI SET_W_PP TIED_THRESHOLDS M_PRE_WEIGHT \
-          PRIOR_WINDOW_MS; do
+          PRIOR_WINDOW_MS PRIOR_STRATUM INCLUDE_STIM_PRIOR; do
   if [[ -n "${!_k:-}" ]]; then
     export "$_k"
   fi

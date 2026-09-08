@@ -17,6 +17,7 @@
 #   ABLATIONS=wppsmall bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=onethr bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=im150 bash scripts/submit_fit_stage_b_model_ablations.sh
+#   ABLATIONS=im150stim bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 #   # Smoke:
 #   SEEDS=999 ABLATIONS=wppsmall OUT_TAG=stageB_ablate_wppsmall_smoke \
@@ -25,7 +26,7 @@
 #     bash scripts/submit_fit_stage_b_model_ablations.sh
 #
 # Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr /
-#      im150), plus all submit_fit_stage_b_sharded.sh knobs.
+#      im150 / im150stim), plus all submit_fit_stage_b_sharded.sh knobs.
 
 set -euo pipefail
 
@@ -59,7 +60,7 @@ W_PP_LARGE=0.499    # τ_Δ = 10 s
 W_PP_SMALL=0.45     # τ_Δ = 200 ms
 
 _reset_ablation_env() {
-  unset W_PP_LO W_PP_HI SET_W_PP PRIOR_WINDOW_MS
+  unset W_PP_LO W_PP_HI SET_W_PP PRIOR_WINDOW_MS PRIOR_STRATUM
   export P_OFFSET_ALWAYS_ON=0
   export NO_ITI_PENALTY=0
   export TIED_THRESHOLDS=0
@@ -109,14 +110,19 @@ for ABLATION in "${ABL_ARR[@]}"; do
       TAG="${OUT_TAG_ONETHR:-stageB_hold_s89_onethr}"
       ;;
     im150)
-      # Test 6: I/M prior-distance uses the full 150 ms after stimOn and
-      # before movement (legacy is T=72 = 144 ms / plot_window=80).
+      # Test 6 original: 150 ms window, stim×choice stratum (ran 2026-09-07).
       export PRIOR_WINDOW_MS=150
       TAG="${OUT_TAG_IM150:-stageB_hold_s89_im150}"
       ;;
+    im150stim)
+      # Test 6 revised: 150 ms window + stim-only prior-distance (no choice cell).
+      export PRIOR_WINDOW_MS=150
+      export PRIOR_STRATUM=stim
+      TAG="${OUT_TAG_IM150STIM:-stageB_hold_s89_im150stim}"
+      ;;
     *)
       echo "ERROR: unknown ABLATION='$ABLATION'" >&2
-      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150" >&2
+      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150 | im150stim" >&2
       exit 1
       ;;
   esac
@@ -126,7 +132,7 @@ for ABLATION in "${ABL_ARR[@]}"; do
   echo "    P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON  NO_ITI_PENALTY=$NO_ITI_PENALTY"
   echo "    SET_W_PP=${SET_W_PP:-} W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-}"
   echo "    TIED_THRESHOLDS=$TIED_THRESHOLDS"
-  echo "    PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-}"
+  echo "    PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
   bash scripts/submit_fit_stage_b_sharded.sh
   unset OUT_TAG
 done

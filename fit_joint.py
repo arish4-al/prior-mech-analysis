@@ -505,7 +505,7 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     stim_rng=None, stimuli_bundle=None, avg_data_R=None,
                     s_baseline=0.0, p_offset_always_on=None, iti_penalty=None,
                     tied_thresholds=None, m_pre_weight=None,
-                    prior_window_ms=None,
+                    prior_window_ms=None, prior_stratum=None,
                     include_stim=False, stim_curve_path=None):
     """
     Joint loss: one sim → L_w (I/P/M + prior) + L_S (S rms).
@@ -532,6 +532,7 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
             tied_thresholds=tied_thresholds,
             m_pre_weight=m_pre_weight,
             prior_window_ms=prior_window_ms,
+            prior_stratum=prior_stratum,
         )
 
         if avg_data_R is None:
@@ -682,7 +683,7 @@ def _tracked_loss_joint(theta_log, mean_data_results, prior_regions, behavior, d
 def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
                         p_offset_always_on=False, iti_penalty=True,
                         tied_thresholds=False, m_pre_weight=1.0,
-                        prior_window_ms=None, **kwargs):
+                        prior_window_ms=None, prior_stratum=None, **kwargs):
     """
     Joint DE→CMA→polish via fit_weights_two_stage_v2 hooks.
     Requires avg_data_R (S target curves from avg_mean_R.npy).
@@ -702,6 +703,7 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
     extra["m_pre_weight"] = float(m_pre_weight)
     extra["prior_window_ms"] = (
         None if prior_window_ms is None else float(prior_window_ms))
+    extra["prior_stratum"] = prior_stratum
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_joint,
