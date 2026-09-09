@@ -78,6 +78,8 @@ from fit_joint import (
     reconstruct_theta_joint_from_json,
     set_w_pp_native_bounds,
     overwrite_w_pp_in_theta,
+    set_w_mm_native_bounds,
+    overwrite_w_mm_in_theta,
     tie_thresholds_in_theta,
     _save_params_joint,
 )
@@ -273,6 +275,13 @@ def build_args(argv=None):
                     help="Native W_pp upper bound (default 0.49999; must be < 0.5).")
     ap.add_argument("--set-w-pp", type=float, default=None,
                     help="Overwrite W_pp in the warm-start vector (native). Test 3.")
+    ap.add_argument("--w-mm-lo", type=float, default=None,
+                    help="Native W_mm lower bound (default 0.10).")
+    ap.add_argument("--w-mm-hi", type=float, default=None,
+                    help="Native W_mm upper bound (default 0.40). "
+                         "Lower hi → faster M leak (tau_m stays 20 ms).")
+    ap.add_argument("--set-w-mm", type=float, default=None,
+                    help="Overwrite W_mm in the warm-start vector (native).")
     ap.add_argument("--tied-thresholds", action="store_true", default=False,
                     help="Tie theta_c = theta_d (one free param; freeze theta_d). "
                          "Modeling-details test 4.")
@@ -302,6 +311,10 @@ def main(argv=None):
         raise SystemExit("--w-pp-lo and --w-pp-hi must be set together")
     if args.w_pp_lo is not None:
         set_w_pp_native_bounds(args.w_pp_lo, args.w_pp_hi)
+    if (args.w_mm_lo is None) ^ (args.w_mm_hi is None):
+        raise SystemExit("--w-mm-lo and --w-mm-hi must be set together")
+    if args.w_mm_lo is not None:
+        set_w_mm_native_bounds(args.w_mm_lo, args.w_mm_hi)
     freeze_defaults = {
         "sensory": [6, 7, 8, 9],
         "regular": [12, 13],
@@ -406,11 +419,16 @@ def main(argv=None):
                 f"[test3] set W_pp={args.set_w_pp:g} "
                 f"(τ_Δ={tau_delta_ms(args.set_w_pp):.0f} ms)"
             )
+        if args.set_w_mm is not None:
+            resume_theta = overwrite_w_mm_in_theta(resume_theta, args.set_w_mm)
+            print(f"[mleak] set W_mm={args.set_w_mm:g}")
         if args.tied_thresholds:
             resume_theta, t0 = tie_thresholds_in_theta(resume_theta, how="mean")
             print(f"[test4] tied theta_c=theta_d={t0:.4f} (mean of resume)")
     elif args.set_w_pp is not None:
         print("[test3] --set-w-pp skipped (not an external warm start)")
+    elif args.set_w_mm is not None:
+        print("[mleak] --set-w-mm skipped (not an external warm start)")
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
@@ -462,6 +480,7 @@ def main(argv=None):
           f"prior_stratum={args.prior_stratum} "
           f"g_i_bounds={tuple(NATIVE_BOUNDS['g_i'])} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
+          f"W_mm_bounds={tuple(NATIVE_BOUNDS['W_mm'])} "
           f"(τ_Δ {tau_delta_ms(NATIVE_BOUNDS['W_pp'][0]):.0f}–"
           f"{tau_delta_ms(NATIVE_BOUNDS['W_pp'][1]):.0f} ms)")
 
@@ -618,6 +637,8 @@ def main(argv=None):
         "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
+        "w_mm_bounds": list(NATIVE_BOUNDS["W_mm"]),
+        "set_w_mm": (None if args.set_w_mm is None else float(args.set_w_mm)),
         "resume_source": resume_source,
         "val_seed": val_seed,
         "n_jobs": args.n_jobs,

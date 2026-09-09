@@ -78,6 +78,9 @@ NO_ITI_PENALTY="${NO_ITI_PENALTY:-0}"
 W_PP_LO="${W_PP_LO:-}"
 W_PP_HI="${W_PP_HI:-}"
 SET_W_PP="${SET_W_PP:-}"
+W_MM_LO="${W_MM_LO:-}"
+W_MM_HI="${W_MM_HI:-}"
+SET_W_MM="${SET_W_MM:-}"
 TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
 M_PRE_WEIGHT="${M_PRE_WEIGHT:-1}"
 PRIOR_WINDOW_MS="${PRIOR_WINDOW_MS:-}"
@@ -105,6 +108,7 @@ echo "RESUME_JSON=${RESUME_JSON:-none} FORCE=$FORCE L_THRESHOLD=$L_THRESHOLD"
 echo "BPS_STAGE1=$BPS_STAGE1 BPS_STAGE2=$BPS_STAGE2 STAGE1_HOLD_RETINAL=$STAGE1_HOLD_RETINAL"
 echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
+echo "W_MM_LO=${W_MM_LO:-} W_MM_HI=${W_MM_HI:-} SET_W_MM=${SET_W_MM:-}"
 echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
@@ -129,6 +133,9 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$W_PP_LO" ]] && ARGS+=(--w-pp-lo "$W_PP_LO")
 [[ -n "$W_PP_HI" ]] && ARGS+=(--w-pp-hi "$W_PP_HI")
 [[ -n "$SET_W_PP" ]] && ARGS+=(--set-w-pp "$SET_W_PP")
+[[ -n "$W_MM_LO" ]] && ARGS+=(--w-mm-lo "$W_MM_LO")
+[[ -n "$W_MM_HI" ]] && ARGS+=(--w-mm-hi "$W_MM_HI")
+[[ -n "$SET_W_MM" ]] && ARGS+=(--set-w-mm "$SET_W_MM")
 [[ "$TIED_THRESHOLDS" == "1" ]] && ARGS+=(--tied-thresholds)
 if [[ "$INCLUDE_STIM_PRIOR" == "1" ]]; then
   ARGS+=(--include-stim-prior)
