@@ -62,6 +62,7 @@ PARAM_NAMES = [
     "alpha_w", "beta_w", "alpha_d", "beta_d", "tau_a", "W_as", "W_ss",
 ]
 W_PP_IDX = 1
+W_MM_IDX = 2
 THETA_C_IDX = 10
 THETA_D_IDX = 11
 
@@ -94,6 +95,29 @@ def overwrite_w_pp_in_theta(theta, w_pp):
     if not (lo <= w <= hi):
         raise ValueError(f"W_pp={w} outside native bounds {(lo, hi)}")
     th[W_PP_IDX] = np.log(w)
+    return th
+
+
+def set_w_mm_native_bounds(lo, hi):
+    """Tighten / restore the W_mm box (M leak). Syncs fit_weights + NATIVE_BOUNDS.
+
+    Does not change tau_m. The optimizer box lives in
+    ``fit_weights._log_bounds_weights_v2``; writing only NATIVE_BOUNDS
+    would leave CMA/Powell free to restore W_mm up to 0.40.
+    """
+    pair = fw.set_w_mm_native_bounds(lo, hi)
+    NATIVE_BOUNDS["W_mm"] = pair
+    return pair
+
+
+def overwrite_w_mm_in_theta(theta, w_mm):
+    """Set native W_mm in a log-space vector (index 2)."""
+    th = np.asarray(theta, float).copy()
+    w = float(w_mm)
+    lo, hi = NATIVE_BOUNDS["W_mm"]
+    if not (lo <= w <= hi):
+        raise ValueError(f"W_mm={w} outside native bounds {(lo, hi)}")
+    th[W_MM_IDX] = np.log(w)
     return th
 
 

@@ -572,6 +572,10 @@ def pack_theta_log_weights_v2(init_params):
 # Test 3 can loosen the floor via set_w_pp_native_bounds; hi must stay < 0.5.
 W_PP_NATIVE_BOUNDS = (0.496, 0.49999)
 
+# Native W_mm box. Default (0.10, 0.40). mleak tightens hi so M leaks faster
+# (tau_m stays 20 ms; recurrent W sets the effective timescale).
+W_MM_NATIVE_BOUNDS = (1e-1, 0.40)
+
 
 def set_w_pp_native_bounds(lo, hi):
     """Override the W_pp native box used by ``_log_bounds_weights_v2``.
@@ -588,6 +592,22 @@ def set_w_pp_native_bounds(lo, hi):
     return W_PP_NATIVE_BOUNDS
 
 
+def set_w_mm_native_bounds(lo, hi):
+    """Override the W_mm native box used by ``_log_bounds_weights_v2``.
+
+    Require ``0 < lo < hi < 0.5`` (same difference-mode pole as W_pp).
+    Does not change ``tau_m``.
+    """
+    global W_MM_NATIVE_BOUNDS
+    lo, hi = float(lo), float(hi)
+    if not (0.0 < lo < hi < 0.5):
+        raise ValueError(
+            f"W_mm bounds must satisfy 0 < lo < hi < 0.5; got {(lo, hi)}"
+        )
+    W_MM_NATIVE_BOUNDS = (lo, hi)
+    return W_MM_NATIVE_BOUNDS
+
+
 def _log_bounds_weights_v2():
     # btau_i = (40.0,   200.0)
     # btau_p = (1000.0, 2000.0)
@@ -596,7 +616,7 @@ def _log_bounds_weights_v2():
     # individual weight bounds
     bW_ii = (2e-1, 0.49)
     bW_pp = W_PP_NATIVE_BOUNDS
-    bW_mm = (1e-1, 0.40)
+    bW_mm = W_MM_NATIVE_BOUNDS
     bW_is = (1e-4, 5)
     bW_pi = (1e-7, 1e-1)
     bW_mi = (1e-3, 10)

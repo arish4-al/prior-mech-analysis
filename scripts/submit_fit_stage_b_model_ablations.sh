@@ -28,8 +28,12 @@
 #     PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 TIME=1:00:00 \
 #     bash scripts/submit_fit_stage_b_model_ablations.sh
 #
+#   ABLATIONS="gm0 mleak" bash scripts/submit_fit_stage_b_model_ablations.sh
+#     → both freeze g_m/d_m (~0) + g_s/d_s; mleak also caps W_mm ≤ 0.15
+#
 # Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr /
-#      im150 / im150stim / stimonly), plus all submit_fit_stage_b_sharded.sh knobs.
+#      im150 / im150stim / stimonly / gm0 / mleak), plus all
+#      submit_fit_stage_b_sharded.sh knobs.
 
 set -euo pipefail
 
@@ -63,7 +67,7 @@ W_PP_LARGE=0.499    # τ_Δ = 10 s
 W_PP_SMALL=0.45     # τ_Δ = 200 ms
 
 _reset_ablation_env() {
-  unset W_PP_LO W_PP_HI SET_W_PP PRIOR_WINDOW_MS PRIOR_STRATUM
+  unset W_PP_LO W_PP_HI SET_W_PP W_MM_LO W_MM_HI SET_W_MM PRIOR_WINDOW_MS PRIOR_STRATUM
   export P_OFFSET_ALWAYS_ON=0
   export NO_ITI_PENALTY=0
   export TIED_THRESHOLDS=0
@@ -130,9 +134,23 @@ for ABLATION in "${ABL_ARR[@]}"; do
       export PRIOR_STRATUM=stim
       TAG="${OUT_TAG_STIMONLY:-stageB_hold_s89_stimonly}"
       ;;
+    gm0)
+      # Option 3 only: freeze g_m/d_m at ~0 (LOG_ZERO). W_mm stays
+      # [0.10, 0.40]. tau_* stay 20 ms. Pair with mleak to test the box.
+      export VARIANTS="regular:7|9|12|13"
+      TAG="${OUT_TAG_GM0:-stageB_hold_s89_gm0}"
+      ;;
+    mleak)
+      # Options 2+3: same g_m/d_m freeze, plus W_mm ≤ 0.15.
+      export VARIANTS="regular:7|9|12|13"
+      export W_MM_LO=0.10
+      export W_MM_HI=0.15
+      export SET_W_MM=0.15
+      TAG="${OUT_TAG_MLEAK:-stageB_hold_s89_mleak}"
+      ;;
     *)
       echo "ERROR: unknown ABLATION='$ABLATION'" >&2
-      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150 | im150stim | stimonly" >&2
+      echo "  use poffset | noiti | wpplarge | wppopen | wppsmall | onethr | im150 | im150stim | stimonly | gm0 | mleak" >&2
       exit 1
       ;;
   esac
@@ -141,6 +159,7 @@ for ABLATION in "${ABL_ARR[@]}"; do
   echo "=== ablation=$ABLATION  OUT_TAG=$OUT_TAG  SEEDS=$SEEDS ==="
   echo "    P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON  NO_ITI_PENALTY=$NO_ITI_PENALTY"
   echo "    SET_W_PP=${SET_W_PP:-} W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-}"
+  echo "    SET_W_MM=${SET_W_MM:-} W_MM_LO=${W_MM_LO:-} W_MM_HI=${W_MM_HI:-}"
   echo "    TIED_THRESHOLDS=$TIED_THRESHOLDS"
   echo "    PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
   bash scripts/submit_fit_stage_b_sharded.sh

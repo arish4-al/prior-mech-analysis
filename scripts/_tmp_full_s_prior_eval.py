@@ -54,7 +54,7 @@ NEW = BASE / "new"
 
 
 def resolve_run(prefix: str, seed: int) -> Path | None:
-    for root in (NEW, BASE):
+    for root in (BASE, NEW):
         d = root / f"{prefix}_s{seed}"
         if d.is_dir():
             return d

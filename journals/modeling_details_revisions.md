@@ -1259,4 +1259,7 @@ PARTITION=mit_preemptable ABLATIONS=im150 \
 Default `OUT_TAG` for `im150` is now `stageB_hold_s89_im150_meancell`.
 Do not `FORCE` the old `stageB_hold_s89_im150` dirs.
 
+**Continued** (09-09 score + remaining shape aims):
+[prior-curve dips and discordant RT](modeling_details_prior_rt_gaps.md).
+
 

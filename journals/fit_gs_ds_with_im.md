@@ -9,9 +9,9 @@ mean-activity curves.
 **Not in scope:** changing I/M traj targets, `avg_mean_R` / Stage A, Harris /
 Bayes priors, or the default regular/sensory freeze masks.
 
-**Status:** 1e-12-floor rerun scored 2026-09-08c. Best fair tot **full
-s34 = 1.057** (S **0.028** via `d_s≈26`, `g_s≈0`, `g_i=185`).
-`im150stim` not in the local cache (24/32).
+**Status:** 1e-12-floor campaign scored 2026-09-09. Best fair tot **full
+s34 = 1.057** (S **0.028** via `d_s≈26`, `g_s≈0`, `g_i=185`). All four
+arms **32/32** local.
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -271,15 +271,14 @@ PARTITION=mit_preemptable FORCE=1 \
 
 ---
 
-## 2026-09-08c — 1e-12 floor + I/M-window arms (24/32)
+## 2026-09-08c — 1e-12 floor + I/M-window arms (32/32)
 
 Local copies: openalyx `models/`
-`weights_run_fj_stageB_hold_s89_full_{full,im150,stimonly}_full_masknone_s{7,12,34,45,89,101,303,333}/`.
-**24/24 `FIT_DONE`**, `fit_status=ok`, `include_stim=true`. Flags match
+`weights_run_fj_stageB_hold_s89_full_{full,im150,im150stim,stimonly}_full_masknone_s{7,12,34,45,89,101,303,333}/`.
+**32/32 `FIT_DONE`**, `fit_status=ok`, `include_stim=true`. Flags match
 the wrapper: `full` both unset; `im150` `prior_window_ms=150`;
-`stimonly` `prior_stratum=stim`. **`im150stim` dirs are not in the
-local cache** (ORCD listing in the ssh session also showed only these
-three `full_*` arms plus the old regular `im150stim`).
+`im150stim` 150 + `prior_stratum=stim`; `stimonly` `prior_stratum=stim`.
+(`im150stim` landed first under `models/new/`, then in `models/`.)
 
 **Eval:** same protocol as the morning campaign — `bps=20`, stim seed
 **12345**, stim from regular **s101**, nested `fit_targets/` + unsplit-80
@@ -299,6 +298,7 @@ objectives; production-window rescores are in the dump.
 |-----|----------:|------------:|-------:|----------:|-----------:|
 | **full** | **1.057** (s34) | 1.697 | **0.027** (s45) | **4/8** | 1.022 (s7) |
 | im150 | 1.292 (s303) | 1.707 | 0.041 (s12) | 4/8 | 1.239 (s303) |
+| im150stim | 1.445 (s303) | 1.848 | **0.021** (s303) | 2/8 | 1.126 (s7) |
 | stimonly | 1.237 (s89) | 1.668 | 0.095 (s89) | 1/8 | 1.142 (s89) |
 | regular (S scored) | 1.642 (s303) | 1.726 | 0.559 | 0/8 | **1.015** (s333) |
 
@@ -380,6 +380,29 @@ Only **s89** clears S &lt; 0.1. **7/8** seeds collapse `g_i`. Scored
 back on production stim×choice, I/M blows up (s7 prod I/M **1.599**,
 fair 3.42) — the stim-stratum fit does not transfer.
 
+### im150stim (150 ms, stim I/M) — scored 2026-09-09
+
+| seed | rec | traj | I/M | S | L_S | fair | g_s | d_s | g_i |
+|-----:|----:|-----:|----:|--:|----:|-----:|----:|----:|----:|
+| 7 | 1.327 | 0.392 | 0.265 | 0.216 | 0.470 | 1.342 | **4.27** | 11.3 | **0** |
+| 12 | 1.661 | 0.362 | 0.529 | 0.680 | 0.497 | 2.068 | ~0 | 0.013 | 0.02 |
+| 34 | 2.904 | 0.536 | 0.378 | 0.460 | 0.497 | 1.871 | ~0 | ~0 | **0** |
+| 45 | 2.330 | 0.452 | 0.401 | 0.584 | 0.491 | 1.928 | 0.074 | 5.29 | **0** |
+| 89 | 1.585 | 0.401 | 0.369 | 0.557 | 0.497 | 1.824 | 0.007 | 0.002 | **0** |
+| 101 | 2.182 | 0.590 | 0.503 | **0.034** | 0.442 | 1.569 | 2.22 | 49.2 | **0** |
+| **303** | 1.501 | 0.595 | 0.378 | **0.021** | 0.452 | **1.445** | ~0 | 16.2 | 0.72 |
+| 333 | 2.723 | 0.637 | 0.312 | 0.707 | 0.497 | 2.152 | ~0 | 0.001 | **0** |
+
+Worst of the four full arms on fair tot (best **1.445**, median
+**1.848**). S-success only **s303** (d_s=16) and **s101** (g_s=2.22,
+d_s=49). **7/8** seeds collapse `g_i` (s303 keeps 0.72). Production
+rescore is bad (s303 prod fair **2.113**, I/M **1.045**) — same
+non-transfer as stimonly.
+
+Act-prior RT is mostly broken (s7/s12/s34/s89/s303/s333 RT comb
+**−4.6 to −10**). Exception: s101 perf **0.908** / RT **0.495** (g_i
+still 0). s45 is the next-least-bad (perf 0.816, RT −0.50) but failed S.
+
 ### Read
 
 1. **S coupling is an offset.** Once `g_s` can be ~0, the optimizer
@@ -393,21 +416,16 @@ fair 3.42) — the stim-stratum fit does not transfer.
    the next lever, not another `g_s` floor.
 4. **im150** can also fit S via `d_s` (4/8) but the 150 ms I/M term
    stays expensive (best 1.292 as fitted, 1.179 on production).
-5. **stimonly + free S** collapses `g_i`. Do not treat that arm as a
-   drop-in I/M model.
-6. Sync / check `full_im150stim` before claiming the 32-job set is
-   done. Submit if it never left the queue:
+5. **stimonly and im150stim + free S** collapse `g_i` (7/8 each) and
+   do not transfer to production stim×choice. im150stim has the lowest
+   single-seed S nSSE (0.021) and the worst median fair (1.848).
+6. Campaign is complete: **32/32** in openalyx `models/`.
 
-```bash
-PARTITION=mit_preemptable ARMS=im150stim FORCE=1 \
-  bash scripts/submit_fit_stage_b_full_s_prior.sh
-```
-
-### Plots (2026-09-08c, in each run dir)
+### Plots (2026-09-08c / 09-09, in each run dir)
 
 Shared stim `bps=20` seed 12345 from regular s101. Driver
-`scripts/_tmp_full_s_prior_plots.py`. Summary:
-`models/stageB_hold_s89_full_s_prior_1e12_plot_summary.json`.
+`scripts/_tmp_full_s_prior_plots.py` (`im150stim` finished 2026-09-09).
+Summary: `models/stageB_hold_s89_full_s_prior_1e12_plot_summary.json`.
 
 | file | what |
 |------|------|
