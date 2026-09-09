@@ -9,9 +9,9 @@ mean-activity curves.
 **Not in scope:** changing I/M traj targets, `avg_mean_R` / Stage A, Harris /
 Bayes priors, or the default regular/sensory freeze masks.
 
-**Status:** 8/8 full campaign `FIT_DONE` (2026-09-08). Best shared-stim
-fair tot **s101 = 1.076** (S nSSE **0.018**). Rerun queued with
-`g_*`/`d_*` floor **1e-12** + im150 / im150stim / stimonly arms.
+**Status:** 1e-12-floor rerun scored 2026-09-08c. Best fair tot **full
+s34 = 1.057** (S **0.028** via `d_s≈26`, `g_s≈0`, `g_i=185`).
+`im150stim` not in the local cache (24/32).
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -268,3 +268,152 @@ seeds. User pastes (agents do not run Slurm):
 PARTITION=mit_preemptable FORCE=1 \
   bash scripts/submit_fit_stage_b_full_s_prior.sh
 ```
+
+---
+
+## 2026-09-08c — 1e-12 floor + I/M-window arms (24/32)
+
+Local copies: openalyx `models/`
+`weights_run_fj_stageB_hold_s89_full_{full,im150,stimonly}_full_masknone_s{7,12,34,45,89,101,303,333}/`.
+**24/24 `FIT_DONE`**, `fit_status=ok`, `include_stim=true`. Flags match
+the wrapper: `full` both unset; `im150` `prior_window_ms=150`;
+`stimonly` `prior_stratum=stim`. **`im150stim` dirs are not in the
+local cache** (ORCD listing in the ssh session also showed only these
+three `full_*` arms plus the old regular `im150stim`).
+
+**Eval:** same protocol as the morning campaign — `bps=20`, stim seed
+**12345**, stim from regular **s101**, nested `fit_targets/` + unsplit-80
+S sidecar, `include_stim=True`, model S `stratum_s=stim`. Driver
+`scripts/_tmp_full_s_prior_eval.py`. Dump:
+`models/stageB_hold_s89_full_s_prior_1e12_eval.json`. Regular on the
+same seeds is re-scored so S nSSE is visible. JSON `final_loss` is
+own-stim — not comparable. Rank on **as-fitted** fair tot
+(traj + I/M + S + `L_S`). im150 / stimonly I/M terms are different
+objectives; production-window rescores are in the dump.
+
+`nfin=1` in every dir (FORCE replace; no leftover 0.1-floor finals).
+
+### As-fitted summary
+
+| arm | best fair | median fair | best S | S-success | best w/o S |
+|-----|----------:|------------:|-------:|----------:|-----------:|
+| **full** | **1.057** (s34) | 1.697 | **0.027** (s45) | **4/8** | 1.022 (s7) |
+| im150 | 1.292 (s303) | 1.707 | 0.041 (s12) | 4/8 | 1.239 (s303) |
+| stimonly | 1.237 (s89) | 1.668 | 0.095 (s89) | 1/8 | 1.142 (s89) |
+| regular (S scored) | 1.642 (s303) | 1.726 | 0.559 | 0/8 | **1.015** (s333) |
+
+S-success = nSSE &lt; 0.1. Regular S stays **0.56–0.75**.
+
+### full (legacy stim×choice)
+
+| seed | rec | traj | I/M | S | L_S | fair | w/o S | g_s | d_s | g_i |
+|-----:|----:|-----:|----:|--:|----:|-----:|------:|----:|----:|----:|
+| 7 | 1.702 | 0.296 | 0.229 | 0.704 | 0.497 | 1.726 | **1.022** | ~0 | ~0 | 182 |
+| 12 | 1.693 | 0.376 | 0.181 | 0.622 | 0.496 | 1.675 | 1.053 | ~0 | 0.027 | **0** |
+| **34** | 1.250 | 0.354 | 0.231 | **0.028** | 0.444 | **1.057** | 1.029 | ~0 | **25.7** | **185** |
+| 45 | 1.578 | 0.441 | 0.257 | **0.027** | 0.457 | 1.182 | 1.155 | ~0 | 45.7 | 83 |
+| 89 | 1.367 | 0.431 | 0.485 | **0.075** | 0.499 | 1.491 | 1.416 | ~0 | 82.4 | **0** |
+| 101 | 2.172 | 0.585 | 0.345 | **0.096** | 0.692 | 1.719 | 1.623 | 0.025 | 100 | **0** |
+| 303 | 2.103 | 0.560 | 0.256 | 0.576 | 0.497 | 1.889 | 1.313 | 0.050 | ~0 | 61 |
+| 333 | 1.987 | 0.389 | 0.662 | 0.569 | 0.496 | 2.117 | 1.547 | ~0 | ~0 | 153 |
+
+S-success: **s34, s45, s89, s101**. All four have `g_s` at/near the
+1e-12 floor; the working knob is **`d_s`**. Failed S (still ~0.57–0.70):
+s7, s12, s303, s333 — parked `g_s≈d_s≈0` like regular.
+
+Best **s34** keeps `g_i=185` (regular s34 166). Fair **1.057** beats the
+morning 0.1-floor best (s101 **1.076**, `g_s=37`, `g_i=0.15`). Production
+tot without S: s34 **1.029** vs regular s333 **1.015**. `L_S` 0.444 is
+slightly better than regular ~0.50.
+
+### vs morning 0.1-floor full (same seeds)
+
+| seed | old S | old g_s | old g_i | new S | new d_s | new g_i | fair |
+|-----:|------:|--------:|--------:|------:|--------:|--------:|-----:|
+| 7 | 0.676 | 1.87 | 184 | 0.704 | ~0 | 182 | 1.820 → 1.726 |
+| 12 | 0.241 | 27.7 | 190 | 0.622 | 0.03 | 0 | 1.274 → 1.675 |
+| **34** | 0.474 | 0.60 | 166 | **0.028** | 26 | **185** | 1.661 → **1.057** |
+| 45 | 0.045 | 0.32 | 37 | 0.027 | 46 | 83 | 1.272 → 1.182 |
+| 89 | 0.706 | 3.47 | 116 | 0.075 | 82 | 0 | 1.766 → 1.491 |
+| 101 | **0.018** | 37.3 | 0.15 | 0.096 | 100 | 0 | **1.076** → 1.719 |
+| 303 | 0.079 | 50.5 | 187 | 0.576 | ~0 | 61 | 1.377 → 1.889 |
+| 333 | 0.034 | 0.17 | 96 | 0.569 | ~0 | 153 | 1.191 → 2.117 |
+
+Best-of improved; **median fair got worse** (1.326 → 1.697). Hybrid x0
+can now sit at `g_s=1e-12`, so half the seeds stay in the “do nothing
+on S” basin. The seeds that find `d_s` no longer need a large `g_s`
+and do not have to collapse `g_i`. The morning large-`g_s` winners
+(s101 / s303 / s333) do not come back.
+
+### im150 (150 ms, stim×choice)
+
+| seed | rec | traj | I/M | S | L_S | fair | g_s | d_s | g_i |
+|-----:|----:|-----:|----:|--:|----:|-----:|----:|----:|----:|
+| 7 | 1.598 | 0.654 | 0.423 | **0.074** | 0.451 | 1.602 | ~0 | 13.5 | 1.3 |
+| 12 | 1.497 | 0.344 | 0.864 | **0.041** | 0.459 | 1.708 | ~0 | 36.1 | 182 |
+| 34 | 2.082 | 0.485 | 0.713 | **0.087** | 0.460 | 1.745 | ~0 | 24.4 | 167 |
+| 45 | 1.817 | 0.468 | 0.338 | 0.264 | 0.520 | 1.589 | **119** | 78.1 | 200 |
+| 89 | 1.844 | 0.506 | 0.562 | 0.229 | 0.461 | 1.759 | ~0 | 29.4 | 0 |
+| 101 | 3.004 | 0.614 | 0.525 | 0.757 | 0.499 | 2.396 | 62.8 | ~0 | 0 |
+| **303** | 1.302 | 0.465 | 0.321 | **0.053** | 0.453 | **1.292** | 0.001 | 42.3 | **200** |
+| 333 | 2.288 | 0.306 | 0.823 | 0.130 | 0.446 | 1.706 | ~0 | 34.8 | 0.93 |
+
+S-success: s7, s12, s34, s303 — again `d_s` not `g_s`. Large `g_s`
+(s45 / s101) does not win. s303 on the production window is **1.179**
+(still behind regular 1.015). Traj is worse than full (best traj here
+0.306 vs full s7 0.296, but the 150 ms I/M term is a different scale).
+
+### stimonly (legacy window, stim I/M)
+
+| seed | rec | traj | I/M | S | L_S | fair | g_s | d_s | g_i |
+|-----:|----:|-----:|----:|--:|----:|-----:|----:|----:|----:|
+| 7 | 1.892 | 0.560 | 0.272 | 0.760 | 0.497 | 2.089 | ~0 | ~0 | **0** |
+| 12 | 1.443 | 0.496 | 0.202 | 0.216 | 0.446 | 1.360 | ~0 | 89.8 | **0** |
+| 34 | 1.890 | 0.396 | 0.386 | 0.600 | 0.497 | 1.879 | ~0 | ~0 | 0.05 |
+| 45 | 1.962 | 0.663 | 0.235 | 0.441 | 0.444 | 1.783 | ~0 | 20.6 | **0** |
+| **89** | 1.255 | 0.463 | 0.231 | **0.095** | 0.449 | **1.237** | 0.003 | 92.3 | 4.3 |
+| 101 | 2.170 | 0.509 | 0.208 | 0.315 | 0.521 | 1.553 | 2.74 | 100 | 14 |
+| 303 | 1.403 | 0.688 | 0.142 | 0.223 | 0.431 | 1.484 | ~0 | 7.0 | **0** |
+| 333 | 1.673 | 0.505 | 0.482 | 0.645 | 0.479 | 2.111 | ~0 | 7.1 | **0** |
+
+Only **s89** clears S &lt; 0.1. **7/8** seeds collapse `g_i`. Scored
+back on production stim×choice, I/M blows up (s7 prod I/M **1.599**,
+fair 3.42) — the stim-stratum fit does not transfer.
+
+### Read
+
+1. **S coupling is an offset.** Once `g_s` can be ~0, the optimizer
+   prefers `d_s` and almost never keeps a large P→S gain. The morning
+   `g_s=37` solution was a basin created by clipping hybrid x0 to 0.1.
+2. **Best full is now usable with I.** s34 fair 1.057 / S 0.028 / `g_i`
+   intact / w/o S 1.029. That is the first full seed that is close to
+   production regular **and** fits the S curve.
+3. **Median got worse.** Four full seeds stay at `g_s≈d_s≈0` and look
+   like regular on S. More seeds or a `d_s`-aware warm start would be
+   the next lever, not another `g_s` floor.
+4. **im150** can also fit S via `d_s` (4/8) but the 150 ms I/M term
+   stays expensive (best 1.292 as fitted, 1.179 on production).
+5. **stimonly + free S** collapses `g_i`. Do not treat that arm as a
+   drop-in I/M model.
+6. Sync / check `full_im150stim` before claiming the 32-job set is
+   done. Submit if it never left the queue:
+
+```bash
+PARTITION=mit_preemptable ARMS=im150stim FORCE=1 \
+  bash scripts/submit_fit_stage_b_full_s_prior.sh
+```
+
+### Plots (2026-09-08c, in each run dir)
+
+Shared stim `bps=20` seed 12345 from regular s101. Driver
+`scripts/_tmp_full_s_prior_plots.py`. Summary:
+`models/stageB_hold_s89_full_s_prior_1e12_plot_summary.json`.
+
+| file | what |
+|------|------|
+| `IM_pre.svg` / `IM_post.svg` | I/M traj vs data |
+| `P_fit.svg` | P traj |
+| `S_fit.png` | retinal mean S vs contrast (`avg_mean_R` / `L_S`) |
+| `prior_effects.svg` / `.png` | I/M + unsplit-80 S prior-distance |
+| `psychometric_model_vs_data_actprior/` | perf + RT combined + RT split (act-prior data, subj-P model) |
+

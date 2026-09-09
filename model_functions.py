@@ -391,6 +391,21 @@ def prior_stratum_of(mp):
         f"prior_stratum={v!r}; use 'stim_choice', 'stim', or 'all'")
 
 
+def _prior_distance_cells(strat):
+    """Cells whose within-cell prior distances are equal-weighted (BWM splits)."""
+    if strat == "all":
+        return [()]
+    if strat == "stim":
+        return [(+1,), (-1,)]
+    return [(+1, +1), (+1, -1), (-1, +1), (-1, -1)]
+
+
+def _prior_bucket_key(cell, sp_sign, strat):
+    if strat == "all":
+        return (sp_sign,)
+    return cell + (sp_sign,)
+
+
 def prior_window_ms_of(mp):
     """I/M prior-distance window in ms, or None for the legacy T=72 path."""
     v = (mp or {}).get("prior_window_ms")
@@ -3994,13 +4009,17 @@ def prior_distance_I_M_both_alignments(
     If include_all_trials is False (default): use CORRECT trials only (ts == ch). [Original behavior]
     If include_all_trials is True: include ALL trials with a realized choice (ch ∈ {±1}).
     If lump_all is True: IGNORE trial side and choice side; pool all qualifying trials by prior side only.
-      Otherwise (default ``stratum='stim_choice'``), compute within each
-      (trial_side, choice_side) combo, average equally across combos
-      for each sp, then take the distance between the two balanced means.
-    ``stratum='stim'``: same but drop choice — within stim side only, then
-      equal-weight the two stim-side means. ``stratum='all'`` = ``lump_all``.
+      Otherwise (default ``stratum='stim_choice'``), compute the prior
+      distance **within** each (trial_side, choice_side) cell that has both
+      prior signs, then equal-weight those distances (``mean_c ‖Δ‖``).
+      That matches BWM ``load_group``: sum of 4-split Euclidean curves / 4.
+      Do **not** average the four cell means first and take one L2
+      (``‖mean_c Δ‖``); that cancels choice-aligned I/M after ~80 ms.
+    ``stratum='stim'``: same per-cell-then-mean over the two stim sides
+      (2-split ``act_block_duringstim_{l,r}``). ``stratum='all'`` = ``lump_all``
+      (one pool; the two aggregations coincide).
     ``stratum_s`` is the same choice for S only (default ``'stim'``) so model
-    S matches the 2-split ``act_block_duringstim_{l,r}`` data sidecar.
+    S matches the 2-split data sidecar.
 
     Rules (unchanged):
       • Require m_i >= steps_before_obs + _min_trial_steps(); shorter trials skipped.
@@ -4113,46 +4132,30 @@ def prior_distance_I_M_both_alignments(
 
         return buckets
 
-    def _mean_for_sp(buckets, sp_sign, strat):
-        """
-        Balanced mean for this prior sign, then one distance vs the other sign.
-        ``all``: pool every trial. ``stim``: equal-weight stim L/R.
-        ``stim_choice``: equal-weight the four (ts, ch) cells.
-        """
-        if strat == "all":
-            key = (sp_sign,)
-            if key not in buckets or len(buckets[key]) == 0:
-                return None
-            return np.mean(np.stack(buckets[key], axis=0), axis=0)
-        bucket_means = []
-        if strat == "stim":
-            for ts in (+1, -1):
-                key = (ts, sp_sign)
-                if key in buckets and len(buckets[key]) > 0:
-                    bucket_means.append(np.mean(np.stack(buckets[key], axis=0), axis=0))
-        else:
-            for ts in (+1, -1):
-                for ch in (+1, -1):
-                    key = (ts, ch, sp_sign)
-                    if key in buckets and len(buckets[key]) > 0:
-                        bucket_means.append(
-                            np.mean(np.stack(buckets[key], axis=0), axis=0))
-        if not bucket_means:
-            return None
-        return np.mean(np.stack(bucket_means, axis=0), axis=0)
+    def _pair_distance(A, B):
+        if metric == "l2":
+            return np.linalg.norm(A - B, axis=1)
+        if metric == "side":
+            return np.abs((A[:, 1] - A[:, 0]) - (B[:, 1] - B[:, 0]))
+        raise ValueError("metric must be 'l2' or 'side'")
 
     def _balanced_prior_distance(var_name, mode, strat):
+        """mean_c ‖μ₊−μ₋‖ over cells that have both prior signs (BWM combine)."""
         buckets = _segments_by_bucket(var_name, mode, strat)
-        A_pos = _mean_for_sp(buckets, +1, strat)
-        A_neg = _mean_for_sp(buckets, -1, strat)
-        if A_pos is None or A_neg is None:
+        dists = []
+        for cell in _prior_distance_cells(strat):
+            kp = _prior_bucket_key(cell, +1, strat)
+            kn = _prior_bucket_key(cell, -1, strat)
+            if kp not in buckets or kn not in buckets:
+                continue
+            if len(buckets[kp]) == 0 or len(buckets[kn]) == 0:
+                continue
+            A = np.mean(np.stack(buckets[kp], axis=0), axis=0)
+            B = np.mean(np.stack(buckets[kn], axis=0), axis=0)
+            dists.append(_pair_distance(A, B))
+        if not dists:
             return np.array([])
-        if metric == "l2":
-            return np.linalg.norm(A_pos - A_neg, axis=1)
-        elif metric == "side":
-            return np.abs((A_pos[:, 1] - A_pos[:, 0]) - (A_neg[:, 1] - A_neg[:, 0]))
-        else:
-            raise ValueError("metric must be 'l2' or 'side'")
+        return np.mean(np.stack(dists, axis=0), axis=0)
 
     out = {'I': {}, 'M': {}, 'S': {}}
     # I, M: both alignments (``stratum``; default stim×choice)
@@ -4274,43 +4277,29 @@ def _prior_distance_I_M_both_alignments_torch(
             buckets.setdefault(key, []).append(seg)
         return buckets
 
-    def _mean_for_sp(buckets, sp_sign, strat):
-        if strat == "all":
-            key = (sp_sign,)
-            if key not in buckets or not buckets[key]:
-                return None
-            return torch.mean(torch.stack(buckets[key], dim=0), dim=0)
-        bucket_means = []
-        if strat == "stim":
-            for ts in (+1, -1):
-                key = (ts, sp_sign)
-                if key in buckets and buckets[key]:
-                    bucket_means.append(
-                        torch.mean(torch.stack(buckets[key], dim=0), dim=0))
-        else:
-            for ts in (+1, -1):
-                for ch in (+1, -1):
-                    key = (ts, ch, sp_sign)
-                    if key in buckets and buckets[key]:
-                        bucket_means.append(
-                            torch.mean(torch.stack(buckets[key], dim=0), dim=0))
-        if not bucket_means:
-            return None
-        return torch.mean(torch.stack(bucket_means, dim=0), dim=0)
+    def _pair_distance(A, B):
+        if metric == "l2":
+            return torch.linalg.norm(A - B, dim=1)
+        if metric == "side":
+            return torch.abs((A[:, 1] - A[:, 0]) - (B[:, 1] - B[:, 0]))
+        raise ValueError("metric must be 'l2' or 'side'")
 
     def _balanced_prior_distance(var_name, mode, strat):
         buckets = _segments_by_bucket(var_name, mode, strat)
-        A_pos = _mean_for_sp(buckets, +1, strat)
-        A_neg = _mean_for_sp(buckets, -1, strat)
-        if A_pos is None or A_neg is None:
+        dists = []
+        for cell in _prior_distance_cells(strat):
+            kp = _prior_bucket_key(cell, +1, strat)
+            kn = _prior_bucket_key(cell, -1, strat)
+            if kp not in buckets or kn not in buckets:
+                continue
+            if not buckets[kp] or not buckets[kn]:
+                continue
+            A = torch.mean(torch.stack(buckets[kp], dim=0), dim=0)
+            B = torch.mean(torch.stack(buckets[kn], dim=0), dim=0)
+            dists.append(_pair_distance(A, B))
+        if not dists:
             return torch.full((0,), float('nan'), dtype=dtype, device=device)
-        if metric == "l2":
-            return torch.linalg.norm(A_pos - A_neg, dim=1)
-        elif metric == "side":
-            diff = torch.abs((A_pos[:, 1] - A_pos[:, 0]) - (A_neg[:, 1] - A_neg[:, 0]))
-            return diff
-        else:
-            raise ValueError("metric must be 'l2' or 'side'")
+        return torch.mean(torch.stack(dists, dim=0), dim=0)
 
     out = {'I': {}, 'M': {}, 'S': {}}
     for vn in ('I', 'M'):
@@ -4323,30 +4312,21 @@ def _prior_distance_I_M_both_alignments_torch(
 
 def prior_distance_I_M_by_choice_and_prior(results, steps_before_obs, T=75, metric="side", min_valid_trials=10):
     """
-    Prior-distance comparing subjective prior groups (sp=+1 vs sp=-1) for each CHOICE side,
-    under both alignments (trial start, action start), for variables I and M.
+    Prior-distance (sp=+1 vs sp=-1) within each (stim, choice) cell, then
+    ``mean_c ‖Δ‖``. Same 4-split combine as BWM
+    ``act_block_duringstim_{r,l}_choice_{r,l}_{f1,f2}`` / ``load_group``.
 
-    Selection: trials are included solely by (choice side, subjective prior), ignoring trial side and correctness.
+    Not used by Stage B ``loss_prior_effect`` (that calls
+    ``prior_distance_I_M_both_alignments``). Kept for diagnostics; fill-from-next
+    ITI in ``simulate_recovery`` was copied from here.
 
-    Rules:
-      • Hard trial-length requirement: m_i >= steps_before_obs + _min_trial_steps() for ALL variables (skip otherwise).
-      • If >50% of trials fail this rule, return all-NaNs for every variable/bucket.
-      • For post-start windows: if length < T, fill the remainder from the NEXT trial's pre-start [0:steps_before_obs).
-        If still < T, skip that trial.
-      • If any (choice, sp) bucket has < min_valid_trials valid trials, its mean is set to NaNs.
-
-    Returns:
-      {
-        'I': {'start':  (Tmin,), 'action': (Tmin,)},
-        'M': {'start':  (Tmin,), 'action': (Tmin,)}
-      }
+    Selection: all realized choices (ch ∈ {±1}). A cell is dropped if either
+    prior bucket has fewer than ``min_valid_trials`` aligned snippets.
 
     metric ∈ {'side','l2'}:
-      - 'side': within each choice side, form channel diff as
-                Right choice:  ch1 - ch0
-                Left  choice:  ch0 - ch1
-                then take |Δprior| between sp=+1 and sp=-1, and average over the two choice sides.
-      - 'l2'  : Euclidean over the two channels, then |Δprior| between sp=+1 and sp=-1, averaged over choice sides.
+      - 'l2'  : Euclidean over the two channels (matches the BWM ``regde``).
+      - 'side': choice-signed channel diff (right: ch1−ch0; left: ch0−ch1),
+                then |Δprior|, then mean over cells.
     """
 
     choices       = results['choices']         # list/array of ±1
@@ -4369,9 +4349,9 @@ def prior_distance_I_M_by_choice_and_prior(results, steps_before_obs, T=75, metr
     def _sp_sign(x):  # analog prior → ±1
         return 1 if x < 0 else -1
 
-    def _avg_var_align_by_choice_and_sp(var_name, ch_sign, sp_sign, mode):
+    def _avg_var_align_by_choice_and_sp(var_name, ch_sign, sp_sign, mode, ts_sign=None):
         """
-        Average (2, T_eff) segment for var_name given choice side and subjective prior,
+        Average (2, T_eff) segment for var_name given (optional stim, choice, prior),
         applying the hard-length rule and (for post_start) fill-from-next.
         Returns (arr, count_valid), where arr.shape == (2, T_eff) or empty (2,0).
         """
@@ -4380,12 +4360,14 @@ def prior_distance_I_M_by_choice_and_prior(results, steps_before_obs, T=75, metr
         if var_array.ndim != 2 or var_array.shape[1] != 2:
             raise ValueError(f"Expected var entries to be 2D vectors; got shape {var_array.shape}")
 
-        # Select by (choice == ch_sign) AND (sp == sp_sign). Ignore trial side/correctness.
         sel = []
         for i in range(n):
             sp0 = _sp_sign(sub_prior[i][0])
-            if (choices[i] == ch_sign) and (sp0 == sp_sign):
-                sel.append(i)
+            if choices[i] != ch_sign or sp0 != sp_sign:
+                continue
+            if ts_sign is not None and int(np.sign(trial_sides[i][0])) != ts_sign:
+                continue
+            sel.append(i)
 
         segs, T_eff, n_valid = [], None, 0
         for i in sel:
@@ -4438,72 +4420,41 @@ def prior_distance_I_M_by_choice_and_prior(results, steps_before_obs, T=75, metr
         mean_T2 = np.mean(np.stack(segs, axis=0), axis=0)  # (T_eff, 2)
         return mean_T2.T, n_valid                           # (2, T_eff), count
 
+    def _cell_prior_distance(var_name, mode):
+        """mean_c ‖μ₊−μ₋‖ over (stim, choice) cells with both priors."""
+        dists = []
+        for ts in (+1, -1):
+            for ch in (+1, -1):
+                A, nA = _avg_var_align_by_choice_and_sp(
+                    var_name, ch, +1, mode, ts_sign=ts)
+                B, nB = _avg_var_align_by_choice_and_sp(
+                    var_name, ch, -1, mode, ts_sign=ts)
+                if nA < min_valid_trials or nB < min_valid_trials:
+                    continue
+                if A.size == 0 or B.size == 0:
+                    continue
+                Tm = min(A.shape[1], B.shape[1])
+                if metric == "l2":
+                    dists.append(np.linalg.norm(A[:, :Tm] - B[:, :Tm], axis=0))
+                elif metric == "side":
+                    if ch > 0:
+                        dA = A[1, :Tm] - A[0, :Tm]
+                        dB = B[1, :Tm] - B[0, :Tm]
+                    else:
+                        dA = A[0, :Tm] - A[1, :Tm]
+                        dB = B[0, :Tm] - B[1, :Tm]
+                    dists.append(np.abs(dA - dB))
+                else:
+                    raise ValueError("metric must be 'l2' or 'side'")
+        if not dists:
+            return np.array([])
+        Tm = min(d.shape[0] for d in dists)
+        return np.mean(np.stack([d[:Tm] for d in dists], axis=0), axis=0)
+
     out = {'I': {}, 'M': {}}
     for vn in ('I', 'M'):
-        # Buckets: by CHOICE side (+1 Right, -1 Left) and PRIOR sign (+1, -1)
-        R_start_sp1, cnt_Rs1  = _avg_var_align_by_choice_and_sp(vn, +1, +1, "post_start")
-        R_start_spm, cnt_Rsm  = _avg_var_align_by_choice_and_sp(vn, +1, -1, "post_start")
-        L_start_sp1, cnt_Ls1  = _avg_var_align_by_choice_and_sp(vn, -1, +1, "post_start")
-        L_start_spm, cnt_Lsm  = _avg_var_align_by_choice_and_sp(vn, -1, -1, "post_start")
-
-        R_action_sp1, cnt_Ra1 = _avg_var_align_by_choice_and_sp(vn, +1, +1, "pre_action")
-        R_action_spm, cnt_Ram = _avg_var_align_by_choice_and_sp(vn, +1, -1, "pre_action")
-        L_action_sp1, cnt_La1 = _avg_var_align_by_choice_and_sp(vn, -1, +1, "pre_action")
-        L_action_spm, cnt_Lam = _avg_var_align_by_choice_and_sp(vn, -1, -1, "pre_action")
-
-        # Apply min_valid_trials gate per bucket (mirror mean_by_condition behavior)
-        def _gate(arr, cnt):
-            if cnt < min_valid_trials and arr.size != 0:
-                return np.full((2, arr.shape[1]), np.nan)
-            return arr
-
-        R_start_sp1  = _gate(R_start_sp1,  cnt_Rs1)
-        R_start_spm  = _gate(R_start_spm,  cnt_Rsm)
-        L_start_sp1  = _gate(L_start_sp1,  cnt_Ls1)
-        L_start_spm  = _gate(L_start_spm,  cnt_Lsm)
-
-        R_action_sp1 = _gate(R_action_sp1, cnt_Ra1)
-        R_action_spm = _gate(R_action_spm, cnt_Ram)
-        L_action_sp1 = _gate(L_action_sp1, cnt_La1)
-        L_action_spm = _gate(L_action_spm, cnt_Lam)
-
-        # Compute distances for 'start'
-        arrs_s = [R_start_sp1, R_start_spm, L_start_sp1, L_start_spm]
-        if any(a.size == 0 for a in arrs_s):
-            dist_start = np.array([])
-        else:
-            Ts = min(a.shape[1] for a in arrs_s)
-            if metric == "l2":
-                dR = np.linalg.norm(R_start_sp1[:, :Ts] - R_start_spm[:, :Ts], axis=0)
-                dL = np.linalg.norm(L_start_sp1[:, :Ts] - L_start_spm[:, :Ts], axis=0)
-            elif metric == "side":
-                # Choice-specific channel diff convention
-                r1, r2 = R_start_sp1[1,:Ts]-R_start_sp1[0,:Ts], R_start_spm[1,:Ts]-R_start_spm[0,:Ts]
-                l1, l2 = L_start_sp1[0,:Ts]-L_start_sp1[1,:Ts], L_start_spm[0,:Ts]-L_start_spm[1,:Ts]
-                dR, dL = np.abs(r1 - r2), np.abs(l1 - l2)
-            else:
-                raise ValueError("metric must be 'l2' or 'side'")
-            dist_start = 0.5 * (dR + dL)
-
-        # Compute distances for 'action'
-        arrs_a = [R_action_sp1, R_action_spm, L_action_sp1, L_action_spm]
-        if any(a.size == 0 for a in arrs_a):
-            dist_action = np.array([])
-        else:
-            Ta = min(a.shape[1] for a in arrs_a)
-            if metric == "l2":
-                dR = np.linalg.norm(R_action_sp1[:, :Ta] - R_action_spm[:, :Ta], axis=0)
-                dL = np.linalg.norm(L_action_sp1[:, :Ta] - L_action_spm[:, :Ta], axis=0)
-            elif metric == "side":
-                r1, r2 = R_action_sp1[1,:Ta]-R_action_sp1[0,:Ta], R_action_spm[1,:Ta]-R_action_spm[0,:Ta]
-                l1, l2 = L_action_sp1[0,:Ta]-L_action_sp1[1,:Ta], L_action_spm[0,:Ta]-L_action_spm[1,:Ta]
-                dR, dL = np.abs(r1 - r2), np.abs(l1 - l2)
-            else:
-                raise ValueError("metric must be 'l2' or 'side'")
-            dist_action = 0.5 * (dR + dL)
-
-        out[vn]['start']  = dist_start
-        out[vn]['action'] = dist_action
+        out[vn]['start'] = _cell_prior_distance(vn, "post_start")
+        out[vn]['action'] = _cell_prior_distance(vn, "pre_action")
 
     return out
 
@@ -7113,10 +7064,14 @@ def plot_choice_effect(
 
 def choice_distance_I_M_both_alignments(results, steps_before_obs, T=75, metric="l2"):
     """
-    Choice-distance (ch=+1 vs ch=-1) with BOTH alignments.
-    IMPORTANT: balance across (ts, sp) buckets by averaging bucket MEANS first
-    (equal weight across available buckets), then compute distance between the two
-    balanced means. This matches the magnitude in plot_dist_I_M_P.
+    Choice-distance (ch=+1 vs ch=-1) with both alignments.
+
+    Within each (stim, prior) cell compute ‖μ_{ch=+1}−μ_{ch=−1}‖, then
+    equal-weight those distances (``mean_c ‖Δ‖``). Matches BWM
+    ``load_group`` on the 4-split ``choice_duringstim_act`` /
+    ``choice_duringchoice_act`` combine (choice L–R inside stim×block).
+
+    Used only by ``plot_choice_effect`` (no SSE / not in Stage B ``L_w``).
     """
     choices       = results['choices']
     trial_sides   = results['trial_sides']
@@ -7194,36 +7149,31 @@ def choice_distance_I_M_both_alignments(results, steps_before_obs, T=75, metric=
 
         return buckets
 
-    def _balanced_mean(buckets, ch_sign):
-        """
-        Build balanced mean (T,2) for a given ch_sign by:
-          1) For each available (ts,sp), average trials in that bucket -> (T,2)
-          2) Average these bucket-means equally across buckets present
-        Returns None if no buckets for this ch_sign.
-        """
-        bucket_means = []
-        for ts in (+1, -1):
-            for sp in (+1, -1):
-                key = (ts, sp, ch_sign)
-                if key in buckets and len(buckets[key]) > 0:
-                    B = np.mean(np.stack(buckets[key], axis=0), axis=0)  # (T,2)
-                    bucket_means.append(B)
-        if not bucket_means:
-            return None
-        return np.mean(np.stack(bucket_means, axis=0), axis=0)  # (T,2)
+    def _pair_distance(A, B):
+        if metric == "l2":
+            return np.linalg.norm(A - B, axis=1)
+        if metric == "side":
+            return np.abs((A[:, 1] - A[:, 0]) - (B[:, 1] - B[:, 0]))
+        raise ValueError("metric must be 'l2' or 'side'")
 
     def _balanced_choice_distance(var_name, mode):
+        """mean_c ‖μ_ch+ − μ_ch−‖ over (stim, prior) cells with both choices."""
         buckets = _segments_by_bucket(var_name, mode)
-        A_pos = _balanced_mean(buckets, +1)
-        A_neg = _balanced_mean(buckets, -1)
-        if A_pos is None or A_neg is None:
+        dists = []
+        for ts in (+1, -1):
+            for sp in (+1, -1):
+                kp = (ts, sp, +1)
+                kn = (ts, sp, -1)
+                if kp not in buckets or kn not in buckets:
+                    continue
+                if len(buckets[kp]) == 0 or len(buckets[kn]) == 0:
+                    continue
+                A = np.mean(np.stack(buckets[kp], axis=0), axis=0)
+                B = np.mean(np.stack(buckets[kn], axis=0), axis=0)
+                dists.append(_pair_distance(A, B))
+        if not dists:
             return np.array([])
-        if metric == "l2":
-            return np.linalg.norm(A_pos - A_neg, axis=1)  # (T,)
-        elif metric == "side":
-            return np.abs((A_pos[:,1]-A_pos[:,0]) - (A_neg[:,1]-A_neg[:,0]))
-        else:
-            raise ValueError("metric must be 'l2' or 'side'")
+        return np.mean(np.stack(dists, axis=0), axis=0)
 
     out = {'I': {}, 'M': {}, 'S': {}}
     for vn in ('I', 'M'):

@@ -13,17 +13,14 @@ Fit *quality* after each ablation is in scope.
 **Regular only** (P→I/M; `g_s`/`d_s` frozen). Defaults stay:
 ITI gate on, ITI penalty on, `W_pp` box `[0.496, 0.49999]`, two action
 thresholds, `m_pre_weight=1`, `prior_window_ms` unset (legacy T=72 /
-plot_window=80), `prior_stratum` unset (stim×choice). `g_i` floor now
-matches `g_m` (`1e-12`; was `0.1`) as of 2026-09-08d.
-Test 1: keep the ITI gate. Test 2: `W_ii`/`W_mm` do **not** slow as
-hypothesized. Test 3: keep the 2.5 s `W_pp` floor (open-floor arms worse).
-Test 4: keep two thresholds (tied θ blows prior / `g_i`). Test 5: 3×
-pre-action M does **not** beat regular’s best pooled act-prior RT R²
-(mpre3 s303 **0.772** vs regular s101 **0.787**; both beat WEIGHTS_REL
-**0.730**). Test 6 (stim×choice, 150 ms): did **not** beat regular
-(im150→legacy median **1.225** vs baseline **1.051**). Test 6 revised
-(`im150stim`; 150 ms + stim-only): worse still (→production median
-**2.257**; `g_i` collapsed; act-prior RT R² negative).
+plot_window=80), `prior_stratum` unset (stim×choice). **Restore `g_i`
+floor `0.1`** — opening it to `1e-12` (09-08d/e) made stim-only collapse
+worse and did not beat regular. Test 1: keep the ITI gate. Test 2:
+`W_ii`/`W_mm` do **not** slow as hypothesized. Test 3: keep the 2.5 s
+`W_pp` floor. Test 4: keep two thresholds. Test 5: 3× pre-action M does
+**not** beat regular’s best pooled act-prior RT R² (mpre3 s303 **0.772**
+vs regular s101 **0.787**). Test 6 / `im150stim` / `stimonly`: none beat
+regular on production eval tot (baseline median **1.051**).
 
 **Code:** dynamics in [`model_functions.py`](../model_functions.py)
 (`run_model`, `prestim_offset_start`, `p_offset_always_on`,
@@ -1122,4 +1119,144 @@ Frozen `g_i` at `LOG_ZERO` stays `9.4e-14` (not pulled to the floor).
 prior nSSE: regular **0.083** (T=72, stim×choice) → stimonly **5.998**
 (T=72, stim) → im150stim **4.360** (T=75, stim). Joint totals 0.734 /
 6.650 / 5.011, all finite.
+
+### 2026-09-08e — `g_i` floor `1e-12` results (`im150stim` + `stimonly`)
+
+Local copies: openalyx `models/`
+`weights_run_fj_stageB_hold_s89_{im150stim,stimonly}_regular_mask12-13_s{7,12,34,45,89,101,303,333}/`.
+All **16/16 `FIT_DONE`**, `fit_status=ok`, `g_i_bounds=[1e-12, 200]`.
+`im150stim`: `prior_window_ms=150`, `prior_stratum=stim`. `stimonly`:
+window unset, `prior_stratum=stim`. JSON timestamps 20260908-17xx/18xx
+(replaced the 09-08 morning `im150stim` dirs).
+
+**Eval:** same protocol as tests 1–6 — `bps=20`, stim seed **12345**,
+stim from baseline **s101**. Driver: `scripts/_tmp_gilo_stim_eval.py`.
+Dump: `models/stageB_hold_s89_gilo_stim_eval.json`. Rank on **eval tot**
+(traj + prior + S).
+
+| Column | Fit | What is reported |
+|--------|-----|------------------|
+| **im150stim 150stim** | 150 + `stim` | as fitted |
+| **im150stim → prod** | same weights | production stim×choice T=72 / 40-bin |
+| **stimonly fit** | legacy + `stim` | as fitted |
+| **stimonly → prod** | same weights | production |
+| **base prod** | unset / unset | tests 1–5 column |
+
+#### Eval total loss
+
+| seed | im150stim 150 | im150stim → prod | stimonly fit | stimonly → prod | base prod | im150stim `g_i` | stimonly `g_i` |
+|-----:|--------------:|-----------------:|-------------:|----------------:|----------:|----------------:|---------------:|
+| 7 | **1.188** | 1.736 | 1.120 | 1.717 | 1.076 | 1.6e-5 | 6e-6 |
+| 12 | 1.397 | 2.359 | 1.148 | 1.922 | 1.026 | 1.4e-6 | 0.070 |
+| 34 | 1.384 | **1.252** | 1.469 | **1.443** | 1.026 | 0.006 | 2.6e-11 |
+| 45 | 1.479 | 2.002 | 1.122 | 1.866 | 1.114 | 0.024 | 3.9e-10 |
+| 89 | 1.509 | 2.218 | 1.086 | 2.101 | 1.095 | 0.002 | 6.8e-5 |
+| 101 | 1.235 | 2.498 | 1.430 | 2.132 | 1.017 | 2.3e-5 | **115** |
+| 303 | 1.286 | 2.013 | **1.060** | 1.652 | 1.083 | 1.6e-7 | 2.5e-4 |
+| 333 | 1.309 | 2.564 | 1.336 | 1.874 | **1.015** | **76** | 7.2e-6 |
+
+| arm | best eval tot | median | mean |
+|-----|----------:|-------:|-----:|
+| baseline (production) | **1.015** (s333) | **1.051** | 1.056 |
+| im150 → production (09-07b) | 1.080 (s34) | 1.225 | 1.217 |
+| im150stim → prod (0.1 floor, 09-08) | 1.515 (s7) | 2.257 | 2.160 |
+| im150stim → prod (`1e-12` floor) | 1.252 (s34) | 2.115 | 2.080 |
+| stimonly → prod | 1.443 (s34) | 1.870 | 1.838 |
+| im150stim as fitted (150+stim) | 1.188 (s7) | 1.347 | 1.349 |
+| stimonly as fitted (legacy+stim) | 1.060 (s303) | 1.135 | 1.221 |
+| baseline → 150+stim | 2.684 | 4.373 | 4.345 |
+| baseline → legacy+stim | 3.358 | 5.452 | 5.386 |
+
+Opening the floor did **not** recover a usable prior gain. 14/16 seeds
+have `g_i` ≤ 0.07; most sit at `10⁻¹¹`–`10⁻⁵`. Only im150stim s333
+(**76**) and stimonly s101 (**115**) stay in the regular band. Thresholds
+are still nearly tied (`θ_c` 0.51–0.67, `θ_d` 0.42–0.63 vs regular
+0.73–0.77 / 0.37–0.47). `L_S` ~0.496 except im150stim s12 **0.574**.
+
+On production, neither arm beats baseline. Best transfer is im150stim
+s34 **1.252** (traj 0.450 + prior 0.306 + S 0.496) — still 0.24 above
+s333 **1.015**, and that seed has `g_i=0.006`. stimonly transfer is
+better than the first `im150stim` batch (median 1.870 vs 2.257) but
+worse than original stim×choice im150→legacy (1.225).
+
+They win their own objectives vs baseline scored the same way (as
+fitted 1.06–1.19 vs baseline-at-150stim 2.68 / baseline-at-stimonly
+3.36). That is the mismatch they were trained on, not tests 1–5.
+
+Plots (as fitted) in each run dir: `prior_effects.svg` / `.png`,
+`IM_pre`, `IM_post`, `P_fit`, `S_fit`.
+
+**Keep `prior_window_ms` and `prior_stratum` unset. Put `g_i` floor
+back to `0.1`.** The open box only let the stim-only loss drive `g_i`
+closer to zero.
+
+#### Act-prior RT (same protocol as tests 5–6)
+
+10 sessions × 20 blocks, stim seed 12345. Driver:
+`scripts/_tmp_gilo_stim_actprior_rt.py`. Dump:
+`models/stageB_hold_s89_gilo_stim_actprior_rt.json`.
+
+| seed | im150stim comb | im150stim perf | stimonly comb | stimonly perf |
+|-----:|---------------:|---------------:|--------------:|--------------:|
+| 7 | −5.24 | 0.677 | −1.40 | 0.721 |
+| 12 | −2.75 | 0.772 | −4.89 | 0.641 |
+| **34** | **0.253** | **0.858** | −4.24 | 0.661 |
+| 45 | −2.55 | 0.706 | −5.22 | 0.628 |
+| 89 | −9.21 | 0.538 | −5.15 | 0.682 |
+| 101 | −8.70 | 0.598 | −5.36 | 0.628 |
+| 303 | −10.9 | 0.728 | −7.25 | 0.629 |
+| 333 | −7.78 | 0.584 | −0.16 | **0.810** |
+
+Only im150stim s34 has a positive combined RT R² (**0.253** vs regular
+s101 **0.787** vs im150 s101 **0.874**). Every stimonly seed is
+negative (least-bad s333 **−0.16**).
+
+### 2026-09-08f — model prior-distance = mean of per-cell L2s
+
+BWM I/M targets (`load_group` on the 4-split `act_block_duringstim` /
+`duringchoice` combine) are **`mean_c ‖μ₊−μ₋‖`**: each split is a
+within-cell Euclidean curve, then sum / 4. The model was doing the
+other order — equal-weight the four `(stim, choice)` means, then one
+L2 (`‖mean_c Δ‖`). After S peaks (~68 ms) I/M rotate onto choice;
+error-cell `Δ` anti-aligns with correct-cell `Δ` and the pooled L2
+drops even though each cell’s own prior gap is still growing. That is
+why stim×choice im150 fell after ~80 ms while movement-aligned (and
+`θ_c > θ_d`) still rose. Not same-threshold collapse and not
+concordant-faster RT (median RT 164 vs 174 ms; 0.9% of trials
+committed by 80 ms).
+
+`prior_distance_I_M_both_alignments` (numpy + torch) now averages
+within-cell distances for every multi-cell stratum:
+
+| stratum | cells | was | now (matches data) |
+|---------|-------|-----|--------------------|
+| `stim_choice` (I/M default) | 4 `(ts, ch)` | `‖mean_c Δ‖` | `mean_c ‖Δ‖` |
+| `stim` (S default; im150stim) | 2 stim sides | same bug | mean of 2 within-stim L2s |
+| `all` | 1 pool | unchanged | the two orders coincide |
+
+`prior_distance_I_M_by_choice_and_prior` is unused in the fit (fill-from-ITI
+was copied from it). It now does the same 4-cell `mean_c ‖Δ‖` as the
+production prior function (it previously ignored stim).
+`choice_distance_I_M_both_alignments` is plot-only
+(`plot_choice_effect`, no SSE). It now averages the four (stim, prior)
+choice L–R distances to match `choice_duringstim_act` /
+`choice_duringchoice_act`.
+
+Fill-from-next-ITI, `include_all_trials`, `side` metric, and both
+alignments are unchanged. `sub_prior[i][0]` is still P at trial start
+(slow `W_pp`; sign is stable).
+
+**Rerun:** regular + `im150` (150 ms, stim×choice) on the 8 seeds,
+**new** run dirs so the 09-07 `‖mean_c Δ‖` campaign stays:
+
+`weights_run_fj_stageB_hold_s89_im150_meancell_regular_mask12-13_s<seed>/`
+
+```bash
+PARTITION=mit_preemptable ABLATIONS=im150 \
+  bash scripts/submit_fit_stage_b_model_ablations.sh
+```
+
+Default `OUT_TAG` for `im150` is now `stageB_hold_s89_im150_meancell`.
+Do not `FORCE` the old `stageB_hold_s89_im150` dirs.
+
 

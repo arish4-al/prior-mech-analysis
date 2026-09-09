@@ -16,7 +16,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Faster model fitting](simulation_fit_speedups.md) | Fit to baseline loss (~0.40) in ≲1–2 h; weights-only ORCD batch / optimizer speedups |
 | [Joint fitting pipeline](joint_fitting_pipeline.md) | Retinal + `g_s`/`d_s` + weights (`L_w+L_S`); regular vs sensory freeze masks; ORCD drivers; joint-direct fair compare |
 | [Retinal then joint](retinal_then_joint_fitting.md) | Pivot: fit retinal @ all prior g/d≈0, then joint with retinal free to tweak; regular/sensory; modernize `fit_retinal` |
-| [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds; 3× pre-action M (08-31); I/M prior at full 150 ms (09-07); `im150stim` / `stimonly` (09-08; `g_i` floor now `1e-12`) |
+| [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds; 3× pre-action M (08-31); I/M prior at full 150 ms (09-07); `im150stim` / `stimonly` (09-08; open `g_i` floor worse; restore `0.1`); model I/M distance = `mean_c ‖Δ‖` (09-08f; im150 meancell rerun) |
 | [Fit g_s/d_s with I/M prior mods](fit_gs_ds_with_im.md) | Joint `full` mask (all prior gains free); S prior-distance target from unsplit 80 ms FDR@0.01 ∩ stim/stim_early (13 regions) |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
