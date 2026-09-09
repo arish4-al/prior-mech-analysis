@@ -17,6 +17,8 @@
 #   ABLATIONS=wppsmall bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=onethr bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=im150 bash scripts/submit_fit_stage_b_model_ablations.sh
+#     → OUT_TAG stageB_hold_s89_im150_meancell (mean_c‖Δ‖; 09-07 tag
+#       stageB_hold_s89_im150 used ‖mean_c Δ‖)
 #   ABLATIONS=im150stim bash scripts/submit_fit_stage_b_model_ablations.sh
 #   ABLATIONS=stimonly bash scripts/submit_fit_stage_b_model_ablations.sh
 #
@@ -111,9 +113,11 @@ for ABLATION in "${ABL_ARR[@]}"; do
       TAG="${OUT_TAG_ONETHR:-stageB_hold_s89_onethr}"
       ;;
     im150)
-      # Test 6 original: 150 ms window, stim×choice stratum (ran 2026-09-07).
+      # Test 6: 150 ms window, stim×choice. Default tag is the mean_c‖Δ‖
+      # metric (2026-09-08f). The 09-07 run used ‖mean_c Δ‖ under
+      # stageB_hold_s89_im150 — do not overwrite that dir.
       export PRIOR_WINDOW_MS=150
-      TAG="${OUT_TAG_IM150:-stageB_hold_s89_im150}"
+      TAG="${OUT_TAG_IM150:-stageB_hold_s89_im150_meancell}"
       ;;
     im150stim)
       # Test 6 revised: 150 ms window + stim-only prior-distance (no choice cell).
