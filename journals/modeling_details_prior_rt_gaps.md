@@ -16,10 +16,11 @@ targets, both vs BWM act-prior data:
 prior-distance analysis defaults (80 ms S, fill-from-next-ITI,
 contrast-matched null).
 
-**Status:** 2026-09-09d — clamp said **`g_m`/`d_m`→0** did the work;
-smaller `W_mm` did not make the notch. Two refit arms, both freeze
-`g_m`/`d_m` at ~0: **`gm0`** (W_mm `[0.10, 0.40]`) and **`mleak`**
-(`W_mm≤0.15`). Option 1 still later. **Restore `g_i` floor `0.1`.**
+**Status:** 2026-09-09i — ORCD gather is a **single** job (no shards):
+laptop 7 caches ~7.5 s; ~700 insertions → ~30–60 min on Lustre,
+`--time=2:00:00`. Submit
+`scripts/submit_mean_data_im_from_cache.sh`. 09-09d `gm0`/`mleak`
+still pending. **Restore `g_i` floor `0.1`.**
 
 **Code:** `prior_distance_I_M_both_alignments` / `loss_prior_effect` /
 `loss_perf_with_data` in [`model_functions.py`](../model_functions.py);
@@ -30,6 +31,10 @@ Eval / plots: `scripts/_tmp_im150_meancell_eval.py`,
 `_tmp_im150_meancell_prior_dip.py`,
 `_tmp_im150_meancell_actprior_rt.py`,
 `_tmp_perf_rt_model_vs_data.py`.
+Data I/M by contrast: `scripts/build_mean_data_im_from_cache.py`
+(cache path; do not use `build_mean_data_im_by_contrast.py` /
+outdated `dmn/res/concat_*`). ORCD:
+`scripts/submit_mean_data_im_from_cache.sh`.
 
 ---
 
@@ -329,3 +334,226 @@ A delay-from-I-to-M (option 1, fitted lag) stays on the later list.
 Clamp read: zeroing `g_m`/`d_m` did most of the visible work; cutting
 `W_mm` did not make the 60–70 ms notch and can kill the late rise.
 Split the refit: `gm0` = freeze only; `mleak` = freeze + `W_mm≤0.15`.
+
+## 2026-09-09e — inc RT diagnostics (no refit)
+
+Driver: `scripts/_tmp_inc_rt_diagnostics.py`. Regular **s101**, **s12**,
+`WEIGHTS_REL`. RT/timeouts from the existing 10×20 act-prior caches
+(stim seed 12345); `|action|` at stimOn from 3 fresh sessions. Plots in
+each run’s `psychometric_model_vs_data_actprior/inc_rt_diag_*.png`.
+Dump: `models/stageB_hold_s89_inc_rt_diag/inc_rt_diag.json`.
+
+The overlay complaint was “too fast, or the wrong contrast dependence.”
+The second is the one that is true — and the slope is the **opposite**
+of “does not slow at low c.”
+
+### Ruled out
+
+| Hypothesis | Result |
+|------------|--------|
+| Already past `θ_d` toward prior at stimOn | **No.** `P(past)=0` on all three. Mean `action` toward prior **0.041–0.045** vs `θ_d` **0.39–0.43**. Remaining to prior bound **0.35–0.38**. |
+| Timeouts dropping slow inc trials | **No.** Inc timeout **0.5–1.4%**. |
+| Fast errors pulling `split_all` down | **No.** Inc errors are *slower* than corrects (s101 dw 0.377 vs dc 0.306). `correct_split` inc R² is **worse** (s101 **−1.23** vs split_all **−0.21**; WEIGHTS_REL **−0.57** vs **+0.18**). |
+
+Short RT (<80 ms, dropped by the mask) is almost only **|c|=1 incongruent**
+(s101 14–17%, s12 9–12%, WEIGHTS_REL **25–26%**). Mid/low c: 0%. That
+trims the fastest easy-inc commits; the remaining |c|=1 dc is still
+~110 ms.
+
+Start-point bias is tiny on every seed (`toward_prior ≈ 0.04`). Almost
+all of the con/inc remaining-distance gap is `θ_c ≈ 0.76` vs `θ_d ≈ 0.40`.
+
+### The hole: too-steep discordant contrast–RT
+
+Pooled inc RT (s) vs signed contrast. Data = act-prior `behavior_actprior.npy`.
+
+| \|c\| | data | s101 | s12 | WEIGHTS_REL |
+|------:|-----:|-----:|----:|------------:|
+| 1 | 0.19–0.21 | **0.11** | **0.11** | **0.11** |
+| 0.25 | 0.24–0.27 | 0.26–0.27 | 0.28 | 0.29–0.30 |
+| 0.125 | 0.29–0.30 | **0.40–0.41** | **0.44** | 0.37–0.39 |
+| 0.0625 | 0.35–0.37 | **0.43–0.47** | **0.47–0.51** | 0.40–0.42 |
+| 0 | 0.43 | 0.43 | 0.47 | 0.40 |
+
+- **|c|=1:** model inc is faster than data *and* faster than model con
+  (s101 con 0.13). `θ_d < θ_c` plus a strong stim.
+- **0.0625–0.125:** model overshoots (too slow). s12 is the worst peak;
+  WEIGHTS_REL is the least-bad mid-c overshoot — that is why it is the
+  only positive inc R², not because it slows low-c more.
+- Correct-only (dc) is steeper still (s101 dc 0.11 at ±1, **0.50** at
+  0.0625 vs data 0.19 / 0.34). Including slower dw *helps* split_all.
+
+Concordant stays in the usual good band. Data inc error rate 0.27;
+models 0.28–0.35.
+
+### What this does to the next levers
+
+- A **higher `θ_d` at low c** (the usual “caution when weak”) would
+  worsen the mid-c overshoot. If anything, a contrast schedule would
+  want the **opposite** slope: higher `θ_d` at |c|=1 (slow the 110 ms
+  easy-inc) and/or lower `θ_d` at 0.0625–0.125.
+- Raising `θ_d` globally slows both ends — helps |c|=1, hurts the
+  already-too-slow mid.
+- A global non-decision / motor delay would lift the 110 ms floor
+  toward data ~190 ms and also lift the mid-c peak further above data.
+- WEIGHTS_REL vs s101 still have the same `θ` and the same tiny
+  prestim |M|; the remaining gap is **drift vs contrast** (retinal
+  `τ_a`, CRF), not the bound schedule. Score that clamp next if we
+  keep going, not a 10-param `θ(c)` fit.
+
+## 2026-09-09f — data I/M by contrast (notebook RMS)
+
+How pooled I/M targets are made (`model_test.ipynb` / cell that writes
+`mean_data_results.npy`; older `get_data_for_fitting.py` is the flat
+I-stim / M-choice version):
+
+1. Load ONE `dmn/res/concat_act_normFalse.npy`.
+2. Keep cells whose Beryl acronym is in `int_regs` (I, 81) or
+   `move_regs` (M, 26) — same lists as `fit_targets/mean_data_results.npy`.
+3. Slice `concat` with `sum_for_key` on `len` (dict order).
+4. Per key, store **RMS across cells**
+   `sqrt(nansum(x², 0) / n / T_BIN)`, `T_BIN=0.0125`. Notebook does
+   **not** subtract `rms[0]` for I/M. Keys: 8 stim (96 bin) + 8 choice
+   (72 bin), all contrasts pooled.
+
+S already uses `concat_by_contrast_act_noshuffle` and the same RMS.
+`concat_PETHs(..., vers='concat_by_contrast_act')` already builds
+`{base}_{c}` for all 8+8 keys. The all-cell noshuffle file is **not**
+on this laptop.
+
+Driver: `scripts/build_mean_data_im_by_contrast.py`. Fallback (concat
+is still the real PETH; shuffle is only `distance_controls`):
+
+| node | file | cells → after `int_regs`/`move_regs` | keys |
+|------|------|--------------------------------------|------|
+| I | `concat_by_contrast_act_normFalse_shuffleTrue_integrator.npy` | 1446 → **555** | correct-only 4 stim + 4 choice × 5 c |
+| M | `concat_by_contrast_act_normFalse_shuffleTrue_move_init.npy` | 3567 → **968** | same |
+
+Missing vs production: error-cell keys (`stimLbLcR`, `sLbLchoiceR`, …).
+Output (with the concat, not repo `figs/`):
+`dmn/res/mean_data_im_by_contrast/mean_data_results_by_contrast.npy`
++ `im_crf_amp.png`, `{I,M}_traces_by_contrast.png`.
+
+Choice-L collapse, mean RMS after bin 15:
+
+| \|c\| | I stim | I choice | M stim | M choice |
+|------:|-------:|---------:|-------:|---------:|
+| 1 | 4.86 | 4.83 | **6.49** | 5.66 |
+| 0.25 | 4.86 | 4.85 | 6.06 | 5.59 |
+| 0.125 | 4.86 | 4.84 | 5.80 | 5.60 |
+| 0.0625 | 4.92 | 4.88 | 5.65 | 5.64 |
+| 0 | 5.19 | 5.23 | 5.85 | 5.77 |
+
+**I stim is almost flat** (slightly *higher* at c=0). **M stim rises
+with contrast** (5.65 → 6.49). That CRF is **not usable** — those
+concat files are outdated (correct-only keys, restricted rasters).
+Do not put this fallback npy into `fit_targets/`.
+
+## 2026-09-09g — I/M RMS from the insertion cache
+
+The 09-09f “I flat, M rises with contrast” pattern does not make
+sense as a sensory CRF, and the concat sources are stale. Switched
+to the current real-data path
+([realdata_pipeline_efficiency.md](realdata_pipeline_efficiency.md)):
+
+- `manifold/insertion_cache/{eid_probe}.npy` already holds spikes +
+  saturation-masked trials.
+- Driver `scripts/build_mean_data_im_from_cache.py`: filter
+  `int_regs` / `move_regs`, apply act-prior (`α=0.2`), bin **once**
+  per alignment (`bin_spikes2D`, `T_BIN=0.0125`, `sts=0.002`), then
+  slice the 8 stim + 8 choice cells × 5 contrasts **and** a pooled
+  all-contrast condition. No `nrand`, no `d_var`.
+- Windows match current I/M analysis: stim `[0, 0.15]`, choice
+  `[0.15, 0]` → 72 bins (not the old 200 ms / 96-bin concat).
+  `--stim-post 0.2` if we need notebook-length stim.
+- RMS is the notebook formula
+  `sqrt(nansum(x²) / n / T_BIN)` streamed as `sum(x²)` / `n`.
+- Output next to the cache:
+  `manifold/mean_data_im_from_cache/`
+  (`mean_data_results_by_contrast.npy`, `im_crf_amp.png`,
+  `{I,M}_traces_by_contrast.png`, `allcontrast_vs_fit_targets.png`).
+
+**Local run (this laptop):** only the 7-insertion Goal-2 smoke
+cache exists (`alyx…/manifold/insertion_cache/`, ~365 MB). 6 of 7
+had I/M cells → **197 I / 130 M**. Wall ~2.5 s after load. Choice-L
+collapse, mean RMS after bin 15:
+
+| \|c\| | I stim | I choice | M stim | M choice |
+|------:|-------:|---------:|-------:|---------:|
+| 1 | 1.36 | 1.36 | 2.47 | 2.44 |
+| 0.25 | 1.67 | 1.68 | 3.06 | 3.03 |
+| 0.125 | 2.46 | 2.43 | 2.88 | 2.73 |
+| 0.0625 | 2.46 | 2.55 | 3.54 | 3.62 |
+| 0 | 2.70 | 2.68 | 3.12 | 3.21 |
+| all | 2.07 | 2.09 | 2.54 | 2.48 |
+
+This is **not** a BWM CRF (and does not match
+`fit_targets/mean_data_results.npy`: I stim r ≈ 0.04, M choice
+r ≈ 0.84; scale ~0.7). It is only a pipeline check. Error keys at
+`|c|=1` are almost empty (as expected). Do **not** put this npy in
+`fit_targets/`. Do **not** add a Stage B by-contrast I/M term until
+the full-cache CRF exists.
+
+Full BWM cache is on ORCD (~22 GB). Command (user pastes; agent
+does not sbatch / ssh):
+
+```bash
+conda activate iblenv
+python scripts/build_mean_data_im_from_cache.py \
+  --cache-dir "$ONE_CACHE/manifold/insertion_cache"
+```
+
+Plots land in `$ONE_CACHE/manifold/mean_data_im_from_cache/`.
+
+## 2026-09-09h — I/M lists vs stim×choice; drop act-prior
+
+`fit_targets` / notebook I/M (`int_regs` 81, `move_regs` 26) vs
+current `data/stimchoice_act_regtype_regions_p_mean_c_0.01.csv`
+(union of duringstim ∨ duringchoice labels):
+
+| | current | in old list | missed | extras |
+|--|--:|--:|--:|--:|
+| I integrator | **60** | 60 | **0** | **21** |
+| M move | **23** | 23 | **0** | **3** |
+
+No I/M swap. Extras are not current I/M:
+
+- I extras (21): 18 unlabeled (AIp, AIv, BLA, BMA, CA3, COPY, DTN,
+  EPd, Eth, ICB, LA, LHA, LSc, PC5, PRP, RSPagl, SCs, SNc); 3
+  stim-early only (OP, PO, SAG).
+- M extras (3): AUDd, COAp, CUN (unlabeled).
+
+A few old-I regions are stim-early in one window but still
+integrator in the other (DCO, IC, NOT, PAG, PB, PRNr, TRN) — those
+stay in the 60. ZI is stim-early duringstim and move duringchoice;
+it stays in M.
+
+Default gather now uses the **60 / 23** current lists
+(`--regs sc`). `--regs fit_targets` restores 81 / 26.
+
+Act-prior removed. The fit (`_data_mean_and_baseline`) already
+collapses stim×prior at fixed choice, so we only store choice L/R
+× contrast (and `all`). No 8-key notebook cells.
+
+7-cache smoke with `--regs sc`: 92 I / 122 M cells. Choice-L RMS
+after bin 15 is nearly flat in I (1.93–2.14) and M (2.15–2.51).
+Still not a BWM CRF.
+
+## 2026-09-09i — ORCD job, no shards
+
+Laptop: 7 insertions in ~7.5 s (~1 s each) after filtering to I/M
+cells and binning two alignments only. Full BWM ~700 caches → ~12 min
+on SSD. Lustre I/O 2–5× → **~30–60 min**, worst ~90 min. Memory is
+one insertion at a time (~30–130 MB cache). **One job**, 8G / 2 CPU /
+`--time=2:00:00`. Shards would need a merge and are not worth it
+(no `nrand`).
+
+Default partition is `mit_preemptable` (`--requeue` via
+`sbatch_defaults.sh`).
+
+```bash
+bash scripts/submit_mean_data_im_from_cache.sh
+```
+
+Output: `$ONE_CACHE/manifold/mean_data_im_from_cache/`. Agent does
+not sbatch.
