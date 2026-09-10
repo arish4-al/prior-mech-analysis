@@ -16,11 +16,11 @@ targets, both vs BWM act-prior data:
 prior-distance analysis defaults (80 ms S, fill-from-next-ITI,
 contrast-matched null).
 
-**Status:** 2026-09-09i — ORCD gather is a **single** job (no shards):
-laptop 7 caches ~7.5 s; ~700 insertions → ~30–60 min on Lustre,
-`--time=2:00:00`. Submit
-`scripts/submit_mean_data_im_from_cache.sh`. 09-09d `gm0`/`mleak`
-still pending. **Restore `g_i` floor `0.1`.**
+**Status:** 2026-09-09k — 09-09j `gm0`/`mleak` were fit on the
+**80 ms** production window (wrong for the M-shape aim). Discard
+those dirs for this question. `gm0` now bakes `PRIOR_WINDOW_MS=150`
+(`stageB_hold_s89_gm0_im150`). No `mleak` rerun. **Restore `g_i`
+floor `0.1`.**
 
 **Code:** `prior_distance_I_M_both_alignments` / `loss_prior_effect` /
 `loss_perf_with_data` in [`model_functions.py`](../model_functions.py);
@@ -30,7 +30,8 @@ submit
 Eval / plots: `scripts/_tmp_im150_meancell_eval.py`,
 `_tmp_im150_meancell_prior_dip.py`,
 `_tmp_im150_meancell_actprior_rt.py`,
-`_tmp_perf_rt_model_vs_data.py`.
+`_tmp_perf_rt_model_vs_data.py`,
+`_tmp_gm0_mleak_eval.py`, `_tmp_gm0_mleak_actprior_rt.py`.
 Data I/M by contrast: `scripts/build_mean_data_im_from_cache.py`
 (cache path; do not use `build_mean_data_im_by_contrast.py` /
 outdated `dmn/res/concat_*`). ORCD:
@@ -241,13 +242,10 @@ Smoke on s12 (worst early-M: `g_m=0.79`) and s34 / regular s101
    same family as the existing `P_offset` ITI gate. M stays near the
    ITI/prestim floor through the S transient, then tracks choice-
    aligned I. Must not wreck movement-aligned M or RT.
-2. **Decay the prestim M charge at stimOn.** *(clamp 09-09c: no notch
-   on frozen I/`W_mi`; `W_mm=0.10` kills late M. Refit `mleak` pending.)*
-   Faster effective M leak over 0–80 ms: weaker `W_mm`. `tau_*` stay
-   20 ms — W already sets the effective timescale.
-3. **Kill extra prior drive through the S peak.** *(clamp 09-09c:
-   zeroing `g_m` on s12 does not drop M40.)* Cap `g_m` near 0 and keep
-   `d_m` from sitting at 2.8. Necessary, not sufficient.
+2. **Decay the prestim M charge at stimOn.** *(done 09-09j `mleak`:
+   no notch; `W_mi` rose; late M dies. Drop the cap.)*
+3. **Kill extra prior drive through the S peak.** *(done 09-09j `gm0`:
+   eval-tot win, still no 60–70 ms notch. Keep the freeze.)*
 4. **Prior SSE that sees 40–80 ms M.** Split M’s term (0–80 vs
    80–150) or up-weight 40–80 ms so a high-and-smooth M is expensive.
    I’s term stays as-is. Test 5 (`m_pre_weight=3`) does the *opposite*
@@ -557,3 +555,58 @@ bash scripts/submit_mean_data_im_from_cache.sh
 
 Output: `$ONE_CACHE/manifold/mean_data_im_from_cache/`. Agent does
 not sbatch.
+
+## 2026-09-09j — gm0 / mleak scored
+
+16/16 `FIT_DONE`, mask `7|9|12|13` (`g_m`/`d_m`/`g_s`/`d_s` ≈ 0).
+Shared-stim eval `bps=20` seed **12345**, stim from regular s101,
+production prior window. Dump + overlay:
+`models/stageB_hold_s89_gm0_mleak_eval/`
+(`eval.json`, `actprior_rt.json`, `IM_overlay_s12_s34_s101.png`).
+Per-run prior/S plots in each run dir.
+
+| arm | best eval tot | median | prior med | M70 / M80 / M150 med |
+|-----|-------------:|-------:|----------:|---------------------:|
+| **gm0** | **0.967** (s7) | **1.022** | 0.150 | 0.106 / 0.108 / 0.121 |
+| regular | 0.999 (s34) | 1.030 | 0.193 | 0.116 / 0.117 / 0.135 |
+| mleak | 0.980 (s34) | 1.117 | 0.189 | 0.106 / 0.104 / **0.094** |
+| data M | — | — | — | **0.080 / 0.104 / 0.145** |
+
+`gm0` `W_mm` stayed 0.24–0.29 (same basin as regular); `W_mi` 0.47–0.60.
+`mleak` sat in `[0.11, 0.14]` and **raised `W_mi` to 0.63–0.85**. Four
+`mleak` seeds collapsed `g_i` (`s7`, `s12`, `s45` ≈ 0; `s89` = 9.4) —
+the open `1e-12` floor again.
+
+No 60–70 ms notch on either arm. `gm0` still ramps 40→80 (best tot s7:
+M 0.085 / 0.102 / 0.106 / 0.118). `mleak` often **kills the late rise**
+(s89 M150 = 0.057; s333 = 0.067; s45 = 0.074).
+
+Act-prior RT (10×20, same seed):
+
+| arm | seed | perf | RTcomb | split (con / inc) |
+|-----|-----:|-----:|-------:|------------------:|
+| gm0 | 12 | 0.923 | 0.618 | **0.303** (0.76 / **−0.19**) |
+| gm0 | 303 | 0.882 | 0.682 | 0.228 (0.72 / −0.30) |
+| gm0 | 34 | 0.902 | 0.657 | 0.155 (0.78 / −0.51) |
+| gm0 | 7 | 0.868 | 0.352 | −0.58 (0.66 / −1.91) |
+| gm0 | 333 | 0.808 | −1.12 | −2.68 (−0.40 / −5.11) |
+| mleak | 101 | 0.755 | **0.773** | −0.37 (0.86 / −1.68) |
+| mleak | 89 | 0.919 | 0.331 | 0.057 (0.47 / −0.38) |
+| mleak | 34 | 0.820 | 0.586 | −0.62 (0.80 / −2.13) |
+| mleak | 7† | 0.866 | −0.56 | −1.67 (0.00 / −3.46) |
+
+† `g_i≈0`. Inc R² still negative on every seed. `gm0` s12 is the
+least-bad inc (−0.19 vs meancell s12 −1.04 / regular s101 −0.21).
+Collapsed-`g_i` `mleak` seeds flatten concordant RT.
+
+**Keep:** freeze `g_m`/`d_m` (`gm0`) as a cheap eval-tot win. **Drop:**
+the `W_mm≤0.15` cap. The M pause still needs a delayed I→M drive
+(option 1), not a leakier M. Restore `g_i` floor 0.1 before the next
+campaign.
+
+## 2026-09-09k — 09-09j was the 80 ms window
+
+`gm0` / `mleak` left `prior_window_ms` unset (test-6 keep list). The
+M notch / late climb are after 80 ms, so that campaign does not
+answer the shape question. `gm0` arm now sets `PRIOR_WINDOW_MS=150`
+and tag `stageB_hold_s89_gm0_im150`. No `mleak` rerun.

@@ -28,8 +28,9 @@
 #     PATIENCE=0 LOCAL_REFINE_MAX_WALL_S=60 FORCE=1 TIME=1:00:00 \
 #     bash scripts/submit_fit_stage_b_model_ablations.sh
 #
-#   ABLATIONS="gm0 mleak" bash scripts/submit_fit_stage_b_model_ablations.sh
-#     → both freeze g_m/d_m (~0) + g_s/d_s; mleak also caps W_mm ≤ 0.15
+#   ABLATIONS=gm0 bash scripts/submit_fit_stage_b_model_ablations.sh
+#     → freeze g_m/d_m (~0); I/M prior window 150 ms (M-shape campaign).
+#       Tag stageB_hold_s89_gm0_im150. Do not use the 80 ms gm0 dirs.
 #
 # Env: ABLATIONS (poffset / noiti / wpplarge / wppopen / wppsmall / onethr /
 #      im150 / im150stim / stimonly / gm0 / mleak), plus all
@@ -135,10 +136,12 @@ for ABLATION in "${ABL_ARR[@]}"; do
       TAG="${OUT_TAG_STIMONLY:-stageB_hold_s89_stimonly}"
       ;;
     gm0)
-      # Option 3 only: freeze g_m/d_m at ~0 (LOG_ZERO). W_mm stays
-      # [0.10, 0.40]. tau_* stay 20 ms. Pair with mleak to test the box.
+      # Freeze g_m/d_m at ~0. I/M prior is 150 ms — the M notch / late
+      # climb live after 80 ms. The 80 ms tag stageB_hold_s89_gm0 was
+      # a mis-wire (test-6 keep list); do not reuse it.
       export VARIANTS="regular:7|9|12|13"
-      TAG="${OUT_TAG_GM0:-stageB_hold_s89_gm0}"
+      export PRIOR_WINDOW_MS=150
+      TAG="${OUT_TAG_GM0:-stageB_hold_s89_gm0_im150}"
       ;;
     mleak)
       # Options 2+3: same g_m/d_m freeze, plus W_mm ≤ 0.15.
