@@ -1,0 +1,37 @@
+---
+description: Before any job command or ablation arm, check it matches the current aim
+alwaysApply: true
+---
+
+# Job submissions must match the current aim
+
+Printing an `sbatch` / `submit_*.sh` command, wiring an ablation arm, or
+copying those scripts onto `main` for ORCD **is a submission**. Do not
+`sbatch` (see `no-orcd-access`). Do not hand the user a command whose
+loss cannot see the stated target.
+
+## Incident (2026-09-09)
+
+Aim: stim-aligned **M** through 60–150 ms (notch, then climb). Jobs
+`gm0` / `mleak` used `prior_window_ms` unset (**80 ms**) because test 6
+said keep production unset. The optimizer never scored the target.
+Wrong keep-list, not a Slurm typo.
+
+## Before the command (mandatory)
+
+Write one line the user can check, then the command. If any item
+disagrees with the **latest** aim, **stop** — do not print the command.
+
+1. **Aim** — what curve or term this job is supposed to move.
+2. **Window / stratum / freeze / null / `OUT_TAG`.**
+3. **What the loss can see** — e.g. 80 ms prior SSE cannot see a
+   post-80 M climb; production unset ≠ 150 ms I/M.
+4. **Keep-lists** from earlier tests apply only if the user re-asked
+   that ranking. Do not inherit “production window,” `g_i` floor, or
+   stratum from a different campaign.
+
+Named forks (80 vs 150, strat vs fixedstim, …) still require a pick
+first — `.cursor/rules/confirm-journal-options.mdc`.
+
+Do not rank or journal a campaign as answering an aim the fit never
+optimized.

@@ -9,9 +9,11 @@ mean-activity curves.
 **Not in scope:** changing I/M traj targets, `avg_mean_R` / Stage A, Harris /
 Bayes priors, or the default regular/sensory freeze masks.
 
-**Status:** 1e-12-floor campaign scored 2026-09-09. Best fair tot **full
-s34 = 1.057** (S **0.028** via `d_s≈26`, `g_s≈0`, `g_i=185`). All four
-arms **32/32** local.
+**Status:** 1e-12-floor campaign scored 2026-09-09 (old `‖mean_c Δ‖`
+metric). Best fair tot **full s34 = 1.057** (S **0.028** via `d_s≈26`,
+`g_s≈0`, `g_i=185`). All four arms **32/32** local. **2026-09-14:**
+`full_im150` rerun wired as `stageB_hold_s89_full_im150_meancell`
+(150 ms stim×choice I/M + unsplit-80 S, `mean_c ‖Δ‖`). Not submitted.
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -434,4 +436,33 @@ Summary: `models/stageB_hold_s89_full_s_prior_1e12_plot_summary.json`.
 | `S_fit.png` | retinal mean S vs contrast (`avg_mean_R` / `L_S`) |
 | `prior_effects.svg` / `.png` | I/M + unsplit-80 S prior-distance |
 | `psychometric_model_vs_data_actprior/` | perf + RT combined + RT split (act-prior data, subj-P model) |
+
+## 2026-09-14 — `full_im150` meancell rerun (not yet submitted)
+
+09-08c `full_im150` was fit **before** the 09-08f pooling-order fix
+([modeling_details_revisions.md](modeling_details_revisions.md) 09-08f;
+regular 150 ms rerun is `im150_meancell`). Same arm, new dirs:
+
+| | 09-08c (keep) | this rerun |
+|--|---------------|------------|
+| tag | `stageB_hold_s89_full_im150` | `stageB_hold_s89_full_im150_meancell` |
+| I/M metric | `‖mean_c Δ‖` | `mean_c ‖Δ‖` |
+| I/M window / stratum | 150 ms, stim×choice | same |
+| S | unsplit-80 sidecar, `include_stim=1`, model `stratum_s=stim` | same |
+| freeze | none (`full` / `masknone`) | same |
+| `g_*`/`d_*` floor | `1e-12` (still the code) | same |
+| seeds | 8 (`7 12 34 45 89 101 303 333`) | same |
+
+Do **not** `FORCE` the 09-08c dirs. Do **not** run default `ARMS`
+(that `FORCE=1`-replaces 80 ms `full` and the stim-stratum arms).
+Regular 80 ms and 80 ms `full` stay old-metric; only this 150 ms
+stim×choice + S arm is the rerun.
+
+```bash
+PARTITION=mit_preemptable ARMS=im150 FORCE=0 \
+  bash scripts/submit_fit_stage_b_full_s_prior.sh
+```
+
+Dirs:
+`weights_run_fj_stageB_hold_s89_full_im150_meancell_full_masknone_s{7,12,34,45,89,101,303,333}/`.
 

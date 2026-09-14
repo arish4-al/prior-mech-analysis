@@ -16,11 +16,11 @@ targets, both vs BWM act-prior data:
 prior-distance analysis defaults (80 ms S, fill-from-next-ITI,
 contrast-matched null).
 
-**Status:** 2026-09-09k — 09-09j `gm0`/`mleak` were fit on the
-**80 ms** production window (wrong for the M-shape aim). Discard
-those dirs for this question. `gm0` now bakes `PRIOR_WINDOW_MS=150`
-(`stageB_hold_s89_gm0_im150`). No `mleak` rerun. **Restore `g_i`
-floor `0.1`.**
+**Status:** 2026-09-14 — full act-prior RT table (s101) is in
+the dated entry below. Concordant matches on average; incongruent
+is the wrong shape (too fast at |c|=1, too slow at ±0.0625).
+Open: whether further RT/lapse/threshold machinery is worth it
+for this paper. **Restore `g_i` floor `0.1`.**
 
 **Code:** `prior_distance_I_M_both_alignments` / `loss_prior_effect` /
 `loss_perf_with_data` in [`model_functions.py`](../model_functions.py);
@@ -31,11 +31,17 @@ Eval / plots: `scripts/_tmp_im150_meancell_eval.py`,
 `_tmp_im150_meancell_prior_dip.py`,
 `_tmp_im150_meancell_actprior_rt.py`,
 `_tmp_perf_rt_model_vs_data.py`,
-`_tmp_gm0_mleak_eval.py`, `_tmp_gm0_mleak_actprior_rt.py`.
+`_tmp_gm0_mleak_eval.py`, `_tmp_gm0_mleak_actprior_rt.py`,
+`_tmp_gm0_im150_eval.py`, `_tmp_gm0_im150_actprior_rt.py`,
+`_tmp_im_to_m_gate_clamp.py`. Optional I→M gate:
+`w_mi_off_until_ms` / `w_mi_off_prestim` (default off).
 Data I/M by contrast: `scripts/build_mean_data_im_from_cache.py`
 (cache path; do not use `build_mean_data_im_by_contrast.py` /
 outdated `dmn/res/concat_*`). ORCD:
-`scripts/submit_mean_data_im_from_cache.sh`.
+`scripts/submit_mean_data_im_from_cache.sh`. Overlay:
+`scripts/_tmp_im_percontrast_overlay.py` (plots in s101
+`im_percontrast_vs_data/`). Artificial M-CRF→RT test:
+`scripts/_tmp_im_crf_warp_rt.py` (s101 `im_crf_warp_rt/`).
 
 ---
 
@@ -237,15 +243,16 @@ then let it climb. Do not retune I. Do not chase the 130 ms bin.
 Smoke on s12 (worst early-M: `g_m=0.79`) and s34 / regular s101
 (`g_m≈0`, still no notch).
 
-1. **Gate I→M until after the S peak** (most direct). `W_mi` / `g_m`
-   off (or strongly attenuated) from prestim through ~80 ms post-stim,
-   same family as the existing `P_offset` ITI gate. M stays near the
-   ITI/prestim floor through the S transient, then tracks choice-
-   aligned I. Must not wreck movement-aligned M or RT.
+1. **Gate I→M until after the S peak** (most direct). *(clamp 09-11d:
+   prestim-only fixes M40; hard 60/80 ms cutoff kills early M and
+   tot, no data-height notch. Soft / fitted gate still open.)*
+   `W_mi` / `g_m` off (or strongly attenuated) from prestim through
+   ~80 ms post-stim. Must not wreck movement-aligned M or RT.
 2. **Decay the prestim M charge at stimOn.** *(done 09-09j `mleak`:
    no notch; `W_mi` rose; late M dies. Drop the cap.)*
-3. **Kill extra prior drive through the S peak.** *(done 09-09j `gm0`:
-   eval-tot win, still no 60–70 ms notch. Keep the freeze.)*
+3. **Kill extra prior drive through the S peak.** *(done 09-09j at
+   80 ms; **09-11c `gm0_im150`**: still no notch, and it **loses**
+   eval tot at the window that can see the residual. Drop the freeze.)*
 4. **Prior SSE that sees 40–80 ms M.** Split M’s term (0–80 vs
    80–150) or up-weight 40–80 ms so a high-and-smooth M is expensive.
    I’s term stays as-is. Test 5 (`m_pre_weight=3`) does the *opposite*
@@ -610,3 +617,382 @@ campaign.
 M notch / late climb are after 80 ms, so that campaign does not
 answer the shape question. `gm0` arm now sets `PRIOR_WINDOW_MS=150`
 and tag `stageB_hold_s89_gm0_im150`. No `mleak` rerun.
+
+## 2026-09-10 — full-BWM I/M RMS; late-window contrast
+
+ORCD job landed in alyx
+`manifold/mean_data_im_from_cache/` (594 / 696 insertions with I/M
+cells; 21,594 I / 12,487 M; 9.0 min; `--regs sc`). All-contrast
+recovers `fit_targets` (r = 0.994–0.999, scale 0.96–1.03).
+
+`all` sits below every per-contrast curve because it is RMS of the
+**pooled-trial** cell mean (exactly the n-weighted average of the
+five `μ_c`). RMS is convex, so that is lower than the mean of the
+noisier per-contrast RMS — not a pooling bug.
+
+Mean RMS after bin 15 looks almost flat (~3% I, ~5% M). That average
+hides a **late** contrast ramp. Choice-L, vs c=0.0625:
+
+| epoch | I stim | M stim | I choice | M choice |
+|-------|-------:|-------:|---------:|---------:|
+| 0–50 ms | −0.03 | −0.04 | −0.07 | −0.05 |
+| 50–100 | +0.03 | +0.08 | −0.05 | −0.02 |
+| 100–150 | **+0.21** | **+0.37** | +0.08 | +0.13 |
+| last 25 | +0.23 | +0.43 | +0.13 | +0.19 |
+
+c=1 / c=0.0625 in the last 25 ms: I stim **1.07**, M stim **1.13**,
+I choice 1.04, M choice 1.05. Mid contrasts sit in between. **c=0
+is the exception** — offset *up* in every epoch (~+0.09), not a
+late-only ramp.
+
+Early 0–80 ms is flat or slightly inverted. A scalar 5-point I/M
+CRF on the whole 150 ms would pin the wrong thing. The late
+stim-aligned rise is the same clock as easy RT (data |c|=1 ≈
+0.19–0.21 s): the last 50 ms of the 150 ms stim window is
+peri-move on easy trials and still pre-move on hard ones. That is
+movement bleed / earlier commit, not I/M sensory gain. Choice-
+aligned late rise is the last 25 ms before movement (commit),
+larger on easy trials as expected.
+
+Do **not** add a Stage B by-contrast I/M amplitude term. Discordant
+RT is still an S-drift / bound problem.
+
+## 2026-09-10b — overlay regular s101 vs per-contrast data
+
+Choice L, shared stim `bps=20` seed 12345, regular s101. Data RMS
+vs model channel `|Δ|` (twin axes; units do not match). Plots:
+openalyx `weights_run_fj_stageB_hold_s89_regular_mask12-13_s101/im_percontrast_vs_data/`.
+
+Last ~25 ms, each series / its own c=0.0625:
+
+| series | I stim | M stim | I choice | M choice |
+|--------|-------:|-------:|---------:|---------:|
+| data c=1 / c=0.0625 | 1.065 | 1.106 | 1.024 | 1.035 |
+| model c=1 / c=0.0625 | **4.19** | **4.79** | 1.66 | 1.49 |
+| data c=0 vs 0.0625 | +0.09 up | +0.09 up | +0.08 up | +0.07 up |
+| model c=0 vs 0.0625 | **below** | **below** | **below** | **below** |
+
+Model n per contrast (left choice): 130 / 122 / 127 / 134 / 56
+(c=1 … 0).
+
+**Trend that matches:** late-window rank among c>0 is the same
+(easy > mid > hard). Choice-aligned traces also share the late
+climb into commit.
+
+**Trend that does not:**
+1. Stim-aligned model I/M stay near 0 until ~50 ms, then fan out
+   by contrast. Data stay stacked (and c=0 sits *above* the stack)
+   until a shallow late lift.
+2. The model's late CRF is ~4–5× on stim I/M and ~1.5× on choice
+   I/M; data are ~1.07 / 1.11 and ~1.02 / 1.04.
+3. Zero contrast is inverted: data offset up in every epoch;
+   model is the lowest curve.
+
+So the fitted I/M already have *too much* contrast dependence, not
+too little. Same conclusion as 2026-09-10: do not add a 5-point
+I/M amplitude term. The remaining M-shape gap is still the
+stim-aligned pause through the S peak, not a missing CRF.
+
+## 2026-09-11 — high-c “best fit” is not missing S CRF
+
+The twin-axis overlay of **raw** RMS (~3) vs model `|Δ|` (~0–1)
+makes c=1 look like the match: both purple curves hit the top of
+their own axis, and every other data curve still sits on the ~3
+floor while low-c model stays near 0. That is not a scale the
+loss uses. Traj SSE baseline-subtracts the first stim bin, then
+compares the residual to model `|Δ|`.
+
+Last-25 residual (data late − t0) vs model, choice L:
+
+| | I stim | M stim | I choice | M choice |
+|--|-------:|-------:|---------:|---------:|
+| data resid c=1 / c=0.0625 | 2.26 | 2.03 | 1.37 | 1.25 |
+| model c=1 / c=0.0625 | **4.19** | **4.79** | 1.66 | 1.49 |
+| model / data resid at c=1 | 1.23 | 1.33 | 1.19 | 1.07 |
+| model / data resid at c=0.0625 | 0.67 | 0.57 | 0.98 | 0.90 |
+| model / data resid at c=0 | 0.45 | 0.44 | 0.87 | 0.87 |
+
+Pin c=1 (the visual): every other contrast undershoots, worst at
+c=0. That is the same fact as a **too-steep** CRF, not a too-shallow
+one. More S contrast dependence would widen c=1 vs hard/zero
+further; c=1 is already 7–33% high.
+
+What low/zero contrast is missing is a **contrast-independent**
+(or weakly contrast-dependent) I/M component — prior / prestim
+I→M charge / recurrent floor — not more S. There is no S→M
+synapse. At c=0, S≈0 and the model residual is the smallest
+curve; data residual at c=0 is still ~0.22 I / 0.36 M.
+
+## 2026-09-11b — comparable overlay + per-contrast nSSE
+
+Replot in traj-loss units: data RMS − first stim bin vs model
+`|Δ|`, same axis. Stim nSSE skips 15 bins; choice uses the full
+window (`m_pre_weight=1`). Regular s101, shared stim 12345 / 20.
+Plots: s101 `im_percontrast_vs_data/`
+(`im_percontrast_overlay`, `im_percontrast_late25`,
+`im_percontrast_nsse`).
+
+nSSE by |contrast|:
+
+| term | 1.0 | 0.25 | 0.125 | 0.0625 | 0.0 |
+|------|----:|-----:|------:|-------:|----:|
+| I stim L+R | 0.228 | 0.186 | 0.379 | 0.518 | **0.757** |
+| M stim L+R | **0.135** | 0.272 | 0.441 | 0.547 | **0.771** |
+| I choice L+R | 0.064 | 0.134 | 0.083 | 0.056 | 0.085 |
+| M choice L+R | 0.077 | 0.080 | 0.129 | 0.124 | 0.186 |
+| I+M all L | 0.253 | 0.366 | 0.488 | 0.713 | 1.003 |
+| I+M all L+R | **0.505** | 0.671 | 1.032 | 1.245 | **1.799** |
+
+Choice L last-25 residual (same units as the overlay):
+
+| | I stim | M stim | I choice | M choice |
+|--|-------:|-------:|---------:|---------:|
+| data − t0 c=1 | 0.47 | 0.84 | 0.53 | 0.91 |
+| model c=1 | 0.52 | 1.00 | 0.50 | 0.76 |
+| data − t0 c=0 | 0.23 | 0.39 | 0.38 | 0.66 |
+| model c=0 | 0.10 | 0.16 | 0.28 | 0.47 |
+
+Stim-aligned: c=1 is the only contrast where the model rise is
+at or above the data; hard/zero stay near 0 until late and
+underestimate. Choice-aligned is much closer (nSSE ≲ 0.13) at
+every contrast. The loss that is actually getting worse as
+contrast drops is **stim I/M**, not choice I/M.
+
+## 2026-09-11c — `gm0_im150` scored (as fitted, 150 ms)
+
+8/8 `FIT_DONE`, `prior_window_ms=150`, mask `7|9|12|13`
+(`g_m`/`d_m`/`g_s`/`d_s` ≈ 0). Tag
+`stageB_hold_s89_gm0_im150` so the 80 ms `gm0` dirs are not
+reused. `g_i` stayed high (136–200); no floor collapse. `W_mm`
+0.255–0.286 (usual basin). `W_mi` 0.45–0.58.
+
+Shared-stim eval `bps=20` seed **12345**, stim from regular s101,
+**scored at 150 ms** (same window as the fit). Dump + overlay:
+`models/stageB_hold_s89_gm0_im150_eval/`
+(`eval.json`, `actprior_rt.json`, `IM_overlay_s12_s34_s101.png`).
+Per-run prior/S plots in each `gm0_im150` run dir.
+
+| arm | best eval tot | median | prior med | M70 / M80 / M150 med |
+|-----|-------------:|-------:|----------:|---------------------:|
+| regular @150 | **1.086** (s303) | **1.162** | **0.284** | 0.117 / 0.117 / 0.137 |
+| meancell @150 | 1.089 (s12) | 1.263 | 0.355 | 0.135 / 0.134 / 0.156 |
+| **gm0_im150** | 1.128 (s101) | 1.347 | 0.446 | **0.138 / 0.147 / 0.193** |
+| data M | — | — | — | **0.080 / 0.104 / 0.145** |
+
+Best `gm0_im150` s101: traj 0.337 + prior 0.293 + `L_S` 0.497 =
+**1.128**. Prior is the term that lost vs regular@150 (0.243 on
+regular s101). Fit losses (own-stim) are not comparable across
+arms; s333 recorded 0.925 but eval-fair is 1.340.
+
+M shape (shared stim). Data 40→70 is a **notch** (0.078 → 0.080
+after a 50 ms bump at 0.096). Every `gm0_im150` seed still
+**ramps** 40→70 by +0.018 to +0.028:
+
+| t (ms) | data M | gm0 s101 | gm0 s12 | meancell s12 | regular s101 |
+|-------:|-------:|---------:|--------:|-------------:|-------------:|
+| 0 | 0.065 | 0.085 | 0.082 | 0.089 | 0.064 |
+| 40 | 0.078 | 0.120 | 0.114 | 0.123 | 0.088 |
+| 60 | 0.085 | 0.137 | 0.130 | 0.136 | 0.099 |
+| 70 | **0.080** | **0.143** | **0.136** | 0.140 | 0.105 |
+| 80 | 0.104 | 0.146 | 0.140 | 0.141 | 0.108 |
+| 150 | 0.145 | 0.163 | 0.170 | 0.152 | 0.140 |
+
+No 60–70 ms pause. Early M is **higher** than regular@150, not
+lower. Late M **overshoots** (median 0.193 vs data 0.145 /
+regular 0.137). s89 is the only seed with a tiny 70→80 dip
+(0.129 → 0.127) and then a flat late rise to 0.147 — still no
+S-peak notch, and eval tot is 1.354.
+
+The 80 ms `gm0` “eval-tot win” (09-09j, 0.967) does not survive
+when the prior SSE can see 80–150 ms. Freezing `g_m`/`d_m` and
+letting the 150 ms loss pull the late climb just makes M taller
+through the S-peak window.
+
+Act-prior RT (10×20, same seed). Plots in each run’s
+`psychometric_model_vs_data_actprior/`.
+
+| seed | perf | RTcomb | split (con / inc) |
+|-----:|-----:|-------:|------------------:|
+| **101** | 0.758 | **0.791** | −0.17 (0.86 / **−1.26**) |
+| 12 | 0.628 | 0.676 | −0.07 (0.47 / −0.65) |
+| 89 | 0.754 | 0.727 | −0.99 (0.84 / −2.94) |
+| 45 | 0.426 | 0.730 | −1.54 (0.73 / −3.96) |
+| 7 | 0.554 | 0.623 | −2.11 (0.92 / −5.36) |
+| 333 | 0.513 | 0.464 | −2.61 (0.90 / −6.37) |
+| 34 | 0.423 | −0.10 | −5.27 (0.73 / −11.7) |
+| 303 | 0.137 | 0.316 | −5.16 (0.95 / −11.7) |
+
+Inc R² still negative on every seed. Best pooled RT is s101
+0.791 (meancell s12 0.834; 80 ms `gm0` s12 split +0.303 / inc
+−0.19). Concordant stays decent; incongruent is unchanged or
+worse than the 80 ms freeze.
+
+**Drop:** `g_m`/`d_m` freeze as an M-shape / 150 ms keep-list
+item. It was a cheap 80 ms tot win on a window that cannot see
+the residual. **Still drop:** `W_mm≤0.15`. **Next M lever:**
+option 1 (gate I→M until after the S peak). Option 4 (split /
+up-weight 40–80 ms M SSE) is the loss-side alternative. Restore
+`g_i` floor 0.1 before the next campaign (this run did not
+collapse, but the floor is still open).
+
+## 2026-09-11d — matching I/M CRF does not fix inc RT
+
+Artificial test on regular s101 (10×20, seed 12345, act-prior).
+Commit is first-passage of `tanh(M0−M1)` to θ_c / θ_d (S×P). I
+is not the bound variable. Per-contrast late-25 M stim residual
+(data − t0 vs model `|Δ|`) gave:
+
+| c | data | model | scale | add |
+|--:|-----:|------:|------:|----:|
+| 1.0 | 0.80 | 0.95 | 0.84 | −0.15 |
+| 0.25 | 0.58 | 0.45 | 1.29 | +0.13 |
+| 0.125 | 0.45 | 0.35 | 1.29 | +0.10 |
+| 0.0625 | 0.40 | 0.31 | 1.28 | +0.09 |
+| 0.0 | 0.40 | 0.28 | 1.42 | +0.12 |
+
+Replay of unwarped M recovers baseline RT (median |Δ| = 1 step;
+R² within ~0.02). Then:
+
+| arm | perf | RTcomb | split (con / inc) |
+|-----|-----:|-------:|------------------:|
+| baseline | 0.875 | **0.787** | 0.337 (**0.848** / **−0.209**) |
+| replay | 0.869 | 0.790 | 0.347 (0.842 / −0.184) |
+| scale to data M | 0.875 | **−0.230** | −0.275 (−0.196 / **−0.360**) |
+| add (data−model) | 0.875 | −0.200 | −0.268 (−0.137 / **−0.409**) |
+
+Boosting low-c / shrinking high-c M to match the data CRF
+**flattens** the RT vs contrast curve (hard trials hit θ
+earlier). Concordant collapses; incongruent gets worse. The
+inc hole is that discordant low-c does not *slow*; a larger
+low-c `|M|` does the opposite.
+
+So fitting the choice×contrast I/M traces better would not
+reduce the RT mismatch. Those curves pool con+inc and are not
+the bound-crossing clock. Plots: s101 `im_crf_warp_rt/`
+(`rt_split_baseline`, `rt_split_scale`, `rt_split_add`).
+
+## 2026-09-11d — I→M gate clamp (regular s303 @ 150 ms)
+
+Not a refit. Hard-zero `W_mi`/`g_m` on the current best 150 ms
+eval tot (regular s303, 1.086). Shared stim `bps=20` seed 12345.
+`prior_window_ms=150`. Optional params (default off):
+`w_mi_off_until_ms`, `w_mi_off_prestim`. Driver
+`scripts/_tmp_im_to_m_gate_clamp.py`. Plots + dump in s303
+`im_to_m_gate_clamp/`.
+
+| tag | tot | M0 | M40 | M70 | M80 | M150 | inc RT |
+|-----|----:|---:|----:|----:|----:|-----:|-------:|
+| data | — | 0.065 | 0.078 | **0.080** | 0.104 | 0.145 | — |
+| baseline | **1.086** | 0.077 | 0.107 | 0.127 | 0.128 | 0.146 | −2.54 |
+| prestim | 1.095 | 0.005 | **0.080** | 0.116 | 0.121 | 0.149 | −2.63 |
+| post60 | 1.401 | 0.074 | 0.029 | 0.049 | 0.068 | 0.143 | −2.80 |
+| post80 | 1.983 | 0.071 | 0.027 | 0.013 | 0.014 | 0.151 | −3.30 |
+| full60 | 1.609 | 0.000 | 0.000 | 0.035 | 0.056 | 0.152 | −2.74 |
+| full80 | 2.169 | 0.000 | 0.000 | 0.000 | 0.003 | 0.149 | −3.27 |
+
+Prestim-only is almost free on tot and puts M40 on the data.
+Then it **ramps harder** (40→70 +0.036 vs baseline +0.020).
+M0 collapses (0.005 vs data 0.065). Not a notch.
+
+Post-stim cutoffs hold M down through the S peak, then the
+late climb still recovers (M150 ≈ 0.15 on every arm). Amplitude
+in 40–80 ms is **too low**, not notched-at-data. Eval tot
+jumps +0.3 to +1.1 (traj + prior). `post80` has a 50→70 dip
+(−0.009) from a floor of 0.022 — the wrong height.
+
+RT (10×20, same seed): pooled RT is a bit better on the long
+gates (post80 0.617 vs 0.576) because con improves; **inc gets
+worse**. Gating does not close problem 2.
+
+**Do not launch** a hard 80 ms I→M cutoff. The lever is real
+(prestim `W_mi` is why early M is high). A campaign would need
+a **soft / fitted** attenuation that keeps M near ~0.08 through
+60–70 ms, not a binary off. Option 4 (40–80 M SSE) is still
+the loss-side alternative.
+
+## 2026-09-11e — inc RT dip at 0 is model, not a plot swap
+
+Act-prior con/inc is **plotted correctly**. Data: stim side
+(`contrastLeft` finite → L; IBL zeros are L=0/R=NaN or
+R=0/L=NaN, never both) × action-kernel 0.8 = left. Model:
+`trial_sides` +1 = R × binarized trial-mean P (`P_L−P_R < 0` →
++1 = R). Concordant R² **0.85** would not survive a sign flip.
+True-block vs act-prior agree on 86% of model trials; the RT
+shape is the same either way. n is fine (data inc ~5.5–6.6k /
+bin; model inc ~270–330).
+
+**Data** discordant is a smooth inverted-U, peak at 0, a bit
+above concordant at every contrast. No dip at 0; ±0.0625 is
+not high.
+
+| signed c | data n con/inc | data RTcon | data RTinc | model RTcon | model RTinc |
+|---------:|---------------:|-----------:|-----------:|------------:|------------:|
+| −1 | 14415 / 6246 | 0.174 | 0.191 | 0.130 | **0.109** |
+| −0.125 | 13241 / 5996 | 0.260 | 0.292 | 0.252 | **0.397** |
+| −0.0625 | 12076 / 5768 | 0.325 | 0.353 | 0.324 | **0.431** |
+| 0 | 12204 / 5677 | 0.413 | 0.426 | 0.403 | 0.429 |
+| +0.0625 | 11850 / 5486 | 0.352 | 0.366 | 0.345 | **0.467** |
+| +1 | 13285 / 6599 | 0.186 | 0.209 | 0.129 | **0.109** |
+
+The “dip at 0 / huge low-c RT” is **model incongruent**:
+peaks at ±0.0625 (esp. +0.0625 = 0.467), sits at 0.429 at
+c=0 (≈ model con 0.403), and is **too fast** at ±1 (0.109 vs
+data 0.19–0.21; 15% of |c|=1 inc have RT < 80 ms and are
+dropped). Negative inc R² is this W-shape, not a label swap.
+
+Why 0 dips: with S≈0, perceived S×P counts as concordant
+(`0·ΔP ≥ 0`), so labeled-inc zeros are prior-only — same
+clock as con. ±0.0625 inc has real weak S against
+prior-charged M, so first-passage is late. θ_d < θ_c
+(0.39 vs 0.77) makes **easy** inc even faster than con,
+which is the wrong sign vs data (data inc is slower at
+|c|=1 too). Correct-only inc looks worse (R² −1.23): at
+c=0 only 19% of model inc are “correct” (they followed the
+phantom stim side against the prior).
+
+## 2026-09-14 — act-prior RT table (s101) and paper scope
+
+Overlay (data con/inc solid, model dashed): openalyx
+`weights_run_fj_stageB_hold_s89_regular_mask12-13_s101/psychometric_model_vs_data_actprior/rt_split_model_vs_data.{png,svg}`.
+Not `psychometric_model_vs_data/` (true-block). Regular s101,
+10×20, seed 12345, data = action-kernel α=0.2. RT in seconds
+(0.08–2 s). Assignment check: 2026-09-11e.
+
+| signed c | data inc | model inc | data con | model con |
+|---------:|---------:|----------:|---------:|----------:|
+| −1 | 0.191 | 0.109 | 0.174 | 0.130 |
+| −0.25 | 0.243 | 0.273 | 0.217 | 0.198 |
+| −0.125 | 0.292 | 0.397 | 0.260 | 0.252 |
+| −0.0625 | 0.353 | 0.431 | 0.325 | 0.324 |
+| 0 | 0.426 | 0.429 | 0.413 | 0.403 |
+| +0.0625 | 0.366 | 0.467 | 0.352 | 0.345 |
+| +0.125 | 0.301 | 0.413 | 0.285 | 0.261 |
+| +0.25 | 0.265 | 0.259 | 0.235 | 0.197 |
+| +1 | 0.209 | 0.109 | 0.186 | 0.129 |
+
+Concordant is the average inverted-U. Incongruent is not: too
+fast at |c|=1, too slow at ±0.0625 / ±0.125, and a dip at 0
+that the data do not have.
+
+**Scope for the paper.** This is not a complete account of
+why the animal moves when it does. It does not include lapse
+structure (impatience, zoning out, and other mistakes),
+contrast dependence of the action threshold, or contrast
+dependence of prior modulation — among other things that
+clearly matter for single-trial behavior. What it can capture
+is the **overall** psychometric / RT pattern on average
+(concordant RT already does). One could take the model further
+on those missing pieces (arguably many steps further). Whether
+that is worth it for the **current** paper is the decision:
+the remaining incongruent RT shape is real, but it sits
+outside the mechanisms this draft is using to make the
+prior / I / M claim.
+
+## 2026-09-14b — S-prior 150 ms stim×choice, correct metric
+
+Regular 150 ms meancell is done; 80 ms regular and all `full` + S
+arms were still `‖mean_c Δ‖`. Wired a rerun of **one** arm: `full`
+(`g_s`/`d_s` free) + unsplit-80 S + **150 ms stim×choice I/M**, tag
+`stageB_hold_s89_full_im150_meancell`. Command and keep-list:
+[fit_gs_ds_with_im.md](fit_gs_ds_with_im.md) 2026-09-14. Not
+submitted.

@@ -111,6 +111,16 @@ on the wrong arm. See [structured nulls](journals/structured_nulls_choice_lr.md)
 
 Cursor rule: `.cursor/rules/confirm-journal-options.mdc` (always applied).
 
+### Submit commands must match the aim
+
+Before printing a `submit_*.sh` command, wiring an ablation, or
+copying those scripts onto `main`, state **aim, window, stratum,
+freeze, what the loss can see**. If that disagrees with the latest
+ask, stop. Incident 2026-09-09: `gm0`/`mleak` fit at 80 ms for a
+150 ms M-shape aim.
+
+Cursor rule: `.cursor/rules/submit-matches-aim.mdc` (always applied).
+
 ### Research journals (`journals/`) — develop only
 
 - Journals are organized **by topic, not by date**: one file per line of investigation (e.g. `journals/s_prior_artifacts_truncation.md`), each holding the goal, the implementation, all dated updates, results, and open questions. `journals/README.md` is the index.

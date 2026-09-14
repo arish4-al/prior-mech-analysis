@@ -264,6 +264,11 @@ model_params = {
     # If set (ms), I/M prior-distance uses this window after stimOn and
     # before movement. None → legacy T=72 (144 ms) / plot_window=80.
     'prior_window_ms': None,
+    # Optional I→M gate (default off). Zero W_mi and g_m for k <
+    # steps_before_obs + until_steps. `w_mi_off_prestim` also zeros
+    # them during the ITI / prestim (k < steps_before_obs).
+    'w_mi_off_until_ms': 0.0,
+    'w_mi_off_prestim': False,
     # I/M prior-distance trial stratum. None / 'stim_choice' = stim × choice
     # (production). 'stim' = stim side only. 'all' = no stim/choice (lump).
     'prior_stratum': None,
@@ -972,6 +977,8 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
     gs_outside_adap = bool(model_params.get('gs_outside_adaptation', False))
     prestim_offset_start = model_params['prestim_offset_start']
     p_offset_always_on = bool(model_params.get('p_offset_always_on', False))
+    w_mi_off_until_ms = float(model_params.get('w_mi_off_until_ms', 0.0) or 0.0)
+    w_mi_off_prestim = bool(model_params.get('w_mi_off_prestim', False))
     # print(prestim_offset_start)
 
     def retinal_delay(c, alpha_d, beta_d, actual_dt):
@@ -1006,6 +1013,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
         return {k: np.nan for k in keys}
 
     dt = float(_get_dt_from_model_params(model_params))
+    w_mi_off_until_steps = int(round(w_mi_off_until_ms / dt)) if w_mi_off_until_ms > 0 else 0
     n_tr = 0
     L_steps = int(np.asarray(stimuli[0]).shape[1]) if len(stimuli) else 1
     for _bi in range(int(blocks_per_session)):
@@ -1112,6 +1120,13 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                 else: # single action threshold for all trials
                     action_threshold=action_thresholds
 
+                W_mi_t, g_m_t = W_mi, g_m
+                if w_mi_off_until_steps > 0 or w_mi_off_prestim:
+                    if k < steps_before_obs:
+                        if w_mi_off_prestim:
+                            W_mi_t, g_m_t = 0.0, 0.0
+                    elif w_mi_off_until_steps > 0 and k < (steps_before_obs + w_mi_off_until_steps):
+                        W_mi_t, g_m_t = 0.0, 0.0
                 if direct_offset:
                     I_ = I_ + dt/tau_i * nonlin(-I_ + W_ii * J @ I_
                                                 # + d_i * P_offset
@@ -1120,7 +1135,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                     I = I_ + d_i * P_offset
                     M_ = M_ + dt/tau_m * nonlin(-M_ + W_mm * J @ M_
                                             # + d_m * P_offset
-                                            + (W_mi * J + g_m * P_gain) @ I,
+                                            + (W_mi_t * J + g_m_t * P_gain) @ I,
                                             nonlin_type)
                     M = M_ + d_m * P_offset
                 else:
@@ -1131,7 +1146,7 @@ def _run_model_numpy(model_type, stimuli, trial_strengths, trial_sides, block_si
                     I_ = I
                     M = M + dt/tau_m * nonlin(-M + W_mm * J @ M
                                             + d_m * P_offset
-                                            + (W_mi * J + g_m * P_gain) @ I,
+                                            + (W_mi_t * J + g_m_t * P_gain) @ I,
                                             nonlin_type)
                     M_ = M
                 if m_sigma > 0.0:
@@ -1432,6 +1447,8 @@ def _run_model_kernel(
     u_commit,
     m_sigma,
     z_m,
+    w_mi_off_until_steps,
+    w_mi_off_prestim,
 ):
     Ntr = stim.shape[0]
     Ntot = Ntr * L
@@ -1528,6 +1545,16 @@ def _run_model_kernel(
                 aJg[0] = a[0] * Jg[0]
                 aJg[1] = a[1] * Jg[1]
 
+            W_mi_t = W_mi
+            g_m_t = g_m
+            if w_mi_off_until_steps > 0 or w_mi_off_prestim:
+                if k < steps_before_obs:
+                    if w_mi_off_prestim:
+                        W_mi_t = 0.0
+                        g_m_t = 0.0
+                elif w_mi_off_until_steps > 0 and k < (steps_before_obs + w_mi_off_until_steps):
+                    W_mi_t = 0.0
+                    g_m_t = 0.0
             if direct_offset:
                 S_ = S_ + (dt / tau_s) * _nl_vec(
                     -S_ + W_ss * _j_apply(S_) + aJg, nonlin_code)
@@ -1535,7 +1562,7 @@ def _run_model_kernel(
                 IS = _si_input(W_is, g_i, del_P, S)
                 I_ = I_ + (dt / tau_i) * _nl_vec(-I_ + W_ii * _j_apply(I_) + IS, nonlin_code)
                 I = I_ + d_i * P_offset
-                MI = _si_input(W_mi, g_m, del_P, I)
+                MI = _si_input(W_mi_t, g_m_t, del_P, I)
                 M_ = M_ + (dt / tau_m) * _nl_vec(-M_ + W_mm * _j_apply(M_) + MI, nonlin_code)
                 M = M_ + d_m * P_offset
             else:
@@ -1546,7 +1573,7 @@ def _run_model_kernel(
                 I = I + (dt / tau_i) * _nl_vec(
                     -I + W_ii * _j_apply(I) + d_i * P_offset + IS, nonlin_code)
                 I_ = I
-                MI = _si_input(W_mi, g_m, del_P, I)
+                MI = _si_input(W_mi_t, g_m_t, del_P, I)
                 M = M + (dt / tau_m) * _nl_vec(
                     -M + W_mm * _j_apply(M) + d_m * P_offset + MI, nonlin_code)
                 M_ = M
@@ -1723,6 +1750,9 @@ def _run_model_numba(model_type, stimuli, trial_strengths, trial_sides, block_si
         bool(model_params.get('p_offset_always_on', False)),
         float(thr_temp), u_commit,
         float(m_sigma), z_m,
+        int(round(float(model_params.get('w_mi_off_until_ms', 0.0) or 0.0) / dt))
+        if float(model_params.get('w_mi_off_until_ms', 0.0) or 0.0) > 0 else 0,
+        bool(model_params.get('w_mi_off_prestim', False)),
     )
 
     if not finite_ok:

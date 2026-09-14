@@ -7,9 +7,10 @@ alwaysApply: true
 
 If the latest message can mean **more than one named scheme** in
 `journals/` or the CLI (option 1 vs 2, strat vs fixedstim, Harris vs
-shuffle, split vs unsplit, true / act / bayes prior, …), **stop and
-ask** before implementing or submitting jobs. Do not pick the reading
-that is easiest to wire.
+shuffle, split vs unsplit, true / act / bayes prior, **80 vs 150 ms
+I/M prior window**, …), **stop and ask** before implementing or
+submitting jobs. Do not pick the reading that is easiest to wire or
+that matches an older keep-list.
 
 ## This repo (incident 2026-08-22)
 
@@ -31,3 +32,19 @@ Journal source of truth: [structured_nulls_choice_lr.md](journals/structured_nul
 
 Do not treat “same stratum as shuffle” as approval for `fixedstim`.
 Option 1 remakes that stratum **on the pseudo**.
+
+## This repo (incident 2026-09-09)
+
+`gm0` / `mleak` were meant to fix **stim-aligned M after the S peak**
+(notch 60–70 ms, climb after 80). They were fit with
+`prior_window_ms` unset (legacy **80 ms**) because test 6 said “keep
+production window unset” after `im150` lost on *production eval tot*.
+That keep-list is about ranking vs regular on 80 ms, not about an
+M-shape campaign whose target is invisible to an 80 ms prior term.
+
+**80 vs 150 is a named fork.** If the aim mentions the M/I curve
+through 60–150 ms, a post-80 climb, or “the 150 window,” **ask**
+before leaving the window unset. Do not inherit “production unset”
+from tests 1–6. Before any Stage B submit / add-to-main, state in
+one line: **window, stratum, freeze, what the prior SSE can see.**
+Do not rank a campaign on a metric the fit never optimized.
