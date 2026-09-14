@@ -14,6 +14,12 @@
 #   ARMS=full FORCE=1 bash scripts/submit_fit_stage_b_full_s_prior.sh
 #   ARMS="im150 im150stim stimonly" bash scripts/submit_fit_stage_b_full_s_prior.sh
 #
+#   # 150 ms stim×choice I/M + unsplit-80 S, mean_c‖Δ‖ (do not overwrite 09-08c):
+#   PARTITION=mit_preemptable ARMS=im150 FORCE=0 \
+#     bash scripts/submit_fit_stage_b_full_s_prior.sh
+#     → OUT_TAG stageB_hold_s89_full_im150_meancell
+#       (09-08c tag stageB_hold_s89_full_im150 used ‖mean_c Δ‖)
+#
 # Env: ARMS (full / im150 / im150stim / stimonly), plus all
 # submit_fit_stage_b_sharded.sh knobs (SEEDS PARTITION FORCE …).
 
@@ -56,8 +62,11 @@ for ARM in "${ARM_ARR[@]}"; do
       TAG="${OUT_TAG_FULL:-stageB_hold_s89_full}"
       ;;
     im150)
+      # 150 ms stim×choice I/M + unsplit-80 S. Default tag is mean_c‖Δ‖
+      # (2026-09-08f). The 09-08c run used ‖mean_c Δ‖ under
+      # stageB_hold_s89_full_im150 — do not overwrite that dir.
       export PRIOR_WINDOW_MS=150
-      TAG="${OUT_TAG_IM150:-stageB_hold_s89_full_im150}"
+      TAG="${OUT_TAG_IM150:-stageB_hold_s89_full_im150_meancell}"
       ;;
     im150stim)
       export PRIOR_WINDOW_MS=150
