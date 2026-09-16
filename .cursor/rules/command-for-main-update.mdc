@@ -1,0 +1,24 @@
+---
+description: Phrase “command for main update” → print git checkout develop -- files only
+alwaysApply: true
+---
+
+# Command for main update
+
+When the user asks for a **command for main update** (put files on `main`
+for ORCD):
+
+- Assume they will **commit on `develop` first**.
+- **Print only** `git checkout develop -- <paths>` with every file needed
+  for the **latest** remote run. They run it on `main`.
+- Do **not** use `cp`, `/tmp`, stash, merge, or `git pull`.
+- Do **not** lecture about a dirty worktree.
+- Do **not** include journals. Do **not** copy `model_functions.py` if it
+  has unrelated uncommitted work (e.g. `w_mi_off_*`).
+- Do **not** run the checkout unless they also say to run it.
+- Do **not** commit or push unless that message also says **commit** /
+  **push**.
+
+```bash
+git checkout develop -- scripts/foo.sh
+```

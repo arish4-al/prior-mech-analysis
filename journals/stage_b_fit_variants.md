@@ -33,7 +33,8 @@ I/M prior window **unset** = production (legacy T=72 / `plot_window=80`).
 Stratum **unset** = stim×choice. `include_stim` default **false** (no
 unsplit-80 S nSSE). I/M metric: `‖mean_c Δ‖` until 2026-09-08f, then
 `mean_c ‖Δ‖`. Later evals re-score old weights with current code; the
-**fit** still used whatever the code was that day.
+**fit** still used whatever the code was that day. **New** I/M `OUT_TAG`s
+include `_meancell` so they do not collide with pre-09-08f dirs.
 
 Dir pattern:
 `weights_run_fj_<OUT_TAG>_{regular_mask12-13|sensory_mask6-7-8-9|full_masknone|onethr_mask11-12-13}_s<seed>/`.
@@ -159,7 +160,7 @@ session (**s34 0.999**).
 
 | Tag | Restrictions | Notes |
 |-----|--------------|-------|
-| `stageB_hold_s89_full_mpre3` | full none; `m_pre_weight=3`; window unset (~80 ms); unsplit-80 S; `mean_c ‖Δ‖` | Test 5 × `full`. Do not FORCE old `full` dirs. |
+| `stageB_hold_s89_full_mpre3_meancell` | full none; `m_pre_weight=3`; window unset (~80 ms); unsplit-80 S; `mean_c ‖Δ‖` | Test 5 × `full`. Do not FORCE old `full` dirs. |
 | `stageB_hold_s89_mpre3_im150_meancell` | regular `12\|13`; `m_pre_weight=3`; 150 ms stim×choice; `mean_c ‖Δ‖` | Test 5 × 150. Fair eval at weight 1. [revisions](modeling_details_revisions.md) 09-15 |
 | `stageB_hold_s89_full_mpre3_im150_meancell` | full none; `m_pre_weight=3`; 150 ms stim×choice; unsplit-80 S; `mean_c ‖Δ‖` | Same + `g_s`/`d_s` free. [g_s/d_s with I/M](fit_gs_ds_with_im.md) 09-15 |
 

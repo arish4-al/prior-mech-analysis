@@ -29,6 +29,11 @@ disagrees with the **latest** aim, **stop** — do not print the command.
 4. **Keep-lists** from earlier tests apply only if the user re-asked
    that ranking. Do not inherit “production window,” `g_i` floor, or
    stratum from a different campaign.
+5. **I/M metric / tag.** New Stage B fits that score I/M prior-distance
+   use current `mean_c ‖Δ‖` (in `loss_prior_effect` since 09-08f). New
+   `OUT_TAG`s include `_meancell` so they do not collide with pre-09-08f
+   `‖mean_c Δ‖` dirs (`stageB_hold_s89_full`, `…_im150`, …). Do not
+   reuse those old tags for a meancell run.
 
 Named forks (80 vs 150, strat vs fixedstim, …) still require a pick
 first — `.cursor/rules/confirm-journal-options.mdc`.

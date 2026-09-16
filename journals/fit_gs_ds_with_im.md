@@ -563,7 +563,7 @@ Two tags, both `full:` + unsplit-80 S + `m_pre_weight=3`. Current
 
 | Tag | I/M window |
 |-----|------------|
-| `stageB_hold_s89_full_mpre3` | unset (~80 ms) |
+| `stageB_hold_s89_full_mpre3_meancell` | unset (~80 ms) |
 | `stageB_hold_s89_full_mpre3_im150_meancell` | 150 ms stim×choice |
 
 

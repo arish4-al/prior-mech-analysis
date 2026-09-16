@@ -1271,7 +1271,7 @@ FORCE old `mpre3` / `full` / `im150_meancell` dirs.
 
 | ARM | window | freeze | S sidecar | `OUT_TAG` |
 |-----|--------|--------|-----------|-----------|
-| `full` | unset (~80 ms) | none | unsplit-80 | `stageB_hold_s89_full_mpre3` |
+| `full` | unset (~80 ms) | none | unsplit-80 | `stageB_hold_s89_full_mpre3_meancell` |
 | `im150` | 150 ms | regular `12\|13` | no | `stageB_hold_s89_mpre3_im150_meancell` |
 | `full_im150` | 150 ms | none | unsplit-80 | `stageB_hold_s89_full_mpre3_im150_meancell` |
 

@@ -11,7 +11,8 @@
 #   PARTITION=mit_preemptable FORCE=1 \
 #     bash scripts/submit_fit_stage_b_full_s_prior.sh
 #
-#   ARMS=full FORCE=1 bash scripts/submit_fit_stage_b_full_s_prior.sh
+#   ARMS=full FORCE=0 bash scripts/submit_fit_stage_b_full_s_prior.sh
+#     → OUT_TAG stageB_hold_s89_full_meancell
 #   ARMS="im150 im150stim stimonly" bash scripts/submit_fit_stage_b_full_s_prior.sh
 #
 #   # 150 ms stim×choice I/M + unsplit-80 S, mean_c‖Δ‖ (do not overwrite 09-08c):
@@ -59,7 +60,10 @@ for ARM in "${ARM_ARR[@]}"; do
   _reset_arm_env
   case "$ARM" in
     full)
-      TAG="${OUT_TAG_FULL:-stageB_hold_s89_full}"
+      # 80 ms stim×choice + unsplit-80 S. Default tag is mean_c‖Δ‖.
+      # The 1e-12 campaign used stageB_hold_s89_full (‖mean_c Δ‖) — do
+      # not overwrite that dir.
+      TAG="${OUT_TAG_FULL:-stageB_hold_s89_full_meancell}"
       ;;
     im150)
       # 150 ms stim×choice I/M + unsplit-80 S. Default tag is mean_c‖Δ‖

@@ -17,7 +17,7 @@
 #
 #   # 80 ms (window unset) + m_pre=3, full (g_s/d_s free) + unsplit-80 S:
 #   ARMS=full FORCE=0 bash scripts/submit_fit_stage_b_mpre.sh
-#     → OUT_TAG stageB_hold_s89_full_mpre3
+#     → OUT_TAG stageB_hold_s89_full_mpre3_meancell
 #
 #   # 150 ms stim×choice + m_pre=3, full + unsplit-80 S:
 #   ARMS=full_im150 FORCE=0 bash scripts/submit_fit_stage_b_mpre.sh
@@ -35,8 +35,8 @@
 #     bash scripts/submit_fit_stage_b_mpre.sh
 #
 # Env: ARMS (full / im150 / full_im150), M_PRE_WEIGHT (default 3), plus
-# all submit_fit_stage_b_sharded.sh knobs. Do not FORCE existing mpre3 /
-# full / full_im150_meancell dirs.
+# all submit_fit_stage_b_sharded.sh knobs. New I/M tags include _meancell
+# (mean_c‖Δ‖). Do not FORCE existing mpre3 / full / full_im150_meancell dirs.
 
 set -euo pipefail
 
@@ -100,7 +100,7 @@ for ARM in "${ARM_ARR[@]}"; do
       # Production I/M window unset (~80 ms); full + unsplit-80 S.
       export VARIANTS="full:"
       export INCLUDE_STIM_PRIOR=1
-      TAG="${OUT_TAG_FULL:-stageB_hold_s89_full_mpre${_wtag}}"
+      TAG="${OUT_TAG_FULL:-stageB_hold_s89_full_mpre${_wtag}_meancell}"
       ;;
     im150)
       # Regular mask; 150 ms stim×choice I/M; mean_c‖Δ‖ (current code).
