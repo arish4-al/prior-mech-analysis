@@ -993,6 +993,9 @@ prior / I / M claim.
 Regular 150 ms meancell is done; 80 ms regular and all `full` + S
 arms were still `‖mean_c Δ‖`. Wired a rerun of **one** arm: `full`
 (`g_s`/`d_s` free) + unsplit-80 S + **150 ms stim×choice I/M**, tag
-`stageB_hold_s89_full_im150_meancell`. Command and keep-list:
-[fit_gs_ds_with_im.md](fit_gs_ds_with_im.md) 2026-09-14. Not
-submitted.
+`stageB_hold_s89_full_im150_meancell`. **Scored 09-14c:** 8/8, best
+fair s101 **1.269**, median **1.359** (old-metric im150 1.292 /
+1.707). No M notch; several S-success seeds kill late M. Plots +
+act-prior RT in each run dir (s12 inc R² **+0.21** but `g_i≈0`;
+s101 inc still −3.21). Tables:
+[fit_gs_ds_with_im.md](fit_gs_ds_with_im.md) 2026-09-14c.

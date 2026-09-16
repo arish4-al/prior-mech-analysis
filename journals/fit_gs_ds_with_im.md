@@ -10,10 +10,11 @@ mean-activity curves.
 Bayes priors, or the default regular/sensory freeze masks.
 
 **Status:** 1e-12-floor campaign scored 2026-09-09 (old `‖mean_c Δ‖`
-metric). Best fair tot **full s34 = 1.057** (S **0.028** via `d_s≈26`,
-`g_s≈0`, `g_i=185`). All four arms **32/32** local. **2026-09-14:**
-`full_im150` rerun wired as `stageB_hold_s89_full_im150_meancell`
-(150 ms stim×choice I/M + unsplit-80 S, `mean_c ‖Δ‖`). Not submitted.
+metric). Best fair tot **full s34 = 1.057**. **2026-09-14c:**
+`full_im150_meancell` 8/8 scored. Best fair **s101 = 1.269** (S 0.098,
+`d_s≈59`, `g_s≈0`, `g_i=86`). Median **1.359** vs old-metric im150
+**1.707**. Still behind 80 ms full s34 **1.057** and regular
+`im150_meancell` **1.089** (no S term). No 60–70 ms M notch.
 
 **Code:** curve builder
 [`scripts/build_s_prior_curve_unsplit80.py`](../scripts/build_s_prior_curve_unsplit80.py);
@@ -465,4 +466,105 @@ PARTITION=mit_preemptable ARMS=im150 FORCE=0 \
 
 Dirs:
 `weights_run_fj_stageB_hold_s89_full_im150_meancell_full_masknone_s{7,12,34,45,89,101,303,333}/`.
+
+## 2026-09-14c — `full_im150_meancell` scored (as fitted, 150 ms)
+
+8/8 `FIT_DONE`, `fit_status=ok`, `include_stim=true`,
+`prior_window_ms=150`, `prior_stratum` unset, `g_*`/`d_*` floor
+`1e-12`. Shared-stim eval `bps=20` seed **12345**, stim from regular
+s101, unsplit-80 S sidecar. Driver `_tmp_full_s_prior_eval.py`. Dump:
+`models/stageB_hold_s89_full_im150_meancell_eval.json`. Rank on
+**as-fitted** fair tot (traj + I/M + S + `L_S`). JSON `final_loss` is
+own-stim — not comparable.
+
+| arm | best fair | median fair | best S | S-success | best w/o S |
+|-----|----------:|------------:|-------:|----------:|-----------:|
+| 09-08c im150 (`‖mean_c Δ‖`) | 1.292 (s303) | 1.707 | 0.041 (s12) | 4/8 | 1.239 (s303) |
+| **im150_meancell** | **1.269** (s101) | **1.359** | **0.018** (s333) | **4/8** | 1.145 (s12) |
+| 09-08c full @80 | **1.057** (s34) | 1.697 | 0.027 (s45) | 4/8 | 1.022 (s7) |
+| regular meancell @150 (no S) | 1.089 (s12) | 1.263 | — | — | — |
+
+S-success = nSSE &lt; 0.1: **s7, s45, s101, s333**. s303 is 0.103.
+
+| seed | rec | traj | I/M | S | L_S | fair | w/o S | g_s | d_s | g_i |
+|-----:|----:|-----:|----:|--:|----:|-----:|------:|----:|----:|----:|
+| 7† | 1.372 | 0.368 | 0.375 | **0.085** | 0.445 | 1.273 | 1.188 | 0.078 | 41.6 | **0** |
+| 12† | 1.613 | 0.262 | 0.435 | 0.208 | 0.448 | 1.354 | **1.145** | ~0 | 31.9 | 0.24 |
+| 34 | 1.713 | 0.295 | 0.380 | 0.554 | 0.487 | 1.716 | 1.161 | ~0 | ~0 | 171 |
+| 45 | 1.850 | 0.326 | 0.520 | **0.094** | 0.424 | 1.364 | 1.270 | 1.31 | 76.5 | 177 |
+| 89 | 1.572 | 0.386 | 0.727 | 0.601 | 0.497 | 2.211 | 1.609 | ~0 | ~0 | 199 |
+| **101** | 1.561 | 0.271 | 0.458 | **0.098** | 0.441 | **1.269** | 1.170 | 0.013 | **58.7** | 86 |
+| 303 | 1.239 | 0.336 | 0.403 | 0.103 | 0.468 | 1.309 | 1.206 | ~0 | 63.8 | **200** |
+| 333 | 1.136 | 0.289 | 0.872 | **0.018** | 0.459 | 1.638 | 1.620 | **124** | 36.6 | 183 |
+
+† `g_i` collapsed. Production-window rescore is worse on every
+S-success seed except s333 (1.389 vs as-fit 1.638) — the 150 ms I/M
+term is what they were fit to.
+
+Same pattern as 09-08c: S that works is **`d_s` not `g_s`**, except
+s333 (`g_s=124`) which buys S **0.018** by blowing I/M (0.872).
+`g_m` stays ~0 except s12 0.029; s45 `d_m=2.38`. Median fair dropped
+because the old 150 ms I/M SSE was scoring the post-80 pooling
+cancellation. Best-of only moved 1.292 → 1.269.
+
+Stim-aligned M (shared stim). Data 40 / 70 / 80 / 150 =
+**0.078 / 0.080 / 0.104 / 0.145**. Every seed still **ramps** 40→70
+(~+0.01 to +0.02). No S-peak notch. Several S-success seeds **kill
+the late climb** (s101 M150 **0.117**, s12 0.131, s45 0.133).
+
+| t (ms) | data M | s101 | s7 | s303 | s333 | regular meancell s12 |
+|-------:|-------:|-----:|---:|-----:|-----:|---------------------:|
+| 40 | 0.078 | 0.139 | 0.137 | 0.136 | 0.123 | 0.123 |
+| 70 | **0.080** | **0.159** | 0.150 | 0.143 | 0.144 | 0.140 |
+| 80 | 0.104 | 0.158 | 0.145 | 0.135 | 0.151 | 0.141 |
+| 150 | 0.145 | **0.117** | 0.157 | 0.143 | 0.190 | 0.152 |
+
+I 80→150 now **rises** on s7 / s89 / s303 / s333 (metric fix). The
+best-fair seed s101 is still flat/down (0.054 → 0.050) — S + `d_s`
+can trade away the late I/M climb.
+
+**Read:** correcting the I/M pooling order makes 150 ms + S cheaper
+(median 1.707 → 1.359) but does not beat 80 ms `full` or regular
+150 ms meancell, and does not make the M pause. Usable hybrid is
+s101 (`d_s` path, `g_i` intact). Do not take s333’s S nSSE as a
+joint win.
+
+### Plots + act-prior RT (2026-09-14c)
+
+Shared stim `bps=20` seed 12345 from regular s101. Driver
+`scripts/_tmp_full_s_prior_plots.py`. Summary:
+`models/stageB_hold_s89_full_im150_meancell_plot_summary.json`.
+In each run dir: `IM_pre.svg` / `IM_post.svg`, `P_fit.svg`,
+`S_fit.png`, `prior_effects.svg`,
+`psychometric_model_vs_data_actprior/`.
+
+| seed | perf | RTcomb | split (con / inc) |
+|-----:|-----:|-------:|------------------|
+| 7† | 0.770 | −0.20 | −2.37 (0.53 / −5.48) |
+| **12**† | **0.906** | 0.754 | **0.510 (0.80 / 0.21)** |
+| 34 | 0.676 | 0.513 | −2.05 (0.88 / −5.18) |
+| 45 | 0.723 | 0.674 | −0.12 (0.62 / −0.91) |
+| 89 | 0.316 | 0.230 | −4.51 (0.74 / −10.1) |
+| **101** | 0.828 | 0.086 | −1.26 (0.56 / −3.21) |
+| 303 | 0.653 | **0.801** | −0.53 (0.72 / −1.86) |
+| 333 | 0.304 | 0.321 | −3.85 (0.72 / −8.73) |
+
+† `g_i` collapsed. s12 is the only non-negative *split* / inc R²
+(inc **+0.21**). Best-fair s101 has a dead pooled RT (0.086) and
+the usual W-shaped inc. s303 is the best pooled RT among
+`g_i`-intact seeds. Inc is still the hole on every S-success seed
+except the collapsed s12.
+
+### 2026-09-15 — full + mpre3 (queued)
+
+Two tags, both `full:` + unsplit-80 S + `m_pre_weight=3`. Current
+`mean_c ‖Δ‖`. Regular-mask 150 twin is `mpre3_im150_meancell`. Submit:
+[revisions 09-15](modeling_details_revisions.md). Not scored.
+
+| Tag | I/M window |
+|-----|------------|
+| `stageB_hold_s89_full_mpre3` | unset (~80 ms) |
+| `stageB_hold_s89_full_mpre3_im150_meancell` | 150 ms stim×choice |
+
+
 

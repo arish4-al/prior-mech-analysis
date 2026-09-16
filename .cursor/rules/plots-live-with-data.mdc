@@ -26,6 +26,11 @@ diagnostics go **inside that run directory**. Do **not** use repo `figs/`,
 Shared diagnostics for one “best” model (e.g. RT vs data) go **in that
 model’s run dir**, not a repo `figs/` sidecar.
 
+**SVG and PNG together.** Whenever you write an `.svg`, write a `.png`
+sibling in the same folder (matplotlib `dpi=150`, white face). Do not
+leave Stage B overlays SVG-only. `model_functions.savefig_svg_png`
+does this for I/M / P / prior-distance.
+
 Journals may **link** those ONE paths. They are not a place to dump
 binaries.
 

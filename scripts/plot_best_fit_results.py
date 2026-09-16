@@ -25,6 +25,7 @@ from model_functions import (
     compute_sse_stim_right,
     loss_plot_diff_by_condition_with_data,
     loss_prior_effect,
+    savefig_svg_png,
     int_regs,
     move_regs,
     trials_per_block_param,
@@ -149,6 +150,118 @@ def alias_prior_effects(out_dir: Path) -> None:
         shutil.copy2(png, out_dir / "prior_effects.png")
 
 
+ITI_COLORS = {
+    "S": {-1: "#1f4e79", 1: "#6baed6"},
+    "I": {-1: "#DAA520", 1: "#FFD700"},
+    "M": {-1: "#CC5500", 1: "#FF7F0E"},
+}
+ITI_LABELS = {
+    "S": {-1: "stim L", 1: "stim R"},
+    "I": {-1: "choice L", 1: "choice R"},
+    "M": {-1: "choice L", 1: "choice R"},
+}
+
+
+def _iti_signed_means(results, steps_before_obs, vn, group_by, dt, min_valid=10):
+    """Signed pop difference in the ITI window, split L vs R.
+
+    Window is ``[−400, −100)`` ms before stimOn of trial *t*, same as
+    ``avg_intertrial_by_prev_ch``. Labels are trial *t−1*: stim side for
+    ``group_by='stim'``, choice for ``group_by='choice'``. Each trace is
+    ``unit[1]−unit[0]`` (pop R − pop L) so L and R sit on opposite sides.
+    """
+    var = np.asarray(results[vn], dtype=float)
+    choices = results["choices"]
+    trial_sides = results["trial_sides"]
+    n = len(choices)
+    lens = [len(trial_sides[i]) for i in range(n)]
+    offsets = np.cumsum([0] + lens[:-1])
+    start_before = mf._iti_start_before_steps(dt)
+    end_before = mf._iti_end_before_steps(dt)
+    length = int(start_before - end_before)
+    hard_need = steps_before_obs + mf._min_trial_steps(dt)
+    buckets = {-1: [], 1: []}
+    if (
+        var.ndim != 2
+        or var.shape[1] != 2
+        or steps_before_obs < start_before
+        or steps_before_obs <= end_before
+        or length <= 0
+    ):
+        return {k: None for k in (-1, 1)}, length
+    for i in range(1, n):
+        if group_by == "stim":
+            lab = int(np.sign(trial_sides[i - 1][0]))
+        else:
+            lab = int(choices[i - 1])
+        if lab not in (-1, 1):
+            continue
+        if lens[i] < hard_need:
+            continue
+        start = offsets[i] + steps_before_obs - start_before
+        stop = offsets[i] + steps_before_obs - end_before
+        if start < offsets[i] or stop > offsets[i] + steps_before_obs:
+            continue
+        seg = var[start:stop, :]
+        if seg.shape[0] != length:
+            continue
+        buckets[lab].append(seg)
+    out = {}
+    for lab in (-1, 1):
+        segs = buckets[lab]
+        if len(segs) < min_valid:
+            out[lab] = None
+            continue
+        mean_t2 = np.mean(np.stack(segs, axis=0), axis=0)
+        arr = mean_t2.T
+        out[lab] = arr[1] - arr[0]
+    return out, length
+
+
+def plot_iti_mean_trajectories(results, steps_before_obs, model_params, save_dir):
+    """Three ITI mean-trajectory overlays: S (stim L/R), I and M (choice L/R)."""
+    dt = float(model_params.get("dt", mf._DEFAULT_DT))
+    t_ms = np.arange(
+        -mf.ITI_START_BEFORE_MS, -mf.ITI_END_BEFORE_MS, dt
+    )
+    specs = (("S", "stim"), ("I", "choice"), ("M", "choice"))
+    written = []
+    for vn, group_by in specs:
+        traces, length = _iti_signed_means(
+            results, steps_before_obs, vn, group_by, dt
+        )
+        t = t_ms[:length] if length else t_ms
+        fig, ax = plt.subplots(figsize=(4.0, 3.2))
+        for lab in (-1, 1):
+            y = traces.get(lab)
+            if y is None or y.size == 0:
+                continue
+            n = min(len(t), y.shape[0])
+            ax.plot(
+                t[:n],
+                y[:n],
+                "-",
+                linewidth=2,
+                color=ITI_COLORS[vn][lab],
+                label=ITI_LABELS[vn][lab],
+            )
+        ax.axhline(0, color="k", linewidth=0.8)
+        ax.axvline(-mf.ITI_END_BEFORE_MS, color="k", linewidth=1)
+        ax.set_xlim(-mf.ITI_START_BEFORE_MS, -mf.ITI_END_BEFORE_MS)
+        ax.set_xlabel("time before stimOn (ms)")
+        ax.set_ylabel(f"{vn} pop R − pop L")
+        ax.set_title(f"{vn} ITI ({group_by} L/R)")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.legend(frameon=False, fontsize=8, loc="upper left")
+        fig.tight_layout()
+        out = Path(save_dir) / f"{vn}_iti.svg"
+        savefig_svg_png(fig, str(out), transparent=True)
+        plt.close(fig)
+        written.append(out)
+    return written
+
+
 def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path,
              avg_mean_R=None, include_stim=False):
     mp, meta = load_plot_model(json_path)
@@ -175,6 +288,7 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         backend="numba",
         **mp,
     )
+    plot_iti_mean_trajectories(results, steps_before_obs, mp, out_dir)
     # Match paper-brain-wide-map/model_test.ipynb diagnostic cell.
     sim_out = mean_by_condition(results, steps_before_obs)
 

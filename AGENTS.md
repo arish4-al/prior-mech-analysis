@@ -31,6 +31,12 @@ Write figures **into the model/analysis directory that produced them**
 (openalyx `models/weights_run_*/`, alyx `models/` or `models/new/`,
 `manifold/res`, `manifold_sim/`). Do **not** dump them in repo `figs/`
 or `output/`. Cursor rule: `.cursor/rules/plots-live-with-data.mdc`.
+Every SVG overlay also gets a PNG sibling.
+
+**Analyze-and-report of new Stage B fits** must also **generate** those
+overlays (I/M traj, P, retinal S if present, prior-distance, act-prior
+psychometric + RT) — eval tables alone are incomplete. Cursor rule:
+`.cursor/rules/analyze-report-fits-include-plots.mdc`.
 
 ### Harris unique-null / long sessions → ORCD (since 2026-08-14)
 

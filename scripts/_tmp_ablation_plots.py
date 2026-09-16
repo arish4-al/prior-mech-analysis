@@ -65,8 +65,13 @@ def alias_svgs(out_dir: Path) -> None:
     }
     for dest, glob in mapping.items():
         hits = [p for p in out_dir.glob(glob) if p.name != dest]
-        if len(hits) == 1:
-            shutil.copy2(hits[0], out_dir / dest)
+        if not hits:
+            continue
+        newest = max(hits, key=lambda p: p.stat().st_mtime) if len(hits) > 1 else hits[0]
+        shutil.copy2(newest, out_dir / dest)
+        png = newest.with_suffix(".png")
+        if png.is_file():
+            shutil.copy2(png, out_dir / dest.replace(".svg", ".png"))
 
 
 def main():

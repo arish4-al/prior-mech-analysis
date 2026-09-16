@@ -125,6 +125,19 @@ def set_default_plot_style(nbins_x=4, nbins_y=4, labelsize=12):
 set_default_plot_style()
 
 
+def savefig_svg_png(fig, path, dpi=150, **kwargs):
+    """Write ``path`` (SVG) and a PNG sibling. PNG uses a white face so it
+    stays readable; SVG keeps the caller's ``transparent`` flag."""
+    path = str(path)
+    fig.savefig(path, **kwargs)
+    png = path[:-4] + ".png" if path.lower().endswith(".svg") else path + ".png"
+    png_kw = dict(kwargs)
+    png_kw["dpi"] = dpi
+    png_kw["transparent"] = False
+    png_kw.setdefault("facecolor", "white")
+    fig.savefig(png, **png_kw)
+
+
 # ONE is used here ONLY to resolve the local cache_dir for the paths below; the
 # model-fitting path (fit_weights.py) never calls ONE at runtime. Constructing ONE
 # in every parallel worker re-reads/rewrites ~/.one params and can race under loky
@@ -4835,7 +4848,7 @@ def loss_prior_effect(
                 param_name += f"_sfS{scale_factors[0]}_sfI{scale_factors[1]}_sfM{scale_factors[2]}"
             param_name += f"thr{model_params['action_thresholds']['concordant'][0]}_{model_params['action_thresholds']['discordant'][0]}"
             fname = f"{save_dir}/prior_effects_{param_name}.svg"
-            axs[0].figure.savefig(fname, transparent=True)
+            savefig_svg_png(axs[0].figure, fname, transparent=True)
 
     if any_tf_nan or not had_any_tf:
         sse['total'] = np.nan
@@ -5938,10 +5951,10 @@ def loss_plot_diff_by_condition_with_data(
             )
             param_name += f"thr{model_params['action_thresholds']['concordant'][0]}_" \
                           f"{model_params['action_thresholds']['discordant'][0]}"
-            fig_post.savefig(f'{save_dir}/IM_post_fit_{param_name}.svg', transparent=True)
-            fig_pre.savefig(f'{save_dir}/IM_pre_fit_{param_name}.svg', transparent=True)
+            savefig_svg_png(fig_post, f'{save_dir}/IM_post_fit_{param_name}.svg', transparent=True)
+            savefig_svg_png(fig_pre, f'{save_dir}/IM_pre_fit_{param_name}.svg', transparent=True)
             if fig_p is not None:
-                fig_p.savefig(f'{save_dir}/P_fit_{param_name}.svg', transparent=True)
+                savefig_svg_png(fig_p, f'{save_dir}/P_fit_{param_name}.svg', transparent=True)
 
     return sse_terms
 

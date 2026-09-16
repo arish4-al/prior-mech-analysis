@@ -1,0 +1,39 @@
+---
+description: Analyze-and-report of new Stage B fits must include S/I/M, prior, and behavior plots
+alwaysApply: true
+---
+
+# Analyze-and-report includes plots
+
+**Incident (2026-09-14c):** `full_im150_meancell` was scored with eval
+tables only. User had to ask for S/I/M, prior, and behavior overlays.
+
+When the user asks to **analyze and report** newly fitted Stage B / joint
+`weights_run_*` models, numbers alone are incomplete.
+
+## Required overlays (each run dir)
+
+Same shared-stim protocol as the eval (`bps=20`, stim seed **12345**,
+stim from regular **s101** unless the campaign says otherwise). Put
+files **in that run directory** (plots-live-with-data). Do not use
+repo `figs/`.
+
+| Overlay | Typical files |
+|---------|----------------|
+| I/M traj vs data | `IM_pre.svg` / `.png` (alias of `IM_pre_fit_gi…`) |
+| P traj | `P_fit.svg` / `.png` |
+| retinal S vs contrast (`L_S`) | `S_fit.png` (if that term exists) |
+| prior-distance I/M (+ S sidecar if `include_stim`) | `prior_effects.svg` / `.png` |
+| ITI mean traj (S stim L/R; I/M choice L/R) | `S_iti.svg` / `I_iti.svg` / `M_iti.svg` (+ `.png`) |
+| act-prior psychometric + RT combined + RT split | `psychometric_model_vs_data_actprior/` |
+
+S ITI splits previous-trial **stim** L vs R; I and M split previous-trial
+**choice** L vs R. Two signed pop-diff traces per figure. Included from
+`plot_best_fit_results.plot_one`.
+
+Reuse the campaign driver if it exists (`_tmp_full_s_prior_plots.py`,
+`_tmp_*_actprior_rt.py`, `plot_best_fit_results.plot_one`). Journal
+may **link** the ONE paths.
+
+Every SVG must have a PNG sibling. Do **not** skip plots because eval
+tot already exists.

@@ -50,6 +50,9 @@ ARMS = {
     "im150": "weights_run_fj_stageB_hold_s89_full_im150_full_masknone",
     "im150stim": "weights_run_fj_stageB_hold_s89_full_im150stim_full_masknone",
     "stimonly": "weights_run_fj_stageB_hold_s89_full_stimonly_full_masknone",
+    "im150_meancell": (
+        "weights_run_fj_stageB_hold_s89_full_im150_meancell_full_masknone"
+    ),
 }
 NEW = BASE / "new"
 
@@ -60,7 +63,10 @@ def resolve_run(prefix: str, seed: int) -> Path | None:
         if d.is_dir():
             return d
     return None
-OUT = BASE / "stageB_hold_s89_full_s_prior_1e12_plot_summary.json"
+OUT = Path(os.environ.get(
+    "PLOT_OUT",
+    str(BASE / "stageB_hold_s89_full_s_prior_1e12_plot_summary.json"),
+))
 TS = re.compile(r"(\d{8}-\d{6})")
 
 
@@ -190,7 +196,7 @@ def main():
             flush=True,
         )
 
-    if only and OUT.is_file():
+    if only and OUT.is_file() and "PLOT_OUT" not in os.environ:
         prev = json.loads(OUT.read_text())
         traj_rows = [r for r in prev.get("traj", []) if r.get("arm") not in only] + traj_rows
         rt_rows = [r for r in prev.get("rt", []) if r.get("arm") not in only] + rt_rows

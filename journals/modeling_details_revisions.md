@@ -1262,4 +1262,23 @@ Do not `FORCE` the old `stageB_hold_s89_im150` dirs.
 **Continued** (09-09 score + remaining shape aims):
 [prior-curve dips and discordant RT](modeling_details_prior_rt_gaps.md).
 
+### 2026-09-15 — mpre3 × 150 ms meancell + 80 ms full (queued, not scored)
+
+Test 5 (`m_pre_weight=3`) was 80 ms **regular** only. New dirs, current
+`mean_c ‖Δ‖`, stim×choice. Fit at 3× M-pre; fair eval later at weight 1
+(same as 08-31). `g_i` floor is still the checkout **1e-12**. Do not
+FORCE old `mpre3` / `full` / `im150_meancell` dirs.
+
+| ARM | window | freeze | S sidecar | `OUT_TAG` |
+|-----|--------|--------|-----------|-----------|
+| `full` | unset (~80 ms) | none | unsplit-80 | `stageB_hold_s89_full_mpre3` |
+| `im150` | 150 ms | regular `12\|13` | no | `stageB_hold_s89_mpre3_im150_meancell` |
+| `full_im150` | 150 ms | none | unsplit-80 | `stageB_hold_s89_full_mpre3_im150_meancell` |
+
+```bash
+PARTITION=mit_preemptable ARMS="full im150 full_im150" FORCE=0 \
+  bash scripts/submit_fit_stage_b_mpre.sh
+```
+
+
 

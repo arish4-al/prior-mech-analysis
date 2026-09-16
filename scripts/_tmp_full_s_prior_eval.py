@@ -34,8 +34,10 @@ from model_functions import (  # noqa: E402
     mean_by_condition,
     mean_S_by_contrast,
     move_regs,
+    prior_distance_I_M_both_alignments,
     prior_stratum_of,
     prior_window_ms_of,
+    resolve_prior_distance_window,
     run_model,
 )
 
@@ -49,6 +51,9 @@ ARMS = {
     "im150stim": "weights_run_fj_stageB_hold_s89_full_im150stim_full_masknone",
     "stimonly": "weights_run_fj_stageB_hold_s89_full_stimonly_full_masknone",
     "regular": "weights_run_fj_stageB_hold_s89_regular_mask12-13",
+    "im150_meancell": (
+        "weights_run_fj_stageB_hold_s89_full_im150_meancell_full_masknone"
+    ),
 }
 NEW = BASE / "new"
 
@@ -59,7 +64,10 @@ def resolve_run(prefix: str, seed: int) -> Path | None:
         if d.is_dir():
             return d
     return None
-OUT = BASE / "stageB_hold_s89_full_s_prior_1e12_eval.json"
+OUT = Path(os.environ.get(
+    "EVAL_OUT",
+    str(BASE / "stageB_hold_s89_full_s_prior_1e12_eval.json"),
+))
 TS = re.compile(r"(\d{8}-\d{6})")
 
 
@@ -116,6 +124,23 @@ def score(mp, results, steps_before_obs, mean_data, prior_regions, avg_mean_R,
         "eval_fair_noS": (traj + im + L_S) if L_S is not None else None,
         "gof_prior": float(loss_prior.get("gof", float("nan"))),
     }
+
+
+def stim_IM_at(results, steps_before_obs, mp, tqs=(0, 40, 60, 70, 80, 110, 150)):
+    T, _, _ = resolve_prior_distance_window(mp, T=72, plot_window=80)
+    out = prior_distance_I_M_both_alignments(
+        results, steps_before_obs, T=T, metric="l2",
+        include_all_trials=True, lump_all=False,
+    )
+    I = np.asarray(out["I"]["start"], float)
+    M = np.asarray(out["M"]["start"], float)
+    win = float(prior_window_ms_of(mp) or 144.0)
+    t = np.linspace(0.0, win, len(I))
+    pts = {}
+    for tq in tqs:
+        pts[f"I{int(tq)}"] = float(np.interp(tq, t, I))
+        pts[f"M{int(tq)}"] = float(np.interp(tq, t, M))
+    return pts
 
 
 def sim_one(jp: Path, stim_bundle):
@@ -203,6 +228,7 @@ def main():
                 continue
             jp = newest_final(d)
             mp, meta, results, sbo, info = sim_one(jp, stim_bundle)
+            shape = stim_IM_at(results, sbo, mp)
             for label, win, stratum in settings_for(arm, mp):
                 mp_sc = dict(mp)
                 mp_sc["prior_window_ms"] = win
@@ -212,17 +238,26 @@ def main():
                     stim_curve,
                 )}
                 rec = {"arm": arm, "seed": seed, "setting": label, **ev}
+                if label == "asfit":
+                    rec.update(shape)
                 rows.append(rec)
+                extra = ""
+                if label == "asfit":
+                    extra = (
+                        f"  M40={shape['M40']:.3f} M70={shape['M70']:.3f} "
+                        f"M80={shape['M80']:.3f} M150={shape['M150']:.3f}"
+                    )
                 print(
                     f"{arm:10} {seed:4d} {label:>6} {ev['recorded']:7.3f} "
                     f"{ev['eval_traj']:7.3f} {ev['eval_IM']:7.3f} "
                     f"{ev['eval_prior_S']:7.3f} {ev['eval_LS']:7.3f} "
                     f"{ev['eval_fair']:7.3f} {ev['eval_fair_noS']:7.3f} "
-                    f"{ev['g_s']:8.3g} {ev['d_s']:8.3g} {ev['g_i']:7.2f}",
+                    f"{ev['g_s']:8.3g} {ev['d_s']:8.3g} {ev['g_i']:7.2f}"
+                    f"{extra}",
                     flush=True,
                 )
 
-    if only and OUT.is_file():
+    if only and OUT.is_file() and "EVAL_OUT" not in os.environ:
         prev = json.loads(OUT.read_text())
         kept = [r for r in prev.get("eval", []) if r.get("arm") not in only]
         rows = kept + rows

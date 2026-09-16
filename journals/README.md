@@ -18,7 +18,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Retinal then joint](retinal_then_joint_fitting.md) | Pivot: fit retinal @ all prior g/d≈0, then joint with retinal free to tweak; regular/sensory; modernize `fit_retinal` |
 | [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds; 3× pre-action M (08-31); I/M prior at full 150 ms (09-07); `im150stim` / `stimonly` (09-08; open `g_i` floor worse; restore `0.1`); model I/M distance = `mean_c ‖Δ‖` (09-08f; im150 meancell rerun) |
 | [Prior-curve dips and discordant RT](modeling_details_prior_rt_gaps.md) | Remaining shape gaps after tests 1–6: **M** stim-aligned ramps through the S-peak pause; incongruent RT still the wrong shape (too fast at |c|=1, too slow at low c). 09-14: full act-prior RT table (s101); open whether more lapse/threshold machinery is worth it for this paper |
-| [Fit g_s/d_s with I/M prior mods](fit_gs_ds_with_im.md) | Joint `full` mask (all prior gains free); S prior-distance target from unsplit 80 ms FDR@0.01 ∩ stim/stim_early (13 regions); 09-14 `full_im150_meancell` rerun wired (`mean_c ‖Δ‖`; not submitted) |
+| [Stage B fit variants (catalog)](stage_b_fit_variants.md) | Index of every scored Stage B / joint tag: freeze, I/M window / stratum, S sidecar, best seed. Details stay in the topic journals; append a row when a new arm is scored |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
 ## Real data (`block_analysis_allsplits.py`, BWM)
