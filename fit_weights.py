@@ -709,7 +709,8 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          stim_rng=None, stimuli_bundle=None,
                          p_offset_always_on=None, iti_penalty=None,
                          tied_thresholds=None, m_pre_weight=None,
-                         prior_window_ms=None, prior_stratum=None):
+                         prior_window_ms=None, prior_stratum=None,
+                         im_window_stim_ms=None, im_window_choice_ms=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
     Combines trajectory, prior-effect, and behavioral losses.
@@ -753,6 +754,8 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
             m_pre_weight=m_pre_weight,
             prior_window_ms=prior_window_ms,
             prior_stratum=prior_stratum,
+            im_window_stim_ms=im_window_stim_ms,
+            im_window_choice_ms=im_window_choice_ms,
         )
 
         # ---------- STIMULI ----------
@@ -799,8 +802,9 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
 
         # ---------- AVG ----------
         try:
-            sim_out = mean_by_condition(results, steps_before_obs, T=72,
-                                        var_names=("I", "P", "M"))
+            T_post, T_pre = im_traj_T_of(model_params)
+            sim_out = mean_by_condition(results, steps_before_obs, T=T_post,
+                                        T_pre=T_pre, var_names=("I", "P", "M"))
         except Exception:
             if debug:
                 import traceback

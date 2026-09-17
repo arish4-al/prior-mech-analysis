@@ -289,9 +289,18 @@ def build_args(argv=None):
                     help="Multiply pre-action M nSSE in the traj loss "
                          "(post-start M stays 1). Default 1.")
     ap.add_argument("--prior-window-ms", type=float, default=None,
-                    help="I/M prior-distance window after stimOn and before "
-                         "movement (ms). Default unset = legacy T=72 (144 ms) "
-                         "/ plot_window=80. Modeling-details test 6: 150.")
+                    help="Shared I/M traj + prior window after stimOn and "
+                         "before movement (ms). Default unset = legacy T=72 "
+                         "(144 ms) / plot_window=80. Overridden per alignment "
+                         "by --im-window-stim-ms / --im-window-choice-ms.")
+    ap.add_argument("--im-window-stim-ms", type=float, default=None,
+                    help="Post-stim (start-aligned) I/M traj + prior window "
+                         "(ms). Overrides --prior-window-ms for stim. "
+                         "Unset = shared / legacy.")
+    ap.add_argument("--im-window-choice-ms", type=float, default=None,
+                    help="Pre-move (action-aligned) I/M traj + prior window "
+                         "(ms). Overrides --prior-window-ms for choice. "
+                         "Unset = shared / legacy.")
     ap.add_argument("--prior-stratum", type=str, default=None,
                     choices=("stim_choice", "stim", "all"),
                     help="I/M prior-distance trial stratum. Default unset = "
@@ -304,9 +313,14 @@ def main(argv=None):
     args = build_args(argv)
     if args.m_pre_weight < 0:
         raise SystemExit("--m-pre-weight must be >= 0")
-    if args.prior_window_ms is not None and (
-            not np.isfinite(args.prior_window_ms) or args.prior_window_ms <= 0):
-        raise SystemExit("--prior-window-ms must be a positive duration in ms")
+
+    def _require_positive_ms(val, flag):
+        if val is not None and (not np.isfinite(val) or val <= 0):
+            raise SystemExit(f"{flag} must be a positive duration in ms")
+
+    _require_positive_ms(args.prior_window_ms, "--prior-window-ms")
+    _require_positive_ms(args.im_window_stim_ms, "--im-window-stim-ms")
+    _require_positive_ms(args.im_window_choice_ms, "--im-window-choice-ms")
     if (args.w_pp_lo is None) ^ (args.w_pp_hi is None):
         raise SystemExit("--w-pp-lo and --w-pp-hi must be set together")
     if args.w_pp_lo is not None:
@@ -432,7 +446,8 @@ def main(argv=None):
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
-                 "m_pre_weight", "prior_window_ms", "prior_stratum"):
+                 "m_pre_weight", "prior_window_ms", "prior_stratum",
+                 "im_window_stim_ms", "im_window_choice_ms"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -445,6 +460,10 @@ def main(argv=None):
     model_params["m_pre_weight"] = float(args.m_pre_weight)
     model_params["prior_window_ms"] = (
         None if args.prior_window_ms is None else float(args.prior_window_ms))
+    model_params["im_window_stim_ms"] = (
+        None if args.im_window_stim_ms is None else float(args.im_window_stim_ms))
+    model_params["im_window_choice_ms"] = (
+        None if args.im_window_choice_ms is None else float(args.im_window_choice_ms))
     model_params["prior_stratum"] = args.prior_stratum
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
@@ -477,6 +496,8 @@ def main(argv=None):
           f"tied_thresholds={bool(args.tied_thresholds)} "
           f"m_pre_weight={float(args.m_pre_weight):g} "
           f"prior_window_ms={args.prior_window_ms} "
+          f"im_window_stim_ms={args.im_window_stim_ms} "
+          f"im_window_choice_ms={args.im_window_choice_ms} "
           f"prior_stratum={args.prior_stratum} "
           f"g_i_bounds={tuple(NATIVE_BOUNDS['g_i'])} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
@@ -609,6 +630,10 @@ def main(argv=None):
         prior_window_ms=(
             None if args.prior_window_ms is None else float(args.prior_window_ms)),
         prior_stratum=args.prior_stratum,
+        im_window_stim_ms=(
+            None if args.im_window_stim_ms is None else float(args.im_window_stim_ms)),
+        im_window_choice_ms=(
+            None if args.im_window_choice_ms is None else float(args.im_window_choice_ms)),
         loss_extra_kwargs={
             "include_stim": include_stim,
             "stim_curve_path": str(stim_curve_path) if stim_curve_path else None,
@@ -633,6 +658,10 @@ def main(argv=None):
         "m_pre_weight": float(args.m_pre_weight),
         "prior_window_ms": (
             None if args.prior_window_ms is None else float(args.prior_window_ms)),
+        "im_window_stim_ms": (
+            None if args.im_window_stim_ms is None else float(args.im_window_stim_ms)),
+        "im_window_choice_ms": (
+            None if args.im_window_choice_ms is None else float(args.im_window_choice_ms)),
         "prior_stratum": args.prior_stratum,
         "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
