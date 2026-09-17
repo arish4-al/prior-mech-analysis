@@ -290,7 +290,8 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
     )
     plot_iti_mean_trajectories(results, steps_before_obs, mp, out_dir)
     # Match paper-brain-wide-map/model_test.ipynb diagnostic cell.
-    sim_out = mean_by_condition(results, steps_before_obs)
+    T_post, T_pre = mf.im_traj_T_of(mp)
+    sim_out = mean_by_condition(results, steps_before_obs, T=T_post, T_pre=T_pre)
 
     loss_traj = loss_plot_diff_by_condition_with_data(
         sim_out,

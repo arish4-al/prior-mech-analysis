@@ -31,8 +31,10 @@ regular on production eval tot (baseline median **1.051**).
 [`scripts/run_fit_joint.py`](../scripts/run_fit_joint.py)
 (`--p-offset-always-on`, `--no-iti-penalty`, `--w-pp-lo`/`--w-pp-hi`/
 `--set-w-pp`, `--tied-thresholds`, `--m-pre-weight`, `--prior-window-ms`,
-`--prior-stratum`);
-[`scripts/submit_fit_stage_b_model_ablations.sh`](../scripts/submit_fit_stage_b_model_ablations.sh).
+`--im-window-stim-ms` / `--im-window-choice-ms`, `--prior-stratum`);
+[`scripts/submit_fit_stage_b_model_ablations.sh`](../scripts/submit_fit_stage_b_model_ablations.sh);
+[`scripts/submit_fit_stage_b_splitwin.sh`](../scripts/submit_fit_stage_b_splitwin.sh)
+(150 ms post-stim / 80 ms pre-move).
 
 ---
 
@@ -1279,6 +1281,231 @@ FORCE old `mpre3` / `full` / `im150_meancell` dirs.
 PARTITION=mit_preemptable ARMS="full im150 full_im150" FORCE=0 \
   bash scripts/submit_fit_stage_b_mpre.sh
 ```
+
+### 2026-09-16 — mpre3 × 150 / full scored (`mean_c ‖Δ‖`)
+
+24/24 `FIT_DONE` in openalyx `models/`. Shared-stim eval `bps=20`
+seed **12345**, stim from regular s101. Rank **fair at
+`m_pre_weight=1`** (JSON `final_loss` includes 3× M-pre — not
+comparable). Full arms: unsplit-80 S nSSE in tot. Regular 150: traj
++ I/M + `L_S` only. Drivers: `_tmp_mpre3_meancell_eval.py`,
+`_tmp_mpre3_meancell_plots.py`. Dumps:
+`models/stageB_hold_s89_mpre3_meancell_eval.json`,
+`models/stageB_hold_s89_mpre3_meancell_plot_summary.json`.
+Overlays (I/M, P, prior, ITI S/I/M, act-prior psych+RT; S sidecar on
+full) live in each run dir.
+
+| arm | best fair @1 | median | vs twin (m_pre=1) |
+|-----|-------------:|-------:|-------------------|
+| `full_mpre3_meancell` (80 ms + S) | **1.054** (s89) | 1.665 | first 80 ms `full` with current metric; old-metric `full` s34 was 1.057 |
+| `mpre3_im150_meancell` (regular 150) | 1.154 (s303) | 1.225 | loses to `im150_meancell` s12 **1.089** / median 1.263 |
+| `full_mpre3_im150_meancell` (150 + S) | **1.186** (s7) | 1.338 | beats `full_im150_meancell` s101 **1.269** / median 1.359 |
+
+**Keep `m_pre_weight=1`.** None of the tot-winners beat production
+regular mean_c s34 **0.999**, and the 80 ms tot-winner’s pooled RT
+(s89 **0.751**) does not beat regular s101 **0.787**.
+
+#### 80 ms full + mpre3 (`full_mpre3_meancell`)
+
+S-success (nSSE &lt; 0.1): **s89 0.022**, **s45 0.025**. Rest fail
+(0.25–0.66). Same `d_s` not `g_s` path. `g_i` intact on all 8.
+
+| seed | traj | I/M | S | L_S | fair | g_i | d_s |
+|-----:|-----:|----:|--:|----:|-----:|----:|----:|
+| 7 | 0.280 | 0.280 | 0.254 | 0.466 | 1.281 | 172 | 22.6 |
+| 12 | 0.385 | 0.177 | 0.627 | 0.497 | 1.686 | 189 | ~0 |
+| 34 | 0.469 | 0.251 | 0.518 | 0.496 | 1.734 | 168 | ~0 |
+| 45 | 0.337 | 0.421 | **0.025** | 0.472 | 1.255 | 200 | 100 |
+| **89** | 0.375 | 0.201 | **0.022** | 0.456 | **1.054** | 138 | **49.7** |
+| 101 | 0.353 | 0.127 | 0.580 | 0.583 | 1.643 | 200 | 0.32 |
+| 303 | 0.248 | 0.264 | 0.658 | 0.634 | 1.805 | 60 | 0.50 |
+| 333 | 0.410 | 0.167 | 0.643 | 0.498 | 1.718 | 22 | ~0 |
+
+s45 kills late M (M150 **0.074**). s89 M 40/70/80/150 =
+0.109/0.131/0.132/0.129 — still ramps through the S-peak pause.
+
+Act-prior RT (10×20). Best-fair s89 pooled **0.751**, inc **−0.522**.
+s101 pooled 0.736 / inc **+0.151** but S failed.
+
+| seed | perf | RTcomb | split (con / inc) |
+|-----:|-----:|-------:|------------------|
+| 7 | 0.845 | 0.496 | −0.38 (0.76 / −1.60) |
+| 12 | 0.824 | 0.219 | −1.31 (0.69 / −3.45) |
+| 34 | 0.754 | 0.447 | −1.37 (0.78 / −3.66) |
+| 45 | 0.790 | 0.270 | −0.57 (0.56 / −1.78) |
+| **89** | 0.836 | **0.751** | 0.19 (0.85 / −0.52) |
+| 101 | **0.910** | 0.736 | **0.48 (0.79 / 0.15)** |
+| 303 | 0.820 | −0.11 | −0.82 (0.26 / −1.98) |
+| 333 | 0.870 | 0.136 | −0.10 (0.29 / −0.52) |
+
+#### Regular 150 + mpre3 (`mpre3_im150_meancell`)
+
+2/8 `g_i` collapse (s7, s12). I 80→150 rises on intact seeds. No M
+notch; intact seeds still climb after 80 (s303 M 0.136→0.165).
+
+| seed | traj | I/M | L_S | fair | g_i |
+|-----:|-----:|----:|----:|-----:|----:|
+| 7† | 0.276 | 0.487 | 0.497 | 1.260 | 0.0087 |
+| 12† | 0.318 | 0.387 | 0.497 | 1.202 | ~0 |
+| 34 | 0.342 | 0.386 | 0.497 | 1.225 | 160 |
+| 45 | 0.262 | 0.837 | 0.497 | 1.596 | 191 |
+| 89 | 0.488 | 0.212 | 0.497 | 1.197 | 200 |
+| 101 | 0.364 | 0.595 | 0.497 | 1.456 | 175 |
+| **303** | 0.359 | 0.299 | 0.496 | **1.154** | 196 |
+| 333 | 0.429 | 0.300 | 0.496 | 1.225 | 182 |
+
+† `g_i` collapsed. Best tot s303 pooled RT **0.782** (≈ regular s101
+0.787), inc −1.23. s333 is the RT seed (pooled **0.806**, inc
+**+0.379**) but fair 1.225.
+
+| seed | perf | RTcomb | split (con / inc) |
+|-----:|-----:|-------:|------------------|
+| 7† | 0.883 | 0.058 | −0.80 (0.45 / −2.14) |
+| 12† | **0.940** | 0.769 | 0.58 (0.87 / 0.27) |
+| 34 | 0.719 | 0.731 | −0.44 (0.81 / −1.77) |
+| 45 | 0.022 | −0.10 | −7.29 (0.69 / −15.8) |
+| 89 | 0.789 | 0.760 | −0.58 (0.94 / −2.19) |
+| 101 | 0.674 | 0.317 | −2.15 (0.79 / −5.29) |
+| **303** | 0.731 | 0.782 | −0.19 (0.78 / −1.23) |
+| **333** | 0.913 | **0.806** | **0.59 (0.79 / 0.38)** |
+
+#### 150 ms full + mpre3 (`full_mpre3_im150_meancell`)
+
+S-success 6/8 (s7, s12, s45†, s89, s101, s303). Fail: s34, s333
+(`g_s=1.78` path). s45 `g_i` collapsed. Best s7 is `d_s` with `g_i`
+intact. Still no M notch; s12 kills late M (0.157→0.135).
+
+| seed | traj | I/M | S | L_S | fair | g_i | d_s |
+|-----:|-----:|----:|--:|----:|-----:|----:|----:|
+| **7** | 0.416 | 0.300 | **0.023** | 0.446 | **1.186** | 180 | 41.1 |
+| 12 | 0.286 | 0.428 | 0.063 | 0.434 | 1.210 | 87 | 66.4 |
+| 34 | 0.384 | 1.038 | 0.712 | 0.498 | 2.632 | 156 | ~0 |
+| 45† | 0.379 | 0.488 | 0.060 | 0.442 | 1.369 | 0.54 | 46.7 |
+| 89 | 0.411 | 0.539 | 0.098 | 0.459 | 1.507 | 167 | 50.8 |
+| 101 | 0.511 | 0.210 | 0.059 | 0.456 | 1.235 | 200 | 48.8 |
+| 303 | 0.459 | 0.368 | **0.019** | 0.461 | 1.308 | 170 | 35.3 |
+| 333 | 0.345 | 0.353 | 0.557 | 0.498 | 1.752 | 200 | ~0 |
+
+† `g_i` collapsed. Best-fair s7 pooled RT **0.691**, split **+0.43**,
+inc **+0.207** (`g_i` intact — unlike `full_im150_meancell` s12).
+s12 inc **+0.470**. s34 is broken (perf 0.15, inc −19).
+
+| seed | perf | RTcomb | split (con / inc) |
+|-----:|-----:|-------:|------------------|
+| **7** | 0.811 | 0.691 | **0.43 (0.63 / 0.21)** |
+| 12 | **0.877** | 0.622 | **0.54 (0.61 / 0.47)** |
+| 34 | 0.151 | −0.78 | −9.01 (0.44 / −19.1) |
+| 45† | 0.823 | 0.697 | −0.12 (0.88 / −1.19) |
+| 89 | 0.692 | 0.046 | −2.63 (0.72 / −6.21) |
+| 101 | 0.765 | 0.435 | −0.96 (0.82 / −2.86) |
+| 303 | 0.724 | **0.722** | 0.06 (0.70 / −0.62) |
+| 333 | 0.666 | 0.691 | −0.08 (0.43 / −0.62) |
+
+**Read:** 3× M-pre still does not buy a 60–70 ms M notch, and does
+not replace production `m_pre_weight=1`. The only tot win vs a
+same-window twin is 150 ms `full`+S (s7 1.186 vs s101 1.269),
+mostly more S-success via `d_s`. Details for the two `full` arms:
+[g_s/d_s with I/M](fit_gs_ds_with_im.md) 09-16. M/RT shape:
+[prior-curve dips](modeling_details_prior_rt_gaps.md) 09-16.
+
+### 2026-09-16b — cross-window meancell fair (80 vs 150)
+
+The 09-16 mpre3 report ranked each arm at its **as-fitted** I/M
+window, so 80 ms `full` s89 **1.054** is not comparable to 150 ms
+`full` s7 **1.186**. Re-score all 64 regular / `full` ± mpre3
+finals at **both** windows, current `mean_c ‖Δ‖`, `m_pre_weight=1`,
+shared stim s101 / 12345 / `bps=20`. `full` tot includes unsplit-80
+S nSSE. Driver `_tmp_mpre3_crosswindow_meancell_eval.py`. Dump:
+`models/stageB_hold_s89_mpre3_crosswindow_meancell_eval.json`.
+
+Frozen regular `g_s`/`d_s` print as 0.
+
+**Best seed per fit tag.** Same seed can win both windows; if not,
+both are shown. `tot80` / `tot150` are that seed’s two fairs.
+
+Ranked at **80 ms** tot:
+
+| tag | seed | tot80 | tot150 | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|------:|-------:|----:|----:|----:|----:|----:|----:|
+| regular 80 | **34** | **0.999** | 1.107 | 166 | 0 | 0 | 22.4 | 0 | 0 |
+| regular 80 mpre3 | **101** | **0.927** | 1.069 | 186 | 0 | 0 | 21.5 | 0 | 0 |
+| regular 150 meancell | 34 | 1.029 | 1.210 | 185 | 0 | 0 | 22.8 | 0 | 0 |
+| regular 150 mpre3 | 303 | 1.085 | 1.154 | 196 | 0 | 0 | 19.2 | 0 | 0 |
+| `full` 80 | **34** | **1.056** | 1.483 | 185 | 0 | 0 | 0 | 0 | 25.7 |
+| `full` 80 mpre3 | **89** | **1.054** | 1.080 | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
+| `full` 150 meancell | 333 | 1.389 | 1.638 | 183 | 0 | 124 | 5.26 | 0 | 36.6 |
+| `full` 150 mpre3 | 101 | 1.198 | 1.235 | 200 | 5.78 | 0 | 7.16 | 0 | 48.8 |
+
+Ranked at **150 ms** tot:
+
+| tag | seed | tot80 | tot150 | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|------:|-------:|----:|----:|----:|----:|----:|----:|
+| regular 80 | 303 | 1.035 | **1.086** | 182 | 0 | 0 | 21.0 | 0 | 0 |
+| regular 80 mpre3 | **101** | 0.927 | **1.069** | 186 | 0 | 0 | 21.5 | 0 | 0 |
+| regular 150 meancell | **12** | 1.213 | **1.089** | 200 | 0.79 | 0 | 26.5 | 0 | 0 |
+| regular 150 mpre3 | 303 | 1.085 | 1.154 | 196 | 0 | 0 | 19.2 | 0 | 0 |
+| `full` 80 | 45 | 1.182 | **1.180** | 82.7 | 0.030 | 0 | 2.16 | 0.008 | 45.7 |
+| `full` 80 mpre3 | **89** | 1.054 | **1.080** | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
+| `full` 150 meancell | **101** | 1.463 | **1.269** | 85.6 | 0 | 0.013 | 22.9 | 0 | 58.7 |
+| `full` 150 mpre3 | **7** | 1.364 | **1.186** | 180 | 0 | 0 | 0 | 0.80 | 41.1 |
+
+**Pooled family** (80-fit ∪ 150-fit, 16 seeds):
+
+| family | @80 winner (tot80 / tot150) | @150 winner (tot80 / tot150) |
+|--------|-----------------------------|--------------------------------|
+| regular | 80-fit s34 **0.999** / 1.107 | 80-fit s303 1.035 / **1.086** |
+| regular mpre3 | 80-fit s101 **0.927** / 1.069 | **same** 0.927 / **1.069** |
+| `full` | 80-fit s34 **1.056** / 1.483 | 80-fit s45 1.182 / **1.180** |
+| `full` mpre3 | 80-fit s89 **1.054** / 1.080 | **same** 1.054 / **1.080** |
+
+**Read:** on a common meancell tot, 80-fit mpre3 regular **s101**
+is the cheapest seed at **both** windows (0.927 / 1.069). 150-fit
+regulars do **not** win the 150 ms ranking (production s303 **1.086**
+beats `im150_meancell` s12 **1.089**; 150 mpre3 s303 is 1.154).
+Same for `full`: 80-fit mpre3 s89 **1.080** at 150 ms beats
+150-fit mpre3 s7 **1.186** and `full_im150_meancell` s101 **1.269**.
+80-fit `full` s34 is still the no-mpre3 80 ms joint+S winner
+(1.056) but does not transfer (1.483 at 150); s45 does (1.182 /
+1.180) via `d_s≈46`. Catalog as-fitted rows stay; this is the
+cross-window table. Same two tables are also in
+[the catalog](stage_b_fit_variants.md) ranking cheat-sheet.
+
+### 2026-09-16c — split window (150 post-stim / 80 pre-move), queued
+
+Unify the windows used for I/M **traj and prior** (they were
+already meant to match; production unset still extracts T=72 and
+scores the last 40). Split:
+
+- **Post-stim** (`im_window_stim_ms=150`): early I/M has a
+  stim-onset auditory response, so the fit needs the longer
+  window to see the true post-stim shape.
+- **Pre-move** (`im_window_choice_ms=80`): the informative part
+  is near move onset. Earlier bins are noisy because trials of
+  different lengths are aligned at the action. Explicit 80 ms is
+  T=40 extract **and** score — not the production-unset path
+  (T=72 extract, last 40 scored).
+
+Stratum unset = stim×choice. S sidecar stays unsplit-80 on
+`full`. Metric `mean_c ‖Δ‖` (`_meancell` tags). `g_i` floor still
+`1e-12`. `FORCE=0`. Seeds `7 12 34 45 89 101 303 333`. Fit
+`m_pre_weight` 1 or 3 (rank mpre3 at 1, same as test 5).
+
+| ARM | Tag | freeze | S | m_pre |
+|-----|-----|--------|---|-------|
+| regular | `stageB_hold_s89_stim150_choice80_meancell` | `12\|13` | no | 1 |
+| regular_mpre3 | `stageB_hold_s89_mpre3_stim150_choice80_meancell` | `12\|13` | no | 3 |
+| full | `stageB_hold_s89_full_stim150_choice80_meancell` | none | unsplit-80 | 1 |
+| full_mpre3 | `stageB_hold_s89_full_mpre3_stim150_choice80_meancell` | none | unsplit-80 | 3 |
+
+Driver:
+[`scripts/submit_fit_stage_b_splitwin.sh`](../scripts/submit_fit_stage_b_splitwin.sh).
+CLI: `--im-window-stim-ms` / `--im-window-choice-ms` (split keys
+win over `--prior-window-ms`). Catalog queued rows:
+[stage_b_fit_variants.md](stage_b_fit_variants.md) 09-16c.
+
+**Aim / what the loss can see:** post-stim I/M traj + prior
+through 150 ms; pre-move I/M traj + prior last 80 ms only. S
+nSSE (full) is still unsplit-80, independent of the I/M split.
 
 
 

@@ -559,12 +559,82 @@ except the collapsed s12.
 
 Two tags, both `full:` + unsplit-80 S + `m_pre_weight=3`. Current
 `mean_c ‖Δ‖`. Regular-mask 150 twin is `mpre3_im150_meancell`. Submit:
-[revisions 09-15](modeling_details_revisions.md). Not scored.
+[revisions 09-15](modeling_details_revisions.md). **Scored 09-16.**
 
 | Tag | I/M window |
 |-----|------------|
 | `stageB_hold_s89_full_mpre3_meancell` | unset (~80 ms) |
 | `stageB_hold_s89_full_mpre3_im150_meancell` | 150 ms stim×choice |
+
+### 2026-09-16 — mpre3 `full` arms scored
+
+24/24 including the regular 150 twin. Shared-stim `bps=20` seed
+12345 from regular s101; rank fair at `m_pre_weight=1`; unsplit-80
+S in tot. Drivers `_tmp_mpre3_meancell_eval.py` /
+`_tmp_mpre3_meancell_plots.py`. Full tables:
+[revisions](modeling_details_revisions.md) 09-16.
+
+| arm | best fair @1 | median | S-success | vs twin |
+|-----|-------------:|-------:|----------:|---------|
+| 80 ms `full_mpre3_meancell` | **1.054** (s89) | 1.665 | 2/8 | first 80 ms `full` with current metric (old-metric `full` s34 1.057) |
+| 150 ms `full_mpre3_im150_meancell` | **1.186** (s7) | 1.338 | **6/8** | beats `full_im150_meancell` s101 1.269 / 4/8 S-success |
+| regular 150 `mpre3_im150_meancell` | 1.154 (s303) | 1.225 | — | loses to `im150_meancell` s12 1.089 |
+
+S that works is still **`d_s` not `g_s`**. 80 ms S-success: s89
+(`d_s≈50`, S **0.022**, `g_i=138`) and s45 (`d_s=100`, S 0.025).
+150 ms S-success: s7, s12, s45†, s89, s101, s303. Fail s34 (S 0.712)
+and s333 (`g_s=1.78`, S 0.557). s45 `g_i=0.54`.
+
+Best 150 ms seed s7: traj 0.416 + I/M 0.300 + S **0.023** + `L_S`
+0.446 = **1.186**; `d_s≈41`, `g_s≈0`, `g_i=180`. Lowest S nSSE is
+s303 **0.019** (`d_s≈35`) but I/M 0.368 → fair 1.308.
+
+Stim-aligned M. Data 40 / 70 / 80 / 150 = **0.078 / 0.080 / 0.104 /
+0.145**. Every seed still **ramps** 40→70. No S-peak notch. 80 ms
+s45 kills late M (M150 **0.074**); 150 ms s12 0.157→0.135.
+
+| t (ms) | data M | full80 s89 | full150 s7 | full150 s303 | full150 s12 |
+|-------:|-------:|-----------:|-----------:|-------------:|------------:|
+| 40 | 0.078 | 0.109 | 0.125 | 0.116 | 0.129 |
+| 70 | **0.080** | **0.131** | **0.151** | 0.142 | **0.154** |
+| 80 | 0.104 | 0.132 | 0.153 | 0.145 | 0.157 |
+| 150 | 0.145 | 0.129 | 0.168 | 0.165 | **0.135** |
+
+Act-prior RT. 80 ms tot-winner s89 pooled **0.751**, inc −0.52.
+150 ms tot-winner s7 pooled 0.691 / split **+0.43** / inc
+**+0.207** with `g_i` intact (the 09-14c `full_im150_meancell`
+positive-inc seed was collapsed s12). s12 here inc **+0.470**,
+`g_i=87`. s34 is broken (perf 0.15).
+
+**Read:** mpre3 does not change the S mechanism (`d_s` offset) or
+the M-shape miss. It does raise 150 ms `full` S-success 4/8 → 6/8
+and beats that twin on tot. 80 ms `full` mpre3 s89 is the best
+current-metric 80 ms joint+S seed (1.054) but the median is still
+a S-fail majority. Keep `m_pre_weight=1`. Do not FORCE old `full`
+dirs.
+
+### 2026-09-16b — cross-window (80 vs 150) on the same tot
+
+All 32 `full` ± mpre3 seeds re-scored at both I/M windows
+(current `mean_c ‖Δ‖`, `m_pre_weight=1`, S nSSE in tot). Full
+tables: [revisions](modeling_details_revisions.md) 09-16b.
+
+At **150 ms** tot the 80-fit seeds win: no-mpre3 **s45 1.180**
+(`d_s≈46`, `g_i=83`) beats `full_im150_meancell` s101 **1.269**;
+mpre3 **s89 1.080** (`d_s≈50`, `g_i=138`) beats 150-fit mpre3 s7
+**1.186**. s34 (80-fit, S 0.028, `d_s≈26`) stays the 80 ms
+no-mpre3 winner (**1.056**) but blows up at 150 (**1.483**).
+s89 is the only `full` seed that is cheap at **both** windows.
+
+### 2026-09-16c — split window queued (150 post-stim / 80 pre-move)
+
+`full` ± mpre3 with `im_window_stim_ms=150` /
+`im_window_choice_ms=80` (unsplit-80 S sidecar unchanged).
+Motivation and regular arms: [revisions](modeling_details_revisions.md)
+09-16c. Tags
+`stageB_hold_s89_full_stim150_choice80_meancell` and
+`stageB_hold_s89_full_mpre3_stim150_choice80_meancell`. Not scored.
+
 
 
 

@@ -999,3 +999,31 @@ fair s101 **1.269**, median **1.359** (old-metric im150 1.292 /
 act-prior RT in each run dir (s12 inc R² **+0.21** but `g_i≈0`;
 s101 inc still −3.21). Tables:
 [fit_gs_ds_with_im.md](fit_gs_ds_with_im.md) 2026-09-14c.
+
+## 2026-09-16 — mpre3 × 150 / full (M shape + inc RT)
+
+Three 8-seed campaigns, `m_pre_weight=3` at fit / **1** at eval,
+current `mean_c ‖Δ‖`. Tot tables:
+[revisions](modeling_details_revisions.md) 09-16. Test 5 already
+said extra M-pre does the *opposite* of holding M down through
+40–70 ms. Confirmed: **no 60–70 ms notch** on any of the 24 seeds.
+Every stim-aligned M still ramps 40→70.
+
+Best-fair M 40/70/80/150 vs data **0.078 / 0.080 / 0.104 / 0.145**:
+
+| arm (best tot) | 40 | 70 | 80 | 150 |
+|----------------|---:|---:|---:|----:|
+| 80 ms `full` mpre3 s89 | 0.109 | **0.131** | 0.132 | 0.129 |
+| regular 150 mpre3 s303 | 0.109 | **0.133** | 0.136 | 0.165 |
+| 150 ms `full` mpre3 s7 | 0.125 | **0.151** | 0.153 | 0.168 |
+
+Late climb is present on the 150 ms tot-winners (good vs several
+`full_im150_meancell` S-success seeds). The pause is still missing.
+
+Incongruent RT is not uniformly the hole on these arms. Regular
+150 mpre3 **s333** pooled **0.806** / inc **+0.379** (`g_i=182`).
+150 ms `full` mpre3 **s7** (tot winner) inc **+0.207** with `g_i`
+intact; s12 inc **+0.470**. 80 ms tot-winner s89 inc still −0.52.
+Pooled RT on tot-winners still does not clearly beat regular s101
+**0.787** (s89 0.751; s303 0.782; s7 0.691). Keep `m_pre_weight=1`.
+

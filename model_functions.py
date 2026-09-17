@@ -277,6 +277,11 @@ model_params = {
     # If set (ms), I/M prior-distance uses this window after stimOn and
     # before movement. None → legacy T=72 (144 ms) / plot_window=80.
     'prior_window_ms': None,
+    # Optional split: post-stim vs pre-move I/M traj + prior. When set,
+    # they override prior_window_ms per alignment. None → use
+    # prior_window_ms / legacy.
+    'im_window_stim_ms': None,
+    'im_window_choice_ms': None,
     # Optional I→M gate (default off). Zero W_mi and g_m for k <
     # steps_before_obs + until_steps. `w_mi_off_prestim` also zeros
     # them during the ITI / prestim (k < steps_before_obs).
@@ -424,9 +429,7 @@ def _prior_bucket_key(cell, sp_sign, strat):
     return cell + (sp_sign,)
 
 
-def prior_window_ms_of(mp):
-    """I/M prior-distance window in ms, or None for the legacy T=72 path."""
-    v = (mp or {}).get("prior_window_ms")
+def _positive_ms(v):
     if v is None:
         return None
     try:
@@ -438,22 +441,51 @@ def prior_window_ms_of(mp):
     return w
 
 
-def resolve_prior_distance_window(mp, T=72, plot_window=80):
-    """T (steps) and plot_window (ms) for ``loss_prior_effect``.
+def prior_window_ms_of(mp):
+    """Shared I/M window in ms, or None for the legacy T=72 path."""
+    return _positive_ms((mp or {}).get("prior_window_ms"))
 
-    Legacy (``prior_window_ms`` unset): keep the caller's T=72 / plot_window=80.
-    When set: T = round(window_ms / dt), plot_window = window_ms.
-    The third flag is True when the model curve should be resampled onto the
-    data bin count so the full window is scored (75 steps @ 2 ms → 72 data bins).
+
+def im_window_ms_of(mp, align):
+    """Per-alignment I/M window (ms), or None for legacy.
+
+    ``align`` is ``'stim'`` (post-stim / start) or ``'choice'`` (pre-move /
+    action). Split keys win; else ``prior_window_ms`` applies to both.
     """
-    w = prior_window_ms_of(mp)
+    if align not in ("stim", "choice"):
+        raise ValueError(f"align={align!r}; use 'stim' or 'choice'")
+    key = "im_window_stim_ms" if align == "stim" else "im_window_choice_ms"
+    w = _positive_ms((mp or {}).get(key))
+    if w is not None:
+        return w
+    return prior_window_ms_of(mp)
+
+
+def resolve_im_window(mp, align, T=72, plot_window=80):
+    """T (steps), plot_window (ms), resample-to-data for one alignment."""
+    w = im_window_ms_of(mp, align)
     if w is None:
         return int(T), float(plot_window), False
     dt = float((mp or {}).get("dt", _DEFAULT_DT))
     if not np.isfinite(dt) or dt <= 0.0:
         dt = _DEFAULT_DT
     t_use = max(1, int(round(w / dt)))
-    return t_use, float(w), True
+    # 80 ms matches production scoring (40 bins @ 2 ms, no resample).
+    # Longer windows (150) remap onto the data bin count.
+    resample = abs(w - 80.0) > 1e-6
+    return t_use, float(w), resample
+
+
+def resolve_prior_distance_window(mp, T=72, plot_window=80):
+    """Shared-window resolve (stim alignment). Prefer ``resolve_im_window``."""
+    return resolve_im_window(mp, "stim", T=T, plot_window=plot_window)
+
+
+def im_traj_T_of(mp, T=72):
+    """(T_post, T_pre) steps for I/M traj extract. Legacy both ``T``."""
+    T_post, _, _ = resolve_im_window(mp, "stim", T=T, plot_window=80)
+    T_pre, _, _ = resolve_im_window(mp, "choice", T=T, plot_window=80)
+    return int(T_post), int(T_pre)
 
 
 def _resample_to_len(y, n):
@@ -469,13 +501,14 @@ def _resample_to_len(y, n):
 
 def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
                                tied_thresholds=None, m_pre_weight=None,
-                               prior_window_ms=None, prior_stratum=None):
+                               prior_window_ms=None, prior_stratum=None,
+                               im_window_stim_ms=None, im_window_choice_ms=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
     through ``loss_extra_kwargs`` and applying them here is what the workers see.
     ``prior_window_ms=None`` / ``prior_stratum=None`` leave the current values
-    (they do not clear a previous 150 / stim).
+    (they do not clear a previous 150 / stim). Same for split I/M windows.
     """
     if p_offset_always_on is not None:
         mp["p_offset_always_on"] = bool(p_offset_always_on)
@@ -489,6 +522,10 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["prior_window_ms"] = float(prior_window_ms)
     if prior_stratum is not None:
         mp["prior_stratum"] = prior_stratum_of({"prior_stratum": prior_stratum})
+    if im_window_stim_ms is not None:
+        mp["im_window_stim_ms"] = float(im_window_stim_ms)
+    if im_window_choice_ms is not None:
+        mp["im_window_choice_ms"] = float(im_window_choice_ms)
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -3217,7 +3254,8 @@ def compute_sse_stim_right(avg_dict, avg_data_R, baseline_R=0,
 
 
 def _mean_by_condition_torch(results, steps_before_obs, T=72, var_names=("S","I","P","M"),
-                             grad_options=None):
+                             grad_options=None, T_pre=None):
+    T_pre_use = int(T) if T_pre is None else int(T_pre)
     grad_opts, dtype, device = _resolve_grad_options(
         {}, override=grad_options or {})
 
@@ -3269,7 +3307,7 @@ def _mean_by_condition_torch(results, steps_before_obs, T=72, var_names=("S","I"
                 for ch in (-1, 1):
                     if vn in ("I", "M"):
                         out[vn][('post', ('ch', ch))] = _nan_tensor((2, T))
-                        out[vn][('pre', ('ch', ch))] = _nan_tensor((2, T))
+                        out[vn][('pre', ('ch', ch))] = _nan_tensor((2, T_pre_use))
                     else:
                         out[vn][('ch', ch)] = _nan_tensor((2, T))
                 if vn in ("I", "M"):
@@ -3368,7 +3406,7 @@ def _mean_by_condition_torch(results, steps_before_obs, T=72, var_names=("S","I"
     def avg_by_ch_pre_torch(var_tensor, ch_sign):
         indices = [i for i in range(n) if choices[i] == ch_sign]
         return _avg_segments(indices, var_tensor, mode="pre_action",
-                             apply_fill=False, target_T=T)
+                             apply_fill=False, target_T=T_pre_use)
 
     def avg_for_P_torch(var_tensor, sp_sign, pre_T=150):
         indices = []
@@ -3469,7 +3507,7 @@ def _mean_by_condition_torch(results, steps_before_obs, T=72, var_names=("S","I"
     return out
 
 def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M"),
-                      gradient_mode=False, grad_options=None):
+                      gradient_mode=False, grad_options=None, T_pre=None):
     """
     For each var in var_names (S, I, P, M), compute mean traces by condition.
 
@@ -3495,7 +3533,13 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
     if gradient_mode:
         return _mean_by_condition_torch(
             results, steps_before_obs, T=T, var_names=var_names,
-            grad_options=grad_options or {})
+            grad_options=grad_options or {}, T_pre=T_pre)
+
+    T_post = int(T)
+    T_pre_use = int(T) if T_pre is None else int(T_pre)
+
+    def _T(mode):
+        return T_pre_use if mode == "pre_action" else T_post
 
     choices       = results['choices']
     trial_sides   = results['trial_sides']
@@ -3536,6 +3580,7 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
 
     # --- helpers ---
     def avg_for_var(var_list, ts_sign, ch_sign, sp_sign, *, mode="post_start", pre_T=150, apply_fill=False):
+        T = _T(mode)
         var_array = np.asarray(var_list, dtype=float)
         if var_array.ndim != 2 or var_array.shape[1] != 2:
             raise ValueError(f"Expected var entries to be 2D vectors; got shape {var_array.shape}")
@@ -3630,6 +3675,7 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
         return mean_T2.T, n_valid
 
     def avg_by_ch_sp(var_list, ch_sign, sp_sign, *, mode="post_start", pre_T=150, apply_fill=False):
+        T = _T(mode)
         sel = [i for i in range(n) if (choices[i] == ch_sign) and (_sp_sign(sub_prior[i][0]) == sp_sign)]
         segs, T_eff, n_valid = [], None, 0
         var_array = np.asarray(var_list, dtype=float)
@@ -3685,6 +3731,7 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
         return mean_T2.T, n_valid
 
     def avg_by_ch(var_list, ch_sign, *, mode="post_start", pre_T=150, apply_fill=False):
+        T = _T(mode)
         sel = [i for i in range(n) if choices[i] == ch_sign]
         segs, T_eff, n_valid = [], None, 0
         var_array = np.asarray(var_list, dtype=float)
@@ -3788,6 +3835,7 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
 
     def avg_by_ts(var_list, ts_sign, *, mode="post_start", pre_T=150, apply_fill=False):
         """Average grouped by trial side only (stim buckets)."""
+        T = _T(mode)
         var_array = np.asarray(var_list, dtype=float)
         sel = [i for i in range(n) if int(np.sign(trial_sides[i][0])) == ts_sign]
         segs, T_eff, n_valid = [], None, 0
@@ -3844,6 +3892,7 @@ def mean_by_condition(results, steps_before_obs, T=72, var_names=("S","I","P","M
 
     def avg_by_sp(var_list, sp_sign, *, mode="post_start", pre_T=150, apply_fill=False):
         """Average grouped by prior side only (sp buckets)."""
+        T = _T(mode)
         var_array = np.asarray(var_list, dtype=float)
         sel = [i for i in range(n) if _sp_sign(sub_prior[i][0]) == sp_sign]
         segs, T_eff, n_valid = [], None, 0
@@ -4041,7 +4090,7 @@ def plot_diff_by_condition(avg_dict, var_names=("S","I","P","M"), dt=2, reaction
 def prior_distance_I_M_both_alignments(
     results, steps_before_obs, T=75, metric="l2",
     include_all_trials=True, lump_all=False, stratum=None,
-    stratum_s=None,
+    stratum_s=None, T_action=None,
 ):
     """
     Prior-distance (sp=+1 vs sp=-1) under:
@@ -4085,6 +4134,10 @@ def prior_distance_I_M_both_alignments(
         stratum_s = "stim"
     if stratum_s not in ("stim_choice", "stim", "all"):
         raise ValueError("stratum_s must be 'stim_choice', 'stim', or 'all'")
+    T_action = int(T) if T_action is None else int(T_action)
+
+    def _T_align(mode):
+        return T_action if mode == "pre_action" else T
 
     choices       = results['choices']
     trial_sides   = results['trial_sides']
@@ -4099,11 +4152,12 @@ def prior_distance_I_M_both_alignments(
 
     # Global >50% fail → all NaNs
     if n > 0 and fail_cnt > n/2:
-        nanT = np.full(T, np.nan)
+        nan_start = np.full(T, np.nan)
+        nan_action = np.full(T_action, np.nan)
         return {
-            'I': {'start': nanT.copy(), 'action': nanT.copy()},
-            'M': {'start': nanT.copy(), 'action': nanT.copy()},
-            'S': {'start': nanT.copy(), 'action': np.array([])}
+            'I': {'start': nan_start.copy(), 'action': nan_action.copy()},
+            'M': {'start': nan_start.copy(), 'action': nan_action.copy()},
+            'S': {'start': nan_start.copy(), 'action': np.array([])}
         }
 
     def _segments_by_bucket(var_name, mode, strat):
@@ -4111,6 +4165,7 @@ def prior_distance_I_M_both_alignments(
         Collect aligned segments.
         Returns dict[(ts, ch, sp)] -> list of (T,2) arrays, or (sp,) if lump_all=True.
         """
+        T = _T_align(mode)
         var_array = np.asarray(results[var_name], dtype=float)
         if var_array.ndim != 2 or var_array.shape[1] != 2:
             raise ValueError(f"{var_name}: expected (TotalSteps,2), got {var_array.shape}")
@@ -4216,7 +4271,7 @@ def prior_distance_I_M_both_alignments(
 def _prior_distance_I_M_both_alignments_torch(
     results, steps_before_obs, T=75, metric="l2",
     include_all_trials=True, lump_all=False, stratum=None,
-    stratum_s=None,
+    stratum_s=None, T_action=None,
     dtype=torch.float32, device=torch.device('cpu')
 ):
     if lump_all:
@@ -4229,6 +4284,10 @@ def _prior_distance_I_M_both_alignments_torch(
         stratum_s = "stim"
     if stratum_s not in ("stim_choice", "stim", "all"):
         raise ValueError("stratum_s must be 'stim_choice', 'stim', or 'all'")
+    T_action = int(T) if T_action is None else int(T_action)
+
+    def _T_align(mode):
+        return T_action if mode == "pre_action" else T
 
     def _tensor(value):
         return _ensure_tensor(value, dtype=dtype, device=device, requires_grad=False)
@@ -4256,14 +4315,16 @@ def _prior_distance_I_M_both_alignments_torch(
     hard_need = steps_before_obs + _min_trial_steps()
     fail_cnt = sum(1 for m in lens if m < hard_need)
     if n > 0 and fail_cnt > n/2:
-        nan_vec = torch.full((T,), float('nan'), dtype=dtype, device=device)
+        nan_start = torch.full((T,), float('nan'), dtype=dtype, device=device)
+        nan_action = torch.full((T_action,), float('nan'), dtype=dtype, device=device)
         return {
-            'I': {'start': nan_vec.clone(), 'action': nan_vec.clone()},
-            'M': {'start': nan_vec.clone(), 'action': nan_vec.clone()},
-            'S': {'start': nan_vec.clone(), 'action': torch.empty(0, dtype=dtype, device=device)}
+            'I': {'start': nan_start.clone(), 'action': nan_action.clone()},
+            'M': {'start': nan_start.clone(), 'action': nan_action.clone()},
+            'S': {'start': nan_start.clone(), 'action': torch.empty(0, dtype=dtype, device=device)}
         }
 
     def _segments_by_bucket(var_name, mode, strat):
+        T = _T_align(mode)
         var_array = var_tensors[var_name]
         buckets = {}
         for i in range(n):
@@ -4524,8 +4585,10 @@ def loss_prior_effect(
     if isinstance(timeframes, str):
         timeframes = (timeframes,)
 
-    T, plot_window, resample_to_data = resolve_prior_distance_window(
-        model_params, T=T, plot_window=plot_window)
+    T_stim, win_stim, rs_stim = resolve_im_window(
+        model_params, "stim", T=T, plot_window=plot_window)
+    T_choice, win_choice, rs_choice = resolve_im_window(
+        model_params, "choice", T=T, plot_window=plot_window)
     stratum = "all" if lump_all else prior_stratum_of(model_params)
 
     eps = 1e-12  # for normalization stability
@@ -4620,7 +4683,7 @@ def loss_prior_effect(
 
     # model distances
     model_dists = prior_distance_I_M_both_alignments(
-        results, steps_before_obs, T=T, metric=model_metric,
+        results, steps_before_obs, T=T_stim, T_action=T_choice, metric=model_metric,
         include_all_trials=include_all_trials, lump_all=lump_all,
         stratum=stratum,
         stratum_s="stim",  # 2-split S sidecar is stim-side only
@@ -4649,6 +4712,10 @@ def loss_prior_effect(
 
     for ax, timeframe in zip(axs, timeframes):
         is_choice = ('duringchoice' in timeframe)
+        if is_choice:
+            plot_window, resample_to_data = win_choice, rs_choice
+        else:
+            plot_window, resample_to_data = win_stim, rs_stim
         regs_move = regions['move_regs_choice'] if is_choice else regions['move_regs_stim']
         regs_int  = regions['int_regs_choice']  if is_choice else regions['int_regs_stim']
         if not is_choice:
@@ -5466,14 +5533,9 @@ def _loss_plot_diff_by_condition_with_data_torch(
                         model_diff_pre = arr_pre_t[1] - arr_pre_t[0] if ch == 1 else arr_pre_t[0] - arr_pre_t[1]
                         data_pre_norm, _ = _data_mean_and_baseline_t(vn, ch, 'choice')
                         if data_pre_norm is not None:
-                            # Interpolate model to match data length if needed
-                            if model_diff_pre.shape[0] < data_pre_norm.shape[0]:
-                                m_seg = _interpolate_to_data_length(model_diff_pre, data_pre_norm.shape[0])
-                                d_seg = data_pre_norm
-                            else:
-                                T_pre = min(model_diff_pre.shape[0], data_pre_norm.shape[0])
-                                m_seg = model_diff_pre[-T_pre:]
-                                d_seg = data_pre_norm[-T_pre:]
+                            T_pre = min(model_diff_pre.shape[0], data_pre_norm.shape[0])
+                            m_seg = model_diff_pre[-T_pre:]
+                            d_seg = data_pre_norm[-T_pre:]
                             if m_seg.shape[0] > 0:
                                 skip_mask = torch.isnan(m_seg) | torch.isnan(d_seg)
                                 if torch.any(skip_mask).item():
@@ -5968,12 +6030,14 @@ def _loss_prior_effect_torch(
     grad_opts, dtype, device = _resolve_grad_options(model_params, override=grad_options)
     eps = torch.tensor(1e-12, dtype=dtype, device=device)
 
-    T, plot_window, resample_to_data = resolve_prior_distance_window(
-        model_params, T=T, plot_window=plot_window)
+    T_stim, win_stim, rs_stim = resolve_im_window(
+        model_params, "stim", T=T, plot_window=plot_window)
+    T_choice, win_choice, rs_choice = resolve_im_window(
+        model_params, "choice", T=T, plot_window=plot_window)
     stratum = "all" if lump_all else prior_stratum_of(model_params)
 
     model_dists = _prior_distance_I_M_both_alignments_torch(
-        results, steps_before_obs, T=T, metric=model_metric,
+        results, steps_before_obs, T=T_stim, T_action=T_choice, metric=model_metric,
         include_all_trials=include_all_trials, lump_all=lump_all,
         stratum=stratum, stratum_s="stim",
         dtype=dtype, device=device
@@ -6012,6 +6076,8 @@ def _loss_prior_effect_torch(
     for timeframe in timeframes:
         is_choice = ('duringchoice' in timeframe)
         align_key = 'action' if is_choice else 'start'
+        plot_window = win_choice if is_choice else win_stim
+        resample_to_data = rs_choice if is_choice else rs_stim
 
         if not Path(f'data_{timeframe}.npy').exists():
             raise FileNotFoundError(f"Missing cached data for timeframe {timeframe}. Run with reload=True once.")
@@ -6073,9 +6139,10 @@ def _loss_prior_effect_torch(
         def _proc(m_model, r_data, baseline_mode):
             if m_model is None or r_data is None or m_model.numel() == 0 or r_data.numel() == 0:
                 return torch.tensor(float('nan'), dtype=dtype, device=device)
-            # Interpolate model to match data length if needed
-            if m_model.shape[0] < r_data.shape[0] or (
-                    resample_to_data and m_model.shape[0] != r_data.shape[0]):
+            # Stretch onto the data bins only for custom windows (e.g. 150 ms
+            # → 72). A shorter explicit window (80 ms / T=40) must stay last-L,
+            # matching numpy — do not interpolate 40 bins across 72.
+            if resample_to_data and m_model.shape[0] != r_data.shape[0]:
                 m_model = _interpolate_torch(m_model, r_data.shape[0])
             L = min(int(m_model.shape[0]), int(r_data.shape[0]), int(times_full.shape[0]))
             if L <= 0:

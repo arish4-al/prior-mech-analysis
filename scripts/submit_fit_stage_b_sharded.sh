@@ -32,7 +32,9 @@
 #   P_OFFSET_ALWAYS_ON=1 / NO_ITI_PENALTY=1 — modeling-detail ablations
 #   W_PP_LO / W_PP_HI / SET_W_PP / TIED_THRESHOLDS — tests 3–4
 #   W_MM_LO / W_MM_HI / SET_W_MM — mleak (weaker M recurrence; tau_m stays 20)
-#   PRIOR_WINDOW_MS=150 — test 6 (I/M prior at full 150 ms)
+#   PRIOR_WINDOW_MS=150 — test 6 (shared I/M window at full 150 ms)
+#   IM_WINDOW_STIM_MS / IM_WINDOW_CHOICE_MS — split post-stim vs pre-move
+#     (prefer scripts/submit_fit_stage_b_splitwin.sh)
 #   PRIOR_STRATUM=stim — stim-only prior-distance (im150stim / stimonly)
 #     (prefer scripts/submit_fit_stage_b_model_ablations.sh)
 
@@ -115,7 +117,8 @@ for _k in DE1_MAXITER DE2_MAXITER DE_POPSIZE POPSIZE SOBOL_COUNT PATIENCE \
           LOCAL_REFINE_METHOD LOCAL_REFINE_MAX_WALL_S BACKEND MEM CPUS TIME \
           P_OFFSET_ALWAYS_ON NO_ITI_PENALTY \
           W_PP_LO W_PP_HI SET_W_PP W_MM_LO W_MM_HI SET_W_MM TIED_THRESHOLDS M_PRE_WEIGHT \
-          PRIOR_WINDOW_MS PRIOR_STRATUM INCLUDE_STIM_PRIOR; do
+          PRIOR_WINDOW_MS IM_WINDOW_STIM_MS IM_WINDOW_CHOICE_MS \
+          PRIOR_STRATUM INCLUDE_STIM_PRIOR; do
   if [[ -n "${!_k:-}" ]]; then
     export "$_k"
   fi

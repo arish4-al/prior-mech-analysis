@@ -24,7 +24,9 @@
 #      W_PP_LO / W_PP_HI / SET_W_PP → --w-pp-lo/hi --set-w-pp (test 3).
 #      TIED_THRESHOLDS=1 → --tied-thresholds (test 4).
 #      M_PRE_WEIGHT → --m-pre-weight (pre-action M nSSE multiplier; default 1).
-#      PRIOR_WINDOW_MS → --prior-window-ms (I/M prior window; test 6: 150).
+#      PRIOR_WINDOW_MS → --prior-window-ms (shared I/M window; test 6: 150).
+#      IM_WINDOW_STIM_MS / IM_WINDOW_CHOICE_MS → --im-window-stim-ms /
+#        --im-window-choice-ms (split post-stim vs pre-move; override shared).
 #      PRIOR_STRATUM → --prior-stratum (stim_choice | stim | all).
 
 set -euo pipefail
@@ -84,6 +86,8 @@ SET_W_MM="${SET_W_MM:-}"
 TIED_THRESHOLDS="${TIED_THRESHOLDS:-0}"
 M_PRE_WEIGHT="${M_PRE_WEIGHT:-1}"
 PRIOR_WINDOW_MS="${PRIOR_WINDOW_MS:-}"
+IM_WINDOW_STIM_MS="${IM_WINDOW_STIM_MS:-}"
+IM_WINDOW_CHOICE_MS="${IM_WINDOW_CHOICE_MS:-}"
 PRIOR_STRATUM="${PRIOR_STRATUM:-}"
 
 module load miniforge
@@ -110,6 +114,7 @@ echo "P_OFFSET_ALWAYS_ON=$P_OFFSET_ALWAYS_ON NO_ITI_PENALTY=$NO_ITI_PENALTY"
 echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRESHOLDS=$TIED_THRESHOLDS"
 echo "W_MM_LO=${W_MM_LO:-} W_MM_HI=${W_MM_HI:-} SET_W_MM=${SET_W_MM:-}"
 echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
+echo "IM_WINDOW_STIM_MS=${IM_WINDOW_STIM_MS:-} IM_WINDOW_CHOICE_MS=${IM_WINDOW_CHOICE_MS:-}"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -144,6 +149,8 @@ elif [[ "$INCLUDE_STIM_PRIOR" == "0" ]]; then
 fi
 ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
 [[ -n "$PRIOR_WINDOW_MS" ]] && ARGS+=(--prior-window-ms "$PRIOR_WINDOW_MS")
+[[ -n "$IM_WINDOW_STIM_MS" ]] && ARGS+=(--im-window-stim-ms "$IM_WINDOW_STIM_MS")
+[[ -n "$IM_WINDOW_CHOICE_MS" ]] && ARGS+=(--im-window-choice-ms "$IM_WINDOW_CHOICE_MS")
 [[ -n "$PRIOR_STRATUM" ]] && ARGS+=(--prior-stratum "$PRIOR_STRATUM")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
