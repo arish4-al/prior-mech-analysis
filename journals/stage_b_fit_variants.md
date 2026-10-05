@@ -369,6 +369,7 @@ Topic: [s89ft imshape](s89ft_imshape.md).
 | `stageB_hold_s89_full_s89ft_imshape_meancell`     | full; freeze-hold except `2,5,7,8,9`; 80 ms stim×choice; extras on choice I/M + M overshoot ≥40 ms | **s7 1.018** | option 1 (`nowii`); `g_m` collapsed; M ramp not fixed |
 | `stageB_hold_s89_full_s89ft_imshape_wii_meancell` | same + free `W_ii` (`0,2,5,7,8,9`)                                                                   | **s7 1.014** | option 2 (`wii`); tot beats source s89 **1.054**; stim-M hinge 0.133→0.070; still no notch; `d_i≈0` |
 | `stageB_hold_s89_full_s89ft_di_choicei_meancell`  | full; freeze-hold except `d_i`; from `wii` s7; init `d_i=5`; late choice-I undershoot ≥−40 ms     | —         | queued 10-05b; rank at extras=0 |
+| `stageB_hold_s89_full_s89ft_wiigi_choicei_meancell` | same extras; wii free set + `g_i` (`0,2,5,6,7,8,9`)                                            | —         | queued 10-05b; `g_i` can back off stim-I stack |
 
 
 ---

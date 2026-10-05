@@ -205,18 +205,18 @@ on**. That is the commit constraint: with `d_i≈0`, I at t=0 is
 whatever trips `|M|=θ`, so stim×choice prior distance collapses. Data
 stays ~0.08. Regular holds this panel with `d_i ~ 20`.
 
-Warm `cma_only` from `wii` **s7**. Freeze-hold everything except
-`d_i` (index 8). `--set-d-i 5` (modest regular-scale; not 0.003).
-Extra: undershoot hinge on duringchoice I in the last **40 ms**
-(`choice_i_late_weight=1`). Pooled choice I+M extra and stim-M
-overshoot **off**. Window unset, stim×choice, `m_pre_weight=1`,
-`--freeze-hold`. Seeds `89 7 12 45`. `BEAT_LOSS=-1`. `FORCE=0`.
+Warm `cma_only` from `wii` **s7**. `--set-d-i 5`. Extra: undershoot
+hinge on duringchoice I in the last **40 ms**. Pooled choice I+M
+extra and stim-M overshoot **off**. Window unset, stim×choice,
+`m_pre_weight=1`, `--freeze-hold`. Seeds `89 7 12 45`. `BEAT_LOSS=-1`.
+`FORCE=0`. Two freeze sets.
 
 Rank later at extras=0. JSON loss includes the hinge.
 
 | ARM | `OUT_TAG` | freeze mask | polish | init |
 |-----|-----------|-------------|--------|------|
 | `di` | `stageB_hold_s89_full_s89ft_di_choicei_meancell` | `0–7,9–20` | `8` | `d_i=5` |
+| `wiigi` | `stageB_hold_s89_full_s89ft_wiigi_choicei_meancell` | `1,3,4,10–20` | `0,2,5,6,7,8,9` | `d_i=5`; `g_i` free |
 
 ```bash
 PARTITION=mit_preemptable FORCE=0 \

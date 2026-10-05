@@ -1,11 +1,13 @@
 #!/bin/bash
-# Punch d_i from wii s7. Freeze-hold S / g_i / M-side / W_ii / retinal.
-# Init d_i=5 (modest regular-scale). Extra: late during-choice I undershoot
+# Punch d_i from wii s7. Init d_i=5. Extra: late during-choice I undershoot
 # hinge (last 40 ms). No pooled choice I+M extra, no stim-M overshoot.
 #
+#   di     free {d_i} only; hold g_i / W / M-side / S / retinal
+#   wiigi  wii free set + g_i: {W_ii, W_mm, W_mi, g_i, g_m, d_i, d_m}
+#
 # Aim: keep choice-window I prior from collapsing in the last ~20–40 ms
-# before move onset (commit constraint), without leaving the wii-s7 S/M
-# basin.
+# before move onset, without leaving the wii-s7 S/M basin. wiigi lets
+# g_i back off if d_i stacks on stim I.
 # Window / stratum: production unset (~80 ms), stim×choice.
 # What the extra SSE can see: undershoot hinge on duringchoice I for
 # t>=-40 ms. Rank later at extras=0, m_pre_weight=1, mean_c ‖Δ‖.
@@ -14,6 +16,9 @@
 #
 #   PARTITION=mit_preemptable FORCE=0 \
 #     bash scripts/submit_fit_stage_b_s89ft_di_choicei.sh
+#
+#   ARMS=di    FORCE=0 bash scripts/submit_fit_stage_b_s89ft_di_choicei.sh
+#   ARMS=wiigi FORCE=0 bash scripts/submit_fit_stage_b_s89ft_di_choicei.sh
 
 set -euo pipefail
 
@@ -69,17 +74,48 @@ export BPS_STAGE2="${BPS_STAGE2:-20}"
 export BEAT_LOSS="${BEAT_LOSS:--1}"
 export FORCE="${FORCE:-0}"
 export REPO_DIR
-# Free d_i(8) only. Hold W / g / d_m / θ / S / retinal at wii s7.
-export VARIANTS="${VARIANTS:-full:0|1|2|3|4|5|6|7|9|10|11|12|13|14|15|16|17|18|19|20}"
-export LOCAL_REFINE_IDX="${LOCAL_REFINE_IDX:-8}"
-export OUT_TAG="${OUT_TAG:-stageB_hold_s89_full_s89ft_di_choicei_meancell}"
 
-echo "=== s89ft d_i choice-I  OUT_TAG=$OUT_TAG  SEEDS=$SEEDS ==="
-echo "  Aim: late during-choice I floor via d_i, from wii s7"
-echo "  Window: unset (~80 ms)  stratum: stim×choice  metric: mean_c ‖Δ‖"
-echo "  Freeze-hold=1  free d_i only  VARIANTS=$VARIANTS  LOCAL_REFINE_IDX=$LOCAL_REFINE_IDX"
-echo "  Init d_i=$SET_D_I  extra: choice_I_late=$CHOICE_I_LATE_WEIGHT last ${CHOICE_I_LATE_MS} ms"
-echo "  choice_im=$CHOICE_IM_EXTRA_WEIGHT  M_overshoot=$M_STIM_OVERSHOOT_WEIGHT"
-echo "  RESUME_JSON=$RESUME_JSON  PIPELINE=$PIPELINE  FORCE=$FORCE"
-echo "  What the extra can see: undershoot hinge on duringchoice I, t>=-${CHOICE_I_LATE_MS} ms"
-bash scripts/submit_fit_joint_sharded.sh
+ARMS="${ARMS:-di wiigi}"
+read -r -a ARM_ARR <<< "$ARMS"
+if [[ -n "${OUT_TAG:-}" && ${#ARM_ARR[@]} -gt 1 ]]; then
+  echo "ERROR: OUT_TAG cannot be set when running multiple ARMS;" >&2
+  echo "  use ARMS=<one arm> or the per-arm defaults" >&2
+  exit 1
+fi
+
+_submit_one() {
+  local tag="$1"
+  export OUT_TAG="${OUT_TAG:-$tag}"
+  echo "=== s89ft d_i choice-I  ARM=$ARM  OUT_TAG=$OUT_TAG  SEEDS=$SEEDS ==="
+  echo "  Aim: late during-choice I floor via d_i, from wii s7"
+  echo "  Window: unset (~80 ms)  stratum: stim×choice  metric: mean_c ‖Δ‖"
+  echo "  Freeze-hold=1  VARIANTS=$VARIANTS  LOCAL_REFINE_IDX=$LOCAL_REFINE_IDX"
+  echo "  Init d_i=$SET_D_I  extra: choice_I_late=$CHOICE_I_LATE_WEIGHT last ${CHOICE_I_LATE_MS} ms"
+  echo "  choice_im=$CHOICE_IM_EXTRA_WEIGHT  M_overshoot=$M_STIM_OVERSHOOT_WEIGHT"
+  echo "  RESUME_JSON=$RESUME_JSON  PIPELINE=$PIPELINE  FORCE=$FORCE"
+  echo "  What the extra can see: undershoot hinge on duringchoice I, t>=-${CHOICE_I_LATE_MS} ms"
+  bash scripts/submit_fit_joint_sharded.sh
+  unset OUT_TAG
+}
+
+for ARM in "${ARM_ARR[@]}"; do
+  case "$ARM" in
+    di)
+      # Free d_i(8) only.
+      export VARIANTS="full:0|1|2|3|4|5|6|7|9|10|11|12|13|14|15|16|17|18|19|20"
+      export LOCAL_REFINE_IDX="8"
+      TAG="${OUT_TAG_DI:-stageB_hold_s89_full_s89ft_di_choicei_meancell}"
+      ;;
+    wiigi)
+      # wii free set + g_i(6): 0,2,5,6,7,8,9.
+      export VARIANTS="full:1|3|4|10|11|12|13|14|15|16|17|18|19|20"
+      export LOCAL_REFINE_IDX="0,2,5,6,7,8,9"
+      TAG="${OUT_TAG_WIIGI:-stageB_hold_s89_full_s89ft_wiigi_choicei_meancell}"
+      ;;
+    *)
+      echo "ERROR: unknown ARM='$ARM'  (use di | wiigi)" >&2
+      exit 1
+      ;;
+  esac
+  _submit_one "$TAG"
+done
