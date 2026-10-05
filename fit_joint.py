@@ -63,6 +63,7 @@ PARAM_NAMES = [
 ]
 W_PP_IDX = 1
 W_MM_IDX = 2
+D_I_IDX = 8
 THETA_C_IDX = 10
 THETA_D_IDX = 11
 
@@ -118,6 +119,17 @@ def overwrite_w_mm_in_theta(theta, w_mm):
     if not (lo <= w <= hi):
         raise ValueError(f"W_mm={w} outside native bounds {(lo, hi)}")
     th[W_MM_IDX] = np.log(w)
+    return th
+
+
+def overwrite_d_i_in_theta(theta, d_i):
+    """Set native d_i in a log-space vector (index 8)."""
+    th = np.asarray(theta, float).copy()
+    v = float(d_i)
+    lo, hi = NATIVE_BOUNDS["d_i"]
+    if not (lo <= v <= hi):
+        raise ValueError(f"d_i={v} outside native bounds {(lo, hi)}")
+    th[D_I_IDX] = np.log(v)
     return th
 
 
@@ -553,6 +565,34 @@ def _m_stim_overshoot_nsse(loss_prior, from_ms=40.0):
     return float(np.sum(hinge ** 2) / denom)
 
 
+def _choice_i_late_undershoot_nsse(loss_prior, last_ms=40.0):
+    """Energy-normalized hinge nSSE: choice I below data in the last ``last_ms``."""
+    t = loss_prior.get("_choice_I_t")
+    ym = loss_prior.get("_choice_I_model")
+    yd = loss_prior.get("_choice_I_data")
+    if t is None or ym is None or yd is None:
+        return np.nan
+    t = np.asarray(t, dtype=float)
+    ym = np.asarray(ym, dtype=float)
+    yd = np.asarray(yd, dtype=float)
+    if t.size == 0 or ym.size == 0 or yd.size == 0:
+        return np.nan
+    n = min(t.size, ym.size, yd.size)
+    t, ym, yd = t[:n], ym[:n], yd[:n]
+    last = float(last_ms)
+    if last <= 0:
+        return 0.0
+    if np.all(t >= 0):
+        sel = t >= (float(np.max(t)) - last)
+    else:
+        sel = t >= -last
+    if not np.any(sel):
+        return 0.0
+    hinge = np.maximum(yd[sel] - ym[sel], 0.0)
+    denom = float(np.sum(yd[sel] ** 2) + 1e-12)
+    return float(np.sum(hinge ** 2) / denom)
+
+
 def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     model_type="data", plot=False, debug=False, return_details=False,
                     blocks_per_session_override=None, verbose=True,
@@ -563,7 +603,8 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     im_window_stim_ms=None, im_window_choice_ms=None,
                     include_stim=False, stim_curve_path=None,
                     choice_im_extra_weight=None, m_stim_overshoot_weight=None,
-                    m_stim_overshoot_from_ms=None):
+                    m_stim_overshoot_from_ms=None,
+                    choice_i_late_weight=None, choice_i_late_ms=None):
     """
     Joint loss: one sim → L_w (I/P/M + prior) + L_S (S rms).
     avg_data_R required (passed explicitly or via loss_extra_kwargs).
@@ -595,6 +636,8 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
             choice_im_extra_weight=choice_im_extra_weight,
             m_stim_overshoot_weight=m_stim_overshoot_weight,
             m_stim_overshoot_from_ms=m_stim_overshoot_from_ms,
+            choice_i_late_weight=choice_i_late_weight,
+            choice_i_late_ms=choice_i_late_ms,
         )
 
         if avg_data_R is None:
@@ -660,9 +703,12 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
             L_w = float(loss_traj["total"] + loss_prior["total"])
             w_ch = float(model_params.get("choice_im_extra_weight") or 0.0)
             w_ov = float(model_params.get("m_stim_overshoot_weight") or 0.0)
+            w_late = float(model_params.get("choice_i_late_weight") or 0.0)
             raw_from = model_params.get("m_stim_overshoot_from_ms")
             from_ms = 40.0 if raw_from is None else float(raw_from)
-            extra_ch = extra_ov = 0.0
+            raw_late = model_params.get("choice_i_late_ms")
+            late_ms = 40.0 if raw_late is None else float(raw_late)
+            extra_ch = extra_ov = extra_late = 0.0
             if w_ch != 0.0:
                 ch = loss_prior.get("act_block_duringchoice") or {}
                 i_ch = _finite0(ch.get("integrator"))
@@ -674,7 +720,12 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                 extra_ov = w_ov * _m_stim_overshoot_nsse(loss_prior, from_ms=from_ms)
                 if not np.isfinite(extra_ov):
                     return 1e12
-            L_w = float(L_w + extra_ch + extra_ov)
+            if w_late != 0.0:
+                extra_late = w_late * _choice_i_late_undershoot_nsse(
+                    loss_prior, last_ms=late_ms)
+                if not np.isfinite(extra_late):
+                    return 1e12
+            L_w = float(L_w + extra_ch + extra_ov + extra_late)
         except Exception:
             if debug:
                 import traceback
@@ -766,7 +817,9 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
                         prior_window_ms=None, prior_stratum=None,
                         im_window_stim_ms=None, im_window_choice_ms=None,
                         choice_im_extra_weight=0.0, m_stim_overshoot_weight=0.0,
-                        m_stim_overshoot_from_ms=40.0, freeze_fill=None, **kwargs):
+                        m_stim_overshoot_from_ms=40.0,
+                        choice_i_late_weight=0.0, choice_i_late_ms=40.0,
+                        freeze_fill=None, **kwargs):
     """
     Joint DE→CMA→polish via fit_weights_two_stage_v2 hooks.
     Requires avg_data_R (S target curves from avg_mean_R.npy).
@@ -793,7 +846,12 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
         None if im_window_choice_ms is None else float(im_window_choice_ms))
     extra["choice_im_extra_weight"] = float(choice_im_extra_weight or 0.0)
     extra["m_stim_overshoot_weight"] = float(m_stim_overshoot_weight or 0.0)
-    extra["m_stim_overshoot_from_ms"] = float(m_stim_overshoot_from_ms or 40.0)
+    extra["m_stim_overshoot_from_ms"] = (
+        40.0 if m_stim_overshoot_from_ms is None
+        else float(m_stim_overshoot_from_ms))
+    extra["choice_i_late_weight"] = float(choice_i_late_weight or 0.0)
+    extra["choice_i_late_ms"] = (
+        40.0 if choice_i_late_ms is None else float(choice_i_late_ms))
     if freeze_fill is None:
         freeze_fill = freeze_fill_joint()
     else:

@@ -31,6 +31,8 @@
 #      FREEZE_HOLD=1 → --freeze-hold (frozen dims stay at warm-start θ).
 #      CHOICE_IM_EXTRA_WEIGHT / M_STIM_OVERSHOOT_WEIGHT /
 #        M_STIM_OVERSHOOT_FROM_MS → extra prior-shape terms (default 0).
+#      CHOICE_I_LATE_WEIGHT / CHOICE_I_LATE_MS → late choice-I undershoot.
+#      SET_D_I → --set-d-i on external warm start.
 
 set -euo pipefail
 
@@ -96,6 +98,9 @@ FREEZE_HOLD="${FREEZE_HOLD:-0}"
 CHOICE_IM_EXTRA_WEIGHT="${CHOICE_IM_EXTRA_WEIGHT:-0}"
 M_STIM_OVERSHOOT_WEIGHT="${M_STIM_OVERSHOOT_WEIGHT:-0}"
 M_STIM_OVERSHOOT_FROM_MS="${M_STIM_OVERSHOOT_FROM_MS:-40}"
+CHOICE_I_LATE_WEIGHT="${CHOICE_I_LATE_WEIGHT:-0}"
+CHOICE_I_LATE_MS="${CHOICE_I_LATE_MS:-40}"
+SET_D_I="${SET_D_I:-}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -124,6 +129,7 @@ echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRA
 echo "IM_WINDOW_STIM_MS=${IM_WINDOW_STIM_MS:-} IM_WINDOW_CHOICE_MS=${IM_WINDOW_CHOICE_MS:-}"
 echo "FREEZE_HOLD=$FREEZE_HOLD CHOICE_IM_EXTRA_WEIGHT=$CHOICE_IM_EXTRA_WEIGHT"
 echo "M_STIM_OVERSHOOT_WEIGHT=$M_STIM_OVERSHOOT_WEIGHT FROM_MS=$M_STIM_OVERSHOOT_FROM_MS"
+echo "CHOICE_I_LATE_WEIGHT=$CHOICE_I_LATE_WEIGHT LAST_MS=$CHOICE_I_LATE_MS SET_D_I=${SET_D_I:-}"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -165,6 +171,9 @@ ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
 ARGS+=(--choice-im-extra-weight "$CHOICE_IM_EXTRA_WEIGHT")
 ARGS+=(--m-stim-overshoot-weight "$M_STIM_OVERSHOOT_WEIGHT")
 ARGS+=(--m-stim-overshoot-from-ms "$M_STIM_OVERSHOOT_FROM_MS")
+ARGS+=(--choice-i-late-weight "$CHOICE_I_LATE_WEIGHT")
+ARGS+=(--choice-i-late-ms "$CHOICE_I_LATE_MS")
+[[ -n "$SET_D_I" ]] && ARGS+=(--set-d-i "$SET_D_I")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"

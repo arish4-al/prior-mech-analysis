@@ -80,6 +80,7 @@ from fit_joint import (
     overwrite_w_pp_in_theta,
     set_w_mm_native_bounds,
     overwrite_w_mm_in_theta,
+    overwrite_d_i_in_theta,
     tie_thresholds_in_theta,
     _save_params_joint,
 )
@@ -317,6 +318,15 @@ def build_args(argv=None):
                          "data after --m-stim-overshoot-from-ms). 0 = off.")
     ap.add_argument("--m-stim-overshoot-from-ms", type=float, default=40.0,
                     help="Start of the stim-window M overshoot hinge (ms).")
+    ap.add_argument("--set-d-i", type=float, default=None,
+                    help="Overwrite d_i in the external warm-start vector "
+                         "(native).")
+    ap.add_argument("--choice-i-late-weight", type=float, default=0.0,
+                    help="Add this × late during-choice I undershoot hinge "
+                         "nSSE. 0 = off (default).")
+    ap.add_argument("--choice-i-late-ms", type=float, default=40.0,
+                    help="Last N ms before move for the choice-I undershoot "
+                         "hinge (default 40).")
     return ap.parse_args(argv)
 
 
@@ -330,6 +340,15 @@ def main(argv=None):
         raise SystemExit("--m-stim-overshoot-weight must be >= 0")
     if args.m_stim_overshoot_from_ms < 0:
         raise SystemExit("--m-stim-overshoot-from-ms must be >= 0")
+    if args.choice_i_late_weight < 0:
+        raise SystemExit("--choice-i-late-weight must be >= 0")
+    if args.choice_i_late_ms < 0:
+        raise SystemExit("--choice-i-late-ms must be >= 0")
+    if args.set_d_i is not None:
+        lo, hi = NATIVE_BOUNDS["d_i"]
+        if not (lo <= float(args.set_d_i) <= hi):
+            raise SystemExit(
+                f"--set-d-i {args.set_d_i} outside native bounds {(lo, hi)}")
 
     def _require_positive_ms(val, flag):
         if val is not None and (not np.isfinite(val) or val <= 0):
@@ -455,6 +474,9 @@ def main(argv=None):
         if args.set_w_mm is not None:
             resume_theta = overwrite_w_mm_in_theta(resume_theta, args.set_w_mm)
             print(f"[mleak] set W_mm={args.set_w_mm:g}")
+        if args.set_d_i is not None:
+            resume_theta = overwrite_d_i_in_theta(resume_theta, args.set_d_i)
+            print(f"[di] set d_i={args.set_d_i:g}")
         if args.tied_thresholds:
             resume_theta, t0 = tie_thresholds_in_theta(resume_theta, how="mean")
             print(f"[test4] tied theta_c=theta_d={t0:.4f} (mean of resume)")
@@ -462,13 +484,16 @@ def main(argv=None):
         print("[test3] --set-w-pp skipped (not an external warm start)")
     elif args.set_w_mm is not None:
         print("[mleak] --set-w-mm skipped (not an external warm start)")
+    elif args.set_d_i is not None:
+        print("[di] --set-d-i skipped (not an external warm start)")
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
                  "m_pre_weight", "prior_window_ms", "prior_stratum",
                  "im_window_stim_ms", "im_window_choice_ms",
                  "choice_im_extra_weight", "m_stim_overshoot_weight",
-                 "m_stim_overshoot_from_ms"):
+                 "m_stim_overshoot_from_ms",
+                 "choice_i_late_weight", "choice_i_late_ms"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -489,6 +514,8 @@ def main(argv=None):
     model_params["choice_im_extra_weight"] = float(args.choice_im_extra_weight)
     model_params["m_stim_overshoot_weight"] = float(args.m_stim_overshoot_weight)
     model_params["m_stim_overshoot_from_ms"] = float(args.m_stim_overshoot_from_ms)
+    model_params["choice_i_late_weight"] = float(args.choice_i_late_weight)
+    model_params["choice_i_late_ms"] = float(args.choice_i_late_ms)
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -527,6 +554,9 @@ def main(argv=None):
           f"choice_im_extra={float(args.choice_im_extra_weight):g} "
           f"m_overshoot={float(args.m_stim_overshoot_weight):g}"
           f"@{float(args.m_stim_overshoot_from_ms):g}ms "
+          f"choice_i_late={float(args.choice_i_late_weight):g}"
+          f"@{float(args.choice_i_late_ms):g}ms "
+          f"set_d_i={args.set_d_i} "
           f"g_i_bounds={tuple(NATIVE_BOUNDS['g_i'])} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"W_mm_bounds={tuple(NATIVE_BOUNDS['W_mm'])} "
@@ -665,6 +695,8 @@ def main(argv=None):
         choice_im_extra_weight=float(args.choice_im_extra_weight),
         m_stim_overshoot_weight=float(args.m_stim_overshoot_weight),
         m_stim_overshoot_from_ms=float(args.m_stim_overshoot_from_ms),
+        choice_i_late_weight=float(args.choice_i_late_weight),
+        choice_i_late_ms=float(args.choice_i_late_ms),
         freeze_fill=(
             np.asarray(resume_theta, float).copy()
             if args.freeze_hold and resume_theta is not None else None
@@ -702,6 +734,9 @@ def main(argv=None):
         "choice_im_extra_weight": float(args.choice_im_extra_weight),
         "m_stim_overshoot_weight": float(args.m_stim_overshoot_weight),
         "m_stim_overshoot_from_ms": float(args.m_stim_overshoot_from_ms),
+        "choice_i_late_weight": float(args.choice_i_late_weight),
+        "choice_i_late_ms": float(args.choice_i_late_ms),
+        "set_d_i": (None if args.set_d_i is None else float(args.set_d_i)),
         "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
