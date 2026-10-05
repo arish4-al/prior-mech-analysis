@@ -505,7 +505,9 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
                                im_window_stim_ms=None, im_window_choice_ms=None,
                                choice_im_extra_weight=None,
                                m_stim_overshoot_weight=None,
-                               m_stim_overshoot_from_ms=None):
+                               m_stim_overshoot_from_ms=None,
+                               choice_i_late_weight=None,
+                               choice_i_late_ms=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
@@ -535,6 +537,10 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["m_stim_overshoot_weight"] = float(m_stim_overshoot_weight)
     if m_stim_overshoot_from_ms is not None:
         mp["m_stim_overshoot_from_ms"] = float(m_stim_overshoot_from_ms)
+    if choice_i_late_weight is not None:
+        mp["choice_i_late_weight"] = float(choice_i_late_weight)
+    if choice_i_late_ms is not None:
+        mp["choice_i_late_ms"] = float(choice_i_late_ms)
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -4840,6 +4846,10 @@ def loss_prior_effect(
             # amplitude tracking
             if name == 'I':
                 amp_I_model = _amp(y_m); amp_I_data = _amp(y_d)
+                if is_choice:
+                    sse['_choice_I_t'] = np.asarray(t, dtype=float).copy()
+                    sse['_choice_I_model'] = np.asarray(y_m, dtype=float).copy()
+                    sse['_choice_I_data'] = np.asarray(y_d, dtype=float).copy()
             elif name == 'M':
                 amp_M_model = _amp(y_m); amp_M_data = _amp(y_d)
                 if not is_choice:

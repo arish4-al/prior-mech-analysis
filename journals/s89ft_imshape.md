@@ -9,9 +9,11 @@ basin (`d_s≈50`, `g_i` intact). Two freeze sets. Rank later at extras=0,
 **Not in scope:** cold 8-seed `full` reruns; 150 / split windows;
 `gm0` / `mleak`; incongruent RT machinery; regular-mask Stage B.
 
-**Status:** 2026-10-05 — wired, freeze-hold bug-checked, one local
-loss eval from the s89 JSON. **Not scored.** Do not FORCE old `full`
-/ `full_mpre3_meancell` dirs.
+**Status:** 2026-10-05 — scored (8/8 `FIT_DONE`). Fair tot at extras=0:
+`wii` **s7 1.014** beats source s89 **1.054**. Stim-M overshoot drops
+on `wii` (0.133 → 0.070) but the curve still ramps through 40–80 ms.
+Choice I still collapses in the last ~20 ms before move (`d_i≈0`).
+**Queued:** `d_i` punch from `wii` s7 (`s89ft_di_choicei`).
 
 **Code:** `--freeze-hold`, `--choice-im-extra-weight`,
 `--m-stim-overshoot-weight` in
@@ -118,3 +120,105 @@ One arm: `ARMS=nowii` or `ARMS=wii`.
 
 `--freeze-hold` is required. Extras are additive and finite. Ready to
 commit; not scored; do not FORCE old dirs.
+
+---
+
+## 2026-10-05 — scored (openalyx, extras=0)
+
+Eight `cma_only` warm restarts, all `FIT_DONE`. Shared-stim eval
+(`bps=20`, seed **12345**, stim from regular **s101**, `m_pre_weight=1`,
+`include_stim`, current `mean_c ‖Δ‖`, window unset). JSON `loss`
+includes extras and a per-gen stim draw — **do not rank on it**.
+Source s89 on this protocol is tot **1.054** (matches the catalog).
+
+Freeze-hold held: every seed `g_i=138`, `d_s=49.7`, `g_s≈0`, θ
+unchanged. Free dims barely moved (`W_ii` 0.422 → 0.417–0.422;
+`d_i` stayed `~0.003` except `nowii` s7 `0.0006`; `d_m` still `~0`).
+`wii` s12 is a no-op clone of source θ (fair tot identical).
+
+### Fair tot (extras off)
+
+| arm | seed | rec (extras=1, fit stim) | fair | extras=1 eval | traj | IM | S | `L_S` | Ich | Mch | Mov≥40 |
+|-----|-----:|-------------------------:|-----:|--------------:|-----:|---:|--:|------:|----:|----:|-------:|
+| src | 89 | 1.125 | 1.054 | 1.236 | 0.375 | 0.201 | 0.022 | 0.456 | 0.021 | 0.028 | 0.133 |
+| **wii** | **7** | 1.135 | **1.014** | **1.146** | 0.385 | **0.151** | **0.017** | 0.460 | 0.026 | 0.036 | **0.070** |
+| nowii | 7 | 1.546 | 1.018 | 1.179 | 0.364 | 0.176 | 0.023 | 0.455 | 0.020 | 0.024 | 0.118 |
+| wii | 89 | 1.048 | 1.025 | 1.175 | 0.377 | 0.166 | 0.022 | 0.460 | 0.027 | 0.022 | 0.101 |
+| wii | 45 | 2.038 | 1.029 | 1.160 | 0.380 | 0.147 | 0.046 | 0.456 | 0.021 | 0.046 | **0.064** |
+| wii | 12 | 1.685 | 1.054 | 1.236 | 0.375 | 0.201 | 0.022 | 0.456 | 0.021 | 0.028 | 0.133 |
+| nowii | 12 | 1.123 | 1.071 | 1.249 | 0.396 | 0.194 | 0.034 | 0.448 | 0.019 | 0.039 | 0.120 |
+| nowii | 89 | 1.256 | 1.088 | 1.268 | 0.406 | 0.200 | 0.029 | 0.453 | 0.021 | 0.035 | 0.126 |
+| nowii | 45 | 1.573 | 1.122 | 1.317 | 0.402 | 0.220 | 0.044 | 0.456 | 0.018 | 0.038 | 0.138 |
+
+### Stim M (the overshoot aim)
+
+Data-space `mean_c ‖Δ‖` at 40 / 70 / 80 ms (same T=72 / 80 ms axis as
+the source overlay). Source ramps **0.109 / 0.131 / 0.132**.
+
+| arm | seed | M40 | M70 | M80 | hinge nSSE |
+|-----|-----:|----:|----:|----:|-----------:|
+| src | 89 | 0.109 | 0.131 | 0.132 | 0.133 |
+| nowii | 7 | 0.107 | 0.130 | 0.130 | 0.118 |
+| wii | 89 | 0.105 | 0.127 | 0.129 | 0.101 |
+| wii | 7 | 0.101 | 0.121 | 0.119 | 0.070 |
+| wii | 45 | 0.099 | 0.120 | 0.120 | 0.064 |
+
+`nowii` cannot cut the ramp with frozen `W_ii`. s7 “won” tot by
+collapsing `g_m` 0.012 → 0.0007 — not a shape fix. `wii` lowers the
+whole M trace ~0.01–0.02 and halves hinge nSSE; there is still no
+notch after the S peak.
+
+Choice-window I/M: source 0.021 / 0.028. No seed moved `d_i` off the
+floor. Choice I is flat or slightly worse (`wii` s89 0.027).
+
+Act-prior behavior (10×20, seed 12345; inc RT was **not** in the
+loss). Source-like: perf R² 0.81–0.85, pooled RT 0.65–0.76, inc RT
+still negative (−0.37 to −1.30). `wii` s7 inc **−0.95**.
+
+### Overlays (in each run dir)
+
+`plot_one` + act-prior RT + extra `prior_effects_80ms.svg/png` (fit
+window; does not replace the 150 ms display `prior_effects.*`).
+SVG+PNG for I/M, P, S, prior, ITI, 80 ms prior, and
+`psychometric_model_vs_data_actprior/`. Drivers:
+[`scripts/_tmp_s89ft_imshape_eval.py`](../scripts/_tmp_s89ft_imshape_eval.py),
+[`scripts/_tmp_s89ft_imshape_plots.py`](../scripts/_tmp_s89ft_imshape_plots.py).
+
+openalyx `models/`:
+
+- `nowii`: `weights_run_fj_stageB_hold_s89_full_s89ft_imshape_meancell_full_mask0-1-3-4-6-10-11-12-13-14-15-16-17-18-19-20_s{89,7,12,45}/`
+- `wii`: `weights_run_fj_stageB_hold_s89_full_s89ft_imshape_wii_meancell_full_mask1-3-4-6-10-11-12-13-14-15-16-17-18-19-20_s{89,7,12,45}/`
+
+Best seed to inspect: **`wii` s7**.
+
+Short CMA from s89 with extras **does** beat source tot (`wii` s7
+**1.014** vs **1.054**) and cuts stim-M hinge nSSE, but it does not
+produce a post-S M pause or a live choice I (`d_i` still ~0). The
+choice-I drop is at commit, with stim still on.
+
+---
+
+## 2026-10-05b — `d_i` punch + late choice-I extra (queued)
+
+Choice I decays in the last ~20 ms before move **while stim is still
+on**. That is the commit constraint: with `d_i≈0`, I at t=0 is
+whatever trips `|M|=θ`, so stim×choice prior distance collapses. Data
+stays ~0.08. Regular holds this panel with `d_i ~ 20`.
+
+Warm `cma_only` from `wii` **s7**. Freeze-hold everything except
+`d_i` (index 8). `--set-d-i 5` (modest regular-scale; not 0.003).
+Extra: undershoot hinge on duringchoice I in the last **40 ms**
+(`choice_i_late_weight=1`). Pooled choice I+M extra and stim-M
+overshoot **off**. Window unset, stim×choice, `m_pre_weight=1`,
+`--freeze-hold`. Seeds `89 7 12 45`. `BEAT_LOSS=-1`. `FORCE=0`.
+
+Rank later at extras=0. JSON loss includes the hinge.
+
+| ARM | `OUT_TAG` | freeze mask | polish | init |
+|-----|-----------|-------------|--------|------|
+| `di` | `stageB_hold_s89_full_s89ft_di_choicei_meancell` | `0–7,9–20` | `8` | `d_i=5` |
+
+```bash
+PARTITION=mit_preemptable FORCE=0 \
+  bash scripts/submit_fit_stage_b_s89ft_di_choicei.sh
+```

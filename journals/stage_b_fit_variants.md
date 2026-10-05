@@ -182,6 +182,7 @@ session (**s34 0.999**).
 | `full` + S, 80 ms                       | `full` **s34**                         | 1.057                     |
 | `full` + S, 150 ms, new metric          | `full_im150_meancell` **s101**         | 1.269                     |
 | 80 ms `full` + mpre3, new metric        | `full_mpre3_meancell` **s89**          | 1.054                     |
+| 80 ms `full` s89ft `wii` (extras=0)     | `s89ft_imshape_wii_meancell` **s7**    | **1.014**                 |
 | Regular 150 + mpre3                     | `mpre3_im150_meancell` **s303**        | 1.154                     |
 | `full` + S + 150 + mpre3                | `full_mpre3_im150_meancell` **s7**     | 1.186                     |
 | Regular split 150/80 (fair @80)         | `stim150_choice80_meancell` **s7**     | 1.050                     |
@@ -357,16 +358,17 @@ not beat 80-fit on either fair tot.
 
 
 
-## 2026-10-05 — s89ft imshape (queued, not scored)
+## 2026-10-05 — s89ft imshape (scored)
 
 Warm CMA from `full_mpre3_meancell` **s89**. Two freeze sets.
+Rank at extras=0, `m_pre_weight=1`, 80 ms, shared stim 12345.
 Topic: [s89ft imshape](s89ft_imshape.md).
-
 
 | Tag                                               | Restrictions                                                                                         | Best seed | Notes |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------- | ----- |
-| `stageB_hold_s89_full_s89ft_imshape_meancell`     | full; freeze-hold except `2,5,7,8,9`; 80 ms stim×choice; extras on choice I/M + M overshoot ≥40 ms | —         | option 1 (`nowii`); rank at extras=0 |
-| `stageB_hold_s89_full_s89ft_imshape_wii_meancell` | same + free `W_ii` (`0,2,5,7,8,9`)                                                                   | —         | option 2 (`wii`); rank at extras=0 |
+| `stageB_hold_s89_full_s89ft_imshape_meancell`     | full; freeze-hold except `2,5,7,8,9`; 80 ms stim×choice; extras on choice I/M + M overshoot ≥40 ms | **s7 1.018** | option 1 (`nowii`); `g_m` collapsed; M ramp not fixed |
+| `stageB_hold_s89_full_s89ft_imshape_wii_meancell` | same + free `W_ii` (`0,2,5,7,8,9`)                                                                   | **s7 1.014** | option 2 (`wii`); tot beats source s89 **1.054**; stim-M hinge 0.133→0.070; still no notch; `d_i≈0` |
+| `stageB_hold_s89_full_s89ft_di_choicei_meancell`  | full; freeze-hold except `d_i`; from `wii` s7; init `d_i=5`; late choice-I undershoot ≥−40 ms     | —         | queued 10-05b; rank at extras=0 |
 
 
 ---

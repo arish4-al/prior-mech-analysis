@@ -1041,6 +1041,7 @@ The one **positive inc** is `full` split s12 **+0.325** with
 ## 2026-10-04 — s89ft imshape (moved)
 
 Warm local from `full_mpre3_meancell` s89 is its own topic:
-[s89ft I/M shape fine-tune](s89ft_imshape.md) (10-05: two freeze
-sets `nowii` / `wii`, freeze-hold, extras, local smoke).
+[s89ft I/M shape fine-tune](s89ft_imshape.md) (10-05 scored: `wii` s7
+tot **1.014** vs source **1.054**; stim-M hinge 0.133→0.070, still
+ramps 40–80 ms; choice I/M and `d_i≈0` unchanged).
 
