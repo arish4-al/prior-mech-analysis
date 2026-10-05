@@ -1027,3 +1027,20 @@ intact; s12 inc **+0.470**. 80 ms tot-winner s89 inc still −0.52.
 Pooled RT on tot-winners still does not clearly beat regular s101
 **0.787** (s89 0.751; s303 0.782; s7 0.691). Keep `m_pre_weight=1`.
 
+## 2026-09-17 — split 150/80 (inc RT)
+
+Fair / as-fitted tots:
+[revisions](modeling_details_revisions.md) 09-17. Incongruent RT
+is still the hole on tot-winners with `g_i` intact: regular split
+s7 inc **−4.43**; regular mpre3 s12 **−9.79**; `full` s7 **−3.74**;
+`full` mpre3 s333 **−0.68** (best of this set, pooled **0.715**).
+The one **positive inc** is `full` split s12 **+0.325** with
+`g_i` collapsed — not a keep. None beat regular s101 pooled
+**0.787**.
+
+## 2026-10-04 — s89ft imshape (moved)
+
+Warm local from `full_mpre3_meancell` s89 is its own topic:
+[s89ft I/M shape fine-tune](s89ft_imshape.md) (10-05: two freeze
+sets `nowii` / `wii`, freeze-hold, extras, local smoke).
+

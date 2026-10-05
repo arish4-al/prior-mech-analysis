@@ -1422,34 +1422,59 @@ Frozen regular `g_s`/`d_s` print as 0.
 
 **Best seed per fit tag.** Same seed can win both windows; if not,
 both are shown. `tot80` / `tot150` are that seed’s two fairs.
+Regular and `full` ranked **separately** (`full` tot includes
+unsplit-80 S nSSE). `tot_noS` = tot minus that S term (S is the
+same at 80 and 150).
 
 Ranked at **80 ms** tot:
 
+**Regular:**
+
 | tag | seed | tot80 | tot150 | g_i | g_m | g_s | d_i | d_m | d_s |
 |-----|-----:|------:|-------:|----:|----:|----:|----:|----:|----:|
-| regular 80 | **34** | **0.999** | 1.107 | 166 | 0 | 0 | 22.4 | 0 | 0 |
 | regular 80 mpre3 | **101** | **0.927** | 1.069 | 186 | 0 | 0 | 21.5 | 0 | 0 |
+| regular 80 | 34 | 0.999 | 1.107 | 166 | 0 | 0 | 22.4 | 0 | 0 |
 | regular 150 meancell | 34 | 1.029 | 1.210 | 185 | 0 | 0 | 22.8 | 0 | 0 |
+| regular split 150/80 | 7 | 1.050 | 1.223 | 182 | 0 | 0 | 22.4 | 0 | 0 |
+| regular split mpre3 | 101 | 1.060 | 1.361 | 200 | 0 | 0 | 18.9 | 0.399 | 0 |
 | regular 150 mpre3 | 303 | 1.085 | 1.154 | 196 | 0 | 0 | 19.2 | 0 | 0 |
-| `full` 80 | **34** | **1.056** | 1.483 | 185 | 0 | 0 | 0 | 0 | 25.7 |
-| `full` 80 mpre3 | **89** | **1.054** | 1.080 | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
-| `full` 150 meancell | 333 | 1.389 | 1.638 | 183 | 0 | 124 | 5.26 | 0 | 36.6 |
-| `full` 150 mpre3 | 101 | 1.198 | 1.235 | 200 | 5.78 | 0 | 7.16 | 0 | 48.8 |
+
+**`full`** (`tot_noS` comparable to regular tot):
+
+| tag | seed | tot80 | tot_noS80 | tot150 | tot_noS150 | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|------:|----------:|-------:|-----------:|----:|----:|----:|----:|----:|----:|
+| `full` 80 mpre3 | **89** | **1.054** | 1.032 | 1.080 | 1.058 | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
+| `full` 80 | 34 | 1.056 | 1.028 | 1.483 | 1.455 | 185 | 0 | 0 | 0 | 0 | 25.7 |
+| `full` split mpre3 | 303 | 1.138 | 1.110 | 1.612 | 1.585 | 183 | 0 | 0 | 0 | 0 | 21.9 |
+| `full` 150 mpre3 | 101 | 1.198 | 1.140 | 1.235 | 1.176 | 200 | 5.78 | 0 | 7.16 | 0 | 48.8 |
+| `full` 150 meancell | 333 | 1.389 | 1.372 | 1.638 | 1.620 | 183 | 0 | 124 | 5.26 | 0 | 36.6 |
+| `full` split 150/80 | 89 | 1.466 | 1.356 | 1.876 | 1.767 | 181 | 0 | 0 | 0 | 0 | 24.6 |
 
 Ranked at **150 ms** tot:
 
+**Regular:**
+
 | tag | seed | tot80 | tot150 | g_i | g_m | g_s | d_i | d_m | d_s |
 |-----|-----:|------:|-------:|----:|----:|----:|----:|----:|----:|
-| regular 80 | 303 | 1.035 | **1.086** | 182 | 0 | 0 | 21.0 | 0 | 0 |
 | regular 80 mpre3 | **101** | 0.927 | **1.069** | 186 | 0 | 0 | 21.5 | 0 | 0 |
-| regular 150 meancell | **12** | 1.213 | **1.089** | 200 | 0.79 | 0 | 26.5 | 0 | 0 |
+| regular 80 | 303 | 1.035 | 1.086 | 182 | 0 | 0 | 21.0 | 0 | 0 |
+| regular 150 meancell | 12 | 1.213 | 1.089 | 200 | 0.79 | 0 | 26.5 | 0 | 0 |
+| regular split mpre3 | 12 | 1.129 | 1.141 | 162 | 0 | 0 | 14.9 | 0 | 0 |
 | regular 150 mpre3 | 303 | 1.085 | 1.154 | 196 | 0 | 0 | 19.2 | 0 | 0 |
-| `full` 80 | 45 | 1.182 | **1.180** | 82.7 | 0.030 | 0 | 2.16 | 0.008 | 45.7 |
-| `full` 80 mpre3 | **89** | 1.054 | **1.080** | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
-| `full` 150 meancell | **101** | 1.463 | **1.269** | 85.6 | 0 | 0.013 | 22.9 | 0 | 58.7 |
-| `full` 150 mpre3 | **7** | 1.364 | **1.186** | 180 | 0 | 0 | 0 | 0.80 | 41.1 |
+| regular split 150/80 | 45 | 1.295 | 1.222 | 181 | 0.001 | 0 | 22.8 | 0 | 0 |
 
-**Pooled family** (80-fit ∪ 150-fit, 16 seeds):
+**`full`:**
+
+| tag | seed | tot80 | tot_noS80 | tot150 | tot_noS150 | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|------:|----------:|-------:|-----------:|----:|----:|----:|----:|----:|----:|
+| `full` 80 mpre3 | **89** | 1.054 | 1.032 | **1.080** | 1.058 | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
+| `full` 80 | 45 | 1.182 | 1.155 | 1.180 | 1.153 | 82.7 | 0.030 | 0 | 2.16 | 0.008 | 45.7 |
+| `full` 150 mpre3 | 7 | 1.364 | 1.341 | 1.186 | 1.162 | 180 | 0 | 0 | 0 | 0.80 | 41.1 |
+| `full` split mpre3 | 333 | 1.506 | 1.470 | 1.199 | 1.162 | 141 | 0.014 | 0.80 | 9.16 | 0 | 49.2 |
+| `full` 150 meancell | 101 | 1.463 | 1.364 | 1.269 | 1.170 | 85.6 | 0 | 0.013 | 22.9 | 0 | 58.7 |
+| `full` split 150/80 | 12 | 1.605 | 1.342 | 1.390 | 1.127 | 0 | 0 | 0 | 22.3 | 0 | 35.4 |
+
+**Pooled family** (80-fit ∪ 150-fit ∪ split 150/80):
 
 | family | @80 winner (tot80 / tot150) | @150 winner (tot80 / tot150) |
 |--------|-----------------------------|--------------------------------|
@@ -1460,15 +1485,21 @@ Ranked at **150 ms** tot:
 
 **Read:** on a common meancell tot, 80-fit mpre3 regular **s101**
 is the cheapest seed at **both** windows (0.927 / 1.069). 150-fit
-regulars do **not** win the 150 ms ranking (production s303 **1.086**
-beats `im150_meancell` s12 **1.089**; 150 mpre3 s303 is 1.154).
-Same for `full`: 80-fit mpre3 s89 **1.080** at 150 ms beats
-150-fit mpre3 s7 **1.186** and `full_im150_meancell` s101 **1.269**.
+and split 150/80 regulars do **not** win the 150 ms ranking
+(production s303 **1.086** beats `im150_meancell` s12 **1.089**
+and split s45 **1.222** / split mpre3 s12 **1.141**). Same for
+`full`: 80-fit mpre3 s89 **1.080** at 150 ms beats 150-fit mpre3
+s7 **1.186**, `full_im150_meancell` s101 **1.269**, split s12
+**1.390** (`g_i` collapsed), and split mpre3 s333 **1.199**.
 80-fit `full` s34 is still the no-mpre3 80 ms joint+S winner
 (1.056) but does not transfer (1.483 at 150); s45 does (1.182 /
-1.180) via `d_s≈46`. Catalog as-fitted rows stay; this is the
-cross-window table. Same two tables are also in
+1.180) via `d_s≈46`. Dropping S, cheapest `full` tot_noS at 80
+is s34 **1.028** (still above regular 0.927); at 150, s89
+**1.058** sits just under regular s101 **1.069**. Catalog
+as-fitted rows stay; this is the cross-window table. Same
+regular vs `full` tables are also in
 [the catalog](stage_b_fit_variants.md) ranking cheat-sheet.
+Split 150/80 eval: [09-17](#2026-09-17--split-window-150-post-stim--80-pre-move-scored).
 
 ### 2026-09-16c — split window (150 post-stim / 80 pre-move), queued
 
@@ -1506,6 +1537,97 @@ win over `--prior-window-ms`). Catalog queued rows:
 **Aim / what the loss can see:** post-stim I/M traj + prior
 through 150 ms; pre-move I/M traj + prior last 80 ms only. S
 nSSE (full) is still unsplit-80, independent of the I/M split.
+
+### 2026-09-17 — split window (150 post-stim / 80 pre-move), scored
+
+32/32 `FIT_DONE`. Shared-stim eval `bps=20` seed **12345** from
+regular s101, `mean_c ‖Δ‖`, `m_pre_weight=1`. Fair 80/150 **clears
+`im_window_*`** so split keys cannot win (same tot as 09-16b;
+traj stays T=72). As-fitted tot uses JSON 150/80 for traj + prior
+and is **not** comparable to those fairs. Full tot includes
+unsplit-80 S nSSE + `L_S`. Driver
+[`_tmp_splitwin_meancell_eval.py`](../scripts/_tmp_splitwin_meancell_eval.py).
+Overlays in each run dir
+([`_tmp_splitwin_meancell_plots.py`](../scripts/_tmp_splitwin_meancell_plots.py)).
+Dump:
+`models/stageB_hold_s89_splitwin_crosswindow_meancell_eval.json`.
+
+Fair tables with the four new tags are in 09-16b above and in
+[the catalog](stage_b_fit_variants.md). Split does **not** take
+any family win.
+
+**As-fitted** (150/80) best seed per tag:
+
+| tag | seed | asfit | tot80 | tot150 | g_i | d_s | S |
+|-----|-----:|------:|------:|-------:|----:|----:|--:|
+| regular split | **7** | **0.971** | 1.050 | 1.223 | 182 | 0 | — |
+| regular split mpre3 | **12** | **1.028** | 1.129 | 1.141 | 162 | 0 | — |
+| `full` split | **7** | **1.292** | 1.861 | 1.440 | 190 | 48.7 | 0.069 |
+| `full` split mpre3 | **333** | **1.116** | 1.506 | 1.199 | 141 | 49.2 | 0.036 |
+
+Medians tot80 / tot150 / asfit: regular 1.145 / 1.313 / 1.119;
+regular mpre3 1.134 / 1.330 / 1.170; `full` 1.702 / 1.774 / 1.487;
+`full` mpre3 1.663 / 1.889 / 1.551. `g_i<1`: 0/8, 0/8, **1/8**
+(s12), 0/8. `full` S nSSE `<0.05`: **0/8** and **2/8** (s303,
+s333).
+
+Act-prior RT (pooled / split con / inc). Regular tot-winner s7
+**0.286 / −4.43**. Regular mpre3 as-fitted s12 **−0.69 / −9.79**.
+`full` as-fitted s7 **0.576 / −3.74**. `full` mpre3 s333 **0.715 /
+−0.68** (`g_i` intact). The only **positive inc** on `full` split
+is collapsed s12 (**+0.325**, tot150 winner, `g_i≈0`) — same
+artefact as earlier `full_im150` s12. None beat regular s101
+pooled **0.787**.
+
+**Keep** production unset and `m_pre_weight=1`. Split 150/80
+unifies traj+prior as intended but loses the fair 80 and 150
+rankings to 80-fit mpre3 regular s101 and 80-fit `full` mpre3
+s89. Full arms also [g_s/d_s](fit_gs_ds_with_im.md) 09-17. RT:
+[gaps](modeling_details_prior_rt_gaps.md) 09-17.
+
+### 2026-09-18 — rank at stim150 / choice80 (regular vs `full` separate)
+
+Fair 80/150 cleared the split keys, so it never asked which
+tag is cheapest **on the split window itself**. Re-score all
+12 tags (6 regular + 6 `full`, 8 seeds each) at
+`im_window_stim_ms=150` / `im_window_choice_ms=80` (traj T=75/40
++ split prior), `mean_c ‖Δ‖`, `m_pre_weight=1`, shared stim
+s101 / 12345 / `bps=20`. Regular and `full` ranked **separately**:
+`full` tot includes unsplit-80 S nSSE, which regular never
+pays. `tot_noS` = traj + I/M + `L_S`. Driver
+[`_tmp_stim150_choice80_rank_eval.py`](../scripts/_tmp_stim150_choice80_rank_eval.py).
+Dump:
+`models/stageB_hold_s89_stim150_choice80_rank_eval.json`.
+Same tables: [catalog](stage_b_fit_variants.md).
+
+**Regular** (best seed per tag, ordered by tot150/80):
+
+| tag | seed | tot150/80 | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|----------:|----:|----:|----:|----:|----:|----:|
+| regular 80 mpre3 | **101** | **0.905** | 186 | 0 | 0 | 21.5 | 0 | 0 |
+| regular 80 | 34 | 0.926 | 166 | 0 | 0 | 22.4 | 0 | 0 |
+| regular 150 meancell | 34 | 0.952 | 185 | 0 | 0 | 22.8 | 0 | 0 |
+| regular split 150/80 | 7 | 0.971 | 182 | 0 | 0 | 22.4 | 0 | 0 |
+| regular 150 mpre3 | 303 | 0.999 | 196 | 0 | 0 | 19.2 | 0 | 0 |
+| regular split mpre3 | 12 | 1.028 | 162 | 0 | 0 | 14.9 | 0 | 0 |
+
+**`full`** (`tot_noS` comparable to regular tot):
+
+| tag | seed | tot150/80 | tot_noS | g_i | g_m | g_s | d_i | d_m | d_s |
+|-----|-----:|----------:|--------:|----:|----:|----:|----:|----:|----:|
+| `full` 80 mpre3 | **89** | **0.969** | 0.947 | 138 | 0.012 | 0 | 0.003 | 0 | 49.7 |
+| `full` 150 mpre3 | 101 | 1.070 | 1.011 | 200 | 5.78 | 0 | 7.16 | 0 | 48.8 |
+| `full` 80 | 45 | 1.072 | 1.045 | 82.7 | 0.030 | 0 | 2.16 | 0.008 | 45.7 |
+| `full` split mpre3 | 333 | 1.116 | 1.079 | 141 | 0.014 | 0.80 | 9.16 | 0 | 49.2 |
+| `full` 150 meancell | 303 | 1.152 | 1.048 | 200 | 0 | 0 | 23.2 | 0 | 63.8 |
+| `full` split 150/80 | 7 | 1.292 | 1.222 | 190 | 0.067 | 0 | 19.6 | 0 | 48.7 |
+
+80-fit mpre3 still wins both families on this window (regular
+s101 **0.905**; `full` s89 **0.969**). Cheapest `full` tot_noS
+(**0.947**) is still above cheapest regular. Split as-fitted
+does not take either win. **Keep** production unset +
+`m_pre_weight=1`.
+
 
 
 

@@ -139,7 +139,8 @@ def load_plot_model(json_path: Path):
 def alias_prior_effects(out_dir: Path) -> None:
     """Copy the long param-name SVG/PNG onto stable ``prior_effects.*`` names."""
     hits = [
-        p for p in out_dir.glob("prior_effects_*.svg") if p.name != "prior_effects.svg"
+        p for p in out_dir.glob("prior_effects_*.svg")
+        if p.name != "prior_effects.svg" and "_80ms" not in p.name
     ]
     if not hits:
         return
@@ -354,8 +355,8 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         )
         for n in list(plt.get_fignums()):
             fig = plt.figure(n)
-            fig.savefig(
-                out_dir / "S_fit.png",
+            savefig_svg_png(
+                fig, str(out_dir / "S_fit.svg"),
                 dpi=150, bbox_inches="tight", transparent=False,
             )
         plt.close("all")

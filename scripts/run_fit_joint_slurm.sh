@@ -28,6 +28,9 @@
 #      IM_WINDOW_STIM_MS / IM_WINDOW_CHOICE_MS → --im-window-stim-ms /
 #        --im-window-choice-ms (split post-stim vs pre-move; override shared).
 #      PRIOR_STRATUM → --prior-stratum (stim_choice | stim | all).
+#      FREEZE_HOLD=1 → --freeze-hold (frozen dims stay at warm-start θ).
+#      CHOICE_IM_EXTRA_WEIGHT / M_STIM_OVERSHOOT_WEIGHT /
+#        M_STIM_OVERSHOOT_FROM_MS → extra prior-shape terms (default 0).
 
 set -euo pipefail
 
@@ -89,6 +92,10 @@ PRIOR_WINDOW_MS="${PRIOR_WINDOW_MS:-}"
 IM_WINDOW_STIM_MS="${IM_WINDOW_STIM_MS:-}"
 IM_WINDOW_CHOICE_MS="${IM_WINDOW_CHOICE_MS:-}"
 PRIOR_STRATUM="${PRIOR_STRATUM:-}"
+FREEZE_HOLD="${FREEZE_HOLD:-0}"
+CHOICE_IM_EXTRA_WEIGHT="${CHOICE_IM_EXTRA_WEIGHT:-0}"
+M_STIM_OVERSHOOT_WEIGHT="${M_STIM_OVERSHOOT_WEIGHT:-0}"
+M_STIM_OVERSHOOT_FROM_MS="${M_STIM_OVERSHOOT_FROM_MS:-40}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -115,6 +122,8 @@ echo "W_PP_LO=${W_PP_LO:-} W_PP_HI=${W_PP_HI:-} SET_W_PP=${SET_W_PP:-} TIED_THRE
 echo "W_MM_LO=${W_MM_LO:-} W_MM_HI=${W_MM_HI:-} SET_W_MM=${SET_W_MM:-}"
 echo "M_PRE_WEIGHT=$M_PRE_WEIGHT PRIOR_WINDOW_MS=${PRIOR_WINDOW_MS:-} PRIOR_STRATUM=${PRIOR_STRATUM:-}"
 echo "IM_WINDOW_STIM_MS=${IM_WINDOW_STIM_MS:-} IM_WINDOW_CHOICE_MS=${IM_WINDOW_CHOICE_MS:-}"
+echo "FREEZE_HOLD=$FREEZE_HOLD CHOICE_IM_EXTRA_WEIGHT=$CHOICE_IM_EXTRA_WEIGHT"
+echo "M_STIM_OVERSHOOT_WEIGHT=$M_STIM_OVERSHOOT_WEIGHT FROM_MS=$M_STIM_OVERSHOOT_FROM_MS"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?}"
 
 ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
@@ -152,6 +161,10 @@ ARGS+=(--m-pre-weight "$M_PRE_WEIGHT")
 [[ -n "$IM_WINDOW_STIM_MS" ]] && ARGS+=(--im-window-stim-ms "$IM_WINDOW_STIM_MS")
 [[ -n "$IM_WINDOW_CHOICE_MS" ]] && ARGS+=(--im-window-choice-ms "$IM_WINDOW_CHOICE_MS")
 [[ -n "$PRIOR_STRATUM" ]] && ARGS+=(--prior-stratum "$PRIOR_STRATUM")
+[[ "$FREEZE_HOLD" == "1" ]] && ARGS+=(--freeze-hold)
+ARGS+=(--choice-im-extra-weight "$CHOICE_IM_EXTRA_WEIGHT")
+ARGS+=(--m-stim-overshoot-weight "$M_STIM_OVERSHOOT_WEIGHT")
+ARGS+=(--m-stim-overshoot-from-ms "$M_STIM_OVERSHOOT_FROM_MS")
 
 python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
 echo "Joint fit done: $(date)"

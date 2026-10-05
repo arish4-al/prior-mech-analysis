@@ -626,14 +626,30 @@ mpre3 **s89 1.080** (`d_s≈50`, `g_i=138`) beats 150-fit mpre3 s7
 no-mpre3 winner (**1.056**) but blows up at 150 (**1.483**).
 s89 is the only `full` seed that is cheap at **both** windows.
 
-### 2026-09-16c — split window queued (150 post-stim / 80 pre-move)
+### 2026-09-17 — split 150/80 `full` scored
 
-`full` ± mpre3 with `im_window_stim_ms=150` /
-`im_window_choice_ms=80` (unsplit-80 S sidecar unchanged).
-Motivation and regular arms: [revisions](modeling_details_revisions.md)
-09-16c. Tags
-`stageB_hold_s89_full_stim150_choice80_meancell` and
-`stageB_hold_s89_full_mpre3_stim150_choice80_meancell`. Not scored.
+Fair 80/150 (split keys cleared) + as-fitted 150/80. Tables:
+[revisions](modeling_details_revisions.md) 09-17 /
+[catalog](stage_b_fit_variants.md).
+
+`full` split no-mpre3: S-success **0/8**; fair @80 s89 **1.466**
+(`d_s≈25`); @150 collapsed s12 **1.390**; as-fitted s7 **1.292**
+(S 0.069, `d_s≈49`, `g_i=190`). `full` split mpre3: S-success
+**2/8** (s303 S 0.028 `d_s≈22`; s333 S 0.036 `d_s≈49`); fair @80
+s303 **1.138**; @150 / as-fitted **s333 1.199 / 1.116** (`g_s≈0.80`,
+`g_i=141`). Neither beats 80-fit `full` mpre3 s89 **1.054 / 1.080**.
+S mechanism is still `d_s` offset. Keep `m_pre_weight=1`.
+
+### 2026-09-18 — rank at stim150 / choice80
+
+All 48 `full` ± mpre3 ± 150 ± split seeds scored at the split
+window (tot includes S nSSE; `tot_noS` drops it). Tables:
+[revisions](modeling_details_revisions.md) 09-18 /
+[catalog](stage_b_fit_variants.md). Winner is still 80-fit
+mpre3 **s89 0.969** (tot_noS **0.947**, S 0.022, `d_s≈50`).
+Split as-fitted s7 **1.292** / tot_noS 1.222 does not take
+the family. Keep `m_pre_weight=1`.
+
 
 
 

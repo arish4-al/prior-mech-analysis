@@ -64,7 +64,10 @@ def alias_svgs(out_dir: Path) -> None:
         "prior_effects.svg": "prior_effects_*.svg",
     }
     for dest, glob in mapping.items():
-        hits = [p for p in out_dir.glob(glob) if p.name != dest]
+        hits = [
+            p for p in out_dir.glob(glob)
+            if p.name != dest and "_80ms" not in p.name
+        ]
         if not hits:
             continue
         newest = max(hits, key=lambda p: p.stat().st_mtime) if len(hits) > 1 else hits[0]

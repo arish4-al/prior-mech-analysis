@@ -523,6 +523,36 @@ def _save_rolling_joint(theta_log_full, loss, stage="stage2", gen=None,
     np.save(base.with_suffix(".npy"), np.asarray(theta_log_full, float))
 
 
+def _finite0(x):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return np.nan
+    return v if np.isfinite(v) else np.nan
+
+
+def _m_stim_overshoot_nsse(loss_prior, from_ms=40.0):
+    """Energy-normalized hinge nSSE: stim-window M above data after ``from_ms``."""
+    t = loss_prior.get("_stim_M_t")
+    ym = loss_prior.get("_stim_M_model")
+    yd = loss_prior.get("_stim_M_data")
+    if t is None or ym is None or yd is None:
+        return np.nan
+    t = np.asarray(t, dtype=float)
+    ym = np.asarray(ym, dtype=float)
+    yd = np.asarray(yd, dtype=float)
+    if t.size == 0 or ym.size == 0 or yd.size == 0:
+        return np.nan
+    n = min(t.size, ym.size, yd.size)
+    t, ym, yd = t[:n], ym[:n], yd[:n]
+    sel = t >= float(from_ms)
+    if not np.any(sel):
+        return 0.0
+    hinge = np.maximum(ym[sel] - yd[sel], 0.0)
+    denom = float(np.sum(yd[sel] ** 2) + 1e-12)
+    return float(np.sum(hinge ** 2) / denom)
+
+
 def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     model_type="data", plot=False, debug=False, return_details=False,
                     blocks_per_session_override=None, verbose=True,
@@ -531,7 +561,9 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                     tied_thresholds=None, m_pre_weight=None,
                     prior_window_ms=None, prior_stratum=None,
                     im_window_stim_ms=None, im_window_choice_ms=None,
-                    include_stim=False, stim_curve_path=None):
+                    include_stim=False, stim_curve_path=None,
+                    choice_im_extra_weight=None, m_stim_overshoot_weight=None,
+                    m_stim_overshoot_from_ms=None):
     """
     Joint loss: one sim → L_w (I/P/M + prior) + L_S (S rms).
     avg_data_R required (passed explicitly or via loss_extra_kwargs).
@@ -560,6 +592,9 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
             prior_stratum=prior_stratum,
             im_window_stim_ms=im_window_stim_ms,
             im_window_choice_ms=im_window_choice_ms,
+            choice_im_extra_weight=choice_im_extra_weight,
+            m_stim_overshoot_weight=m_stim_overshoot_weight,
+            m_stim_overshoot_from_ms=m_stim_overshoot_from_ms,
         )
 
         if avg_data_R is None:
@@ -623,6 +658,23 @@ def loss_joint_core(theta, mean_data_results, prior_regions, behavior,
                 stim_curve_path=stim_curve_path,
             )
             L_w = float(loss_traj["total"] + loss_prior["total"])
+            w_ch = float(model_params.get("choice_im_extra_weight") or 0.0)
+            w_ov = float(model_params.get("m_stim_overshoot_weight") or 0.0)
+            raw_from = model_params.get("m_stim_overshoot_from_ms")
+            from_ms = 40.0 if raw_from is None else float(raw_from)
+            extra_ch = extra_ov = 0.0
+            if w_ch != 0.0:
+                ch = loss_prior.get("act_block_duringchoice") or {}
+                i_ch = _finite0(ch.get("integrator"))
+                m_ch = _finite0(ch.get("move"))
+                if not (np.isfinite(i_ch) and np.isfinite(m_ch)):
+                    return 1e12
+                extra_ch = w_ch * (i_ch + m_ch)
+            if w_ov != 0.0:
+                extra_ov = w_ov * _m_stim_overshoot_nsse(loss_prior, from_ms=from_ms)
+                if not np.isfinite(extra_ov):
+                    return 1e12
+            L_w = float(L_w + extra_ch + extra_ov)
         except Exception:
             if debug:
                 import traceback
@@ -712,7 +764,9 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
                         p_offset_always_on=False, iti_penalty=True,
                         tied_thresholds=False, m_pre_weight=1.0,
                         prior_window_ms=None, prior_stratum=None,
-                        im_window_stim_ms=None, im_window_choice_ms=None, **kwargs):
+                        im_window_stim_ms=None, im_window_choice_ms=None,
+                        choice_im_extra_weight=0.0, m_stim_overshoot_weight=0.0,
+                        m_stim_overshoot_from_ms=40.0, freeze_fill=None, **kwargs):
     """
     Joint DE→CMA→polish via fit_weights_two_stage_v2 hooks.
     Requires avg_data_R (S target curves from avg_mean_R.npy).
@@ -737,6 +791,13 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
         None if im_window_stim_ms is None else float(im_window_stim_ms))
     extra["im_window_choice_ms"] = (
         None if im_window_choice_ms is None else float(im_window_choice_ms))
+    extra["choice_im_extra_weight"] = float(choice_im_extra_weight or 0.0)
+    extra["m_stim_overshoot_weight"] = float(m_stim_overshoot_weight or 0.0)
+    extra["m_stim_overshoot_from_ms"] = float(m_stim_overshoot_from_ms or 40.0)
+    if freeze_fill is None:
+        freeze_fill = freeze_fill_joint()
+    else:
+        freeze_fill = np.asarray(freeze_fill, float)
     return fit_weights_two_stage_v2(
         mean_data_results, prior_regions, behavior,
         safe_loss_fn=_safe_loss_joint,
@@ -745,7 +806,7 @@ def fit_joint_two_stage(mean_data_results, prior_regions, behavior, avg_data_R,
         unpack_result_fn=unpack_result_joint,
         save_params_fn=_save_params_joint,
         save_rolling_fn=_save_rolling_joint,
-        freeze_fill=freeze_fill_joint(),
+        freeze_fill=freeze_fill,
         loss_extra_kwargs=extra,
         default_refine_idx=DEFAULT_REFINE_IDX,
         **kwargs,

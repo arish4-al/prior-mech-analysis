@@ -306,6 +306,17 @@ def build_args(argv=None):
                     help="I/M prior-distance trial stratum. Default unset = "
                          "stim×choice (production). 'stim' = stim side only "
                          "(revised test 6).")
+    ap.add_argument("--freeze-hold", action="store_true", default=False,
+                    help="Hold frozen dims at the warm-start θ (not LOG_ZERO). "
+                         "Needed when freezing a fitted g_s/d_s/g_i/retinal.")
+    ap.add_argument("--choice-im-extra-weight", type=float, default=0.0,
+                    help="Add this × (duringchoice I + M nSSE) on top of the "
+                         "pooled prior term. 0 = off (default).")
+    ap.add_argument("--m-stim-overshoot-weight", type=float, default=0.0,
+                    help="Add this × stim-window M hinge nSSE (model above "
+                         "data after --m-stim-overshoot-from-ms). 0 = off.")
+    ap.add_argument("--m-stim-overshoot-from-ms", type=float, default=40.0,
+                    help="Start of the stim-window M overshoot hinge (ms).")
     return ap.parse_args(argv)
 
 
@@ -313,6 +324,12 @@ def main(argv=None):
     args = build_args(argv)
     if args.m_pre_weight < 0:
         raise SystemExit("--m-pre-weight must be >= 0")
+    if args.choice_im_extra_weight < 0:
+        raise SystemExit("--choice-im-extra-weight must be >= 0")
+    if args.m_stim_overshoot_weight < 0:
+        raise SystemExit("--m-stim-overshoot-weight must be >= 0")
+    if args.m_stim_overshoot_from_ms < 0:
+        raise SystemExit("--m-stim-overshoot-from-ms must be >= 0")
 
     def _require_positive_ms(val, flag):
         if val is not None and (not np.isfinite(val) or val <= 0):
@@ -417,6 +434,8 @@ def main(argv=None):
 
     if args.pipeline == "cma_only" and resume_theta is None:
         raise SystemExit("--pipeline cma_only needs --resume-json or an in-folder ckpt")
+    if args.freeze_hold and resume_theta is None:
+        raise SystemExit("--freeze-hold needs --resume-json or an in-folder ckpt")
 
     # Only rewrite W_pp / θ on an *external* warm start. Re-applying on an
     # in-folder ckpt would reset W_pp and, for --tied-thresholds, average
@@ -447,7 +466,9 @@ def main(argv=None):
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
                  "m_pre_weight", "prior_window_ms", "prior_stratum",
-                 "im_window_stim_ms", "im_window_choice_ms"):
+                 "im_window_stim_ms", "im_window_choice_ms",
+                 "choice_im_extra_weight", "m_stim_overshoot_weight",
+                 "m_stim_overshoot_from_ms"):
             continue
         if isinstance(v, (int, float, np.floating)):
             model_params[k] = float(v)
@@ -465,6 +486,9 @@ def main(argv=None):
     model_params["im_window_choice_ms"] = (
         None if args.im_window_choice_ms is None else float(args.im_window_choice_ms))
     model_params["prior_stratum"] = args.prior_stratum
+    model_params["choice_im_extra_weight"] = float(args.choice_im_extra_weight)
+    model_params["m_stim_overshoot_weight"] = float(args.m_stim_overshoot_weight)
+    model_params["m_stim_overshoot_from_ms"] = float(args.m_stim_overshoot_from_ms)
     import model_functions as mf
     mf.blocks_per_session = int(args.bps_stage1)
     if hasattr(fw, "blocks_per_session"):
@@ -499,6 +523,10 @@ def main(argv=None):
           f"im_window_stim_ms={args.im_window_stim_ms} "
           f"im_window_choice_ms={args.im_window_choice_ms} "
           f"prior_stratum={args.prior_stratum} "
+          f"freeze_hold={bool(args.freeze_hold)} "
+          f"choice_im_extra={float(args.choice_im_extra_weight):g} "
+          f"m_overshoot={float(args.m_stim_overshoot_weight):g}"
+          f"@{float(args.m_stim_overshoot_from_ms):g}ms "
           f"g_i_bounds={tuple(NATIVE_BOUNDS['g_i'])} "
           f"W_pp_bounds={tuple(NATIVE_BOUNDS['W_pp'])} "
           f"W_mm_bounds={tuple(NATIVE_BOUNDS['W_mm'])} "
@@ -634,6 +662,13 @@ def main(argv=None):
             None if args.im_window_stim_ms is None else float(args.im_window_stim_ms)),
         im_window_choice_ms=(
             None if args.im_window_choice_ms is None else float(args.im_window_choice_ms)),
+        choice_im_extra_weight=float(args.choice_im_extra_weight),
+        m_stim_overshoot_weight=float(args.m_stim_overshoot_weight),
+        m_stim_overshoot_from_ms=float(args.m_stim_overshoot_from_ms),
+        freeze_fill=(
+            np.asarray(resume_theta, float).copy()
+            if args.freeze_hold and resume_theta is not None else None
+        ),
         loss_extra_kwargs={
             "include_stim": include_stim,
             "stim_curve_path": str(stim_curve_path) if stim_curve_path else None,
@@ -663,6 +698,10 @@ def main(argv=None):
         "im_window_choice_ms": (
             None if args.im_window_choice_ms is None else float(args.im_window_choice_ms)),
         "prior_stratum": args.prior_stratum,
+        "freeze_hold": bool(args.freeze_hold),
+        "choice_im_extra_weight": float(args.choice_im_extra_weight),
+        "m_stim_overshoot_weight": float(args.m_stim_overshoot_weight),
+        "m_stim_overshoot_from_ms": float(args.m_stim_overshoot_from_ms),
         "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),
