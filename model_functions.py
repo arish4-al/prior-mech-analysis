@@ -502,7 +502,10 @@ def _resample_to_len(y, n):
 def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
                                tied_thresholds=None, m_pre_weight=None,
                                prior_window_ms=None, prior_stratum=None,
-                               im_window_stim_ms=None, im_window_choice_ms=None):
+                               im_window_stim_ms=None, im_window_choice_ms=None,
+                               choice_im_extra_weight=None,
+                               m_stim_overshoot_weight=None,
+                               m_stim_overshoot_from_ms=None):
     """Set modeling-detail flags (call inside each loss eval).
 
     Loky CMA workers re-import ``model_params`` at defaults; passing the flags
@@ -526,6 +529,12 @@ def apply_model_ablation_flags(mp, p_offset_always_on=None, iti_penalty=None,
         mp["im_window_stim_ms"] = float(im_window_stim_ms)
     if im_window_choice_ms is not None:
         mp["im_window_choice_ms"] = float(im_window_choice_ms)
+    if choice_im_extra_weight is not None:
+        mp["choice_im_extra_weight"] = float(choice_im_extra_weight)
+    if m_stim_overshoot_weight is not None:
+        mp["m_stim_overshoot_weight"] = float(m_stim_overshoot_weight)
+    if m_stim_overshoot_from_ms is not None:
+        mp["m_stim_overshoot_from_ms"] = float(m_stim_overshoot_from_ms)
     apply_tied_action_thresholds(mp)
     return mp
 
@@ -3072,7 +3081,11 @@ def plot_S_diff_by_contrast_side_with_data(avg_dict, avg_data_L, avg_data_R, bas
         # plt.legend(fontsize=8, frameon=False)
         plt.tight_layout()
         if save_dir is not None:
-            plt.savefig(f'{save_dir}/model_vs_data_stim_{title_side}.svg', transparent=True)
+            savefig_svg_png(
+                plt.gcf(),
+                f'{save_dir}/model_vs_data_stim_{title_side}.svg',
+                transparent=True,
+            )
 
 
 def compute_sse_stim_right(avg_dict, avg_data_R, baseline_R=0,
@@ -4829,6 +4842,10 @@ def loss_prior_effect(
                 amp_I_model = _amp(y_m); amp_I_data = _amp(y_d)
             elif name == 'M':
                 amp_M_model = _amp(y_m); amp_M_data = _amp(y_d)
+                if not is_choice:
+                    sse['_stim_M_t'] = np.asarray(t, dtype=float).copy()
+                    sse['_stim_M_model'] = np.asarray(y_m, dtype=float).copy()
+                    sse['_stim_M_data'] = np.asarray(y_d, dtype=float).copy()
 
             # plot
             if do_plot and plot_flag:
