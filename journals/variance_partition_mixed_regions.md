@@ -2,7 +2,7 @@
 
 **Scope:** the real-data encoding analysis that asks whether the **stimulus** component of early during-stim activity is **prior-modulated** in regions that carry both stimulus and choice signals — the target-set definition, the OLS variance partition, the full BWM results, and the neuron- and region-level nulls.
 
-**Status:** descriptive results complete over the full BWM (13,394 neurons, 19 mixed regions); the neuron-level prior-shuffle null is complete (`nrand=2000`); the region-level mean-R² null is coded but needs an ORCD re-run to save per-draw arrays.
+**Status:** descriptive results complete over the full BWM (13,394 neurons, 19 mixed regions); the neuron-level prior-shuffle null is complete (`nrand=2000`); the region-level mean-R² null is coded but needs an ORCD re-run to save per-draw arrays. **2026-10-05:** those 19 are not the updated mixed list. Redo the partition on the 12 regions whose stimulus signal is the same-block, choice-unmatched contrast (`stim_block`). Not run.
 
 Sources: dated entries 2026-07-20 (Goal 1), 07-20c–i, 07-28, 07-28b, 07-28c.
 
@@ -256,9 +256,22 @@ Then copy the updated `var_partition_stacked.npy` → `res/new/`.
 
 ---
 
+## 2026-10-05 — redo on the unsplit-stim mixed list
+
+The scored partition uses the July mixed list: significant choice and a significant stimulus amplitude on **any** of same-choice 150 ms, same-choice 80 ms, or same-block choice-unmatched 80 ms (`stim_duringstim_act` ∨ `stim_duringstim_short_act` ∨ `stim_duringstim1_act`). Seven of those 19 are mixed only on the choice-matched contrast (BMA, FN, GRN, LING, PGRN, VCO, VeCB). `amp_stim_se` is zero on all 19.
+
+**Redo** the same OLS partition and the neuron-level prior-shuffle null on the updated mixed list: significant `choice_duringstim_act` **and** significant `stim_duringstim1_act` only. That contrast is left versus right stimulus inside a fixed block, choice not matched (`stim_block_{l,r}_act`). From `data/stimchoice_act_regtype_regions_p_mean_c_0.01.csv` (`amp_stim_se1 > 0` and `amp_choice_s > 0`) the 12 are:
+
+CENT2, CP, CUL4 5, IP, IRN, MRN, PF, PRNc, SCm, SIM, SNr, VPL.
+
+Write a new region CSV and a new stack. Do not overwrite `var_partition_mixed_stim_choice_regions.csv` or `res/new/var_partition_stacked.npy`. The existing region-level mean-R² re-run is for the old 19 and does not answer this.
+
+---
+
 ## Follow-ups
 
-- Region-level mean-R² p-values (needs the ORCD re-run above).
+- **Redo the partition on the 12-region unsplit-stim mixed list** (2026-10-05). Not run.
+- Region-level mean-R² p-values on the **old 19** (needs the ORCD re-run above).
 - Optional BH-FDR across neurons.
 - Optional `--prior-type block` comparison.
 - Insertion-level aggregation of p / `frac_sig`.

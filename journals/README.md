@@ -33,7 +33,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Prior modulation by contrast](prior_modulation_by_contrast.md) | Contrast-stratified during-trial splits, cell retention, FDR p-floor analysis, and the revised 0 %-contrast choice-conditioned result |
 | [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; option-1 + copy-last (`_pseudo_strat_sticky`); Bayes-agent sampler (08-23) and Bayes Harris unique submitter (08-27b), FDR not yet run; fully unsplit prior FDR (08-24e) |
 | [Sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md) | Late 20 % ∪ perseveration-tail drop; choice FDR *expanded*; prior 4-split duringstim expands @0.05 / shrinks @0.01 (08-25); f1/unsplit *shrink* and stay Harris-nonzero; sticky tails not concentrated late; last 20 % slower not inaccurate / not more block-aligned |
-| [Single-neuron variance partition](variance_partition_mixed_regions.md) | Mixed stim×choice target set, OLS variance partition, full BWM results, neuron- and region-level nulls |
+| [Single-neuron variance partition](variance_partition_mixed_regions.md) | Mixed stim×choice target set, OLS variance partition, full BWM results, neuron- and region-level nulls. 10-05: redo on the 12-region same-block (choice-unmatched) mixed list; not run |
 
 ## Other files
 
