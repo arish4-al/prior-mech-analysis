@@ -4395,106 +4395,245 @@ def cache_all_insertions(eids_plus=None, restart=True):
     print(f'{len(Fs)} cache failures:', Fs)
 
 
+def _ols_slope(x, y):
+    '''OLS slope of y on x. Matches ``np.polyfit(..., 1)[0]`` for finite inputs.'''
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2 or x.size != y.size or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+        return np.nan
+    xc = x - x.mean()
+    denom = float(np.dot(xc, xc))
+    if denom <= 0:
+        return np.nan
+    return float(np.dot(xc, y - y.mean()) / denom)
+
+
+def _ols_slope_rows(x, Y):
+    '''OLS slope of each row of ``Y`` (n, k) on ``x`` (k,).'''
+    x = np.asarray(x, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    xc = x - x.mean()
+    denom = float(np.dot(xc, xc))
+    if denom <= 0 or Y.ndim != 2 or Y.shape[1] != x.size:
+        return np.full(Y.shape[0] if Y.ndim == 2 else 0, np.nan)
+    yc = Y - Y.mean(axis=1, keepdims=True)
+    return (yc @ xc) / denom
+
+
+def _two_sided_perm_p(obs, null):
+    '''Two-sided permutation p: (1 + #{|null| ≥ |obs|}) / (1 + n_null).
+
+    The +1 keeps p off zero so BH-FDR at α=0.01 is not passed by an empty tail.
+    '''
+    if not np.isfinite(obs):
+        return np.nan
+    null = np.asarray(null, dtype=float)
+    null = null[np.isfinite(null)]
+    if null.size == 0:
+        return np.nan
+    return float((1.0 + np.sum(np.abs(null) >= abs(float(obs)))) / (1.0 + null.size))
+
+
+def _crf_side_cells(cond, contrasts, reg_mask):
+    '''Per stim side, contrast cells that have both prior groups.
+
+    Each cell stores the neuron-averaged spike count per trial (``r``) and the
+    true concordant mask. Group sizes are invariant under a label shuffle, so
+    the same cells enter the true slope and every null draw.
+    '''
+    sides = []
+    for side in ('L', 'R'):
+        cells = []
+        for c in contrasts:
+            block = cond.get((side, c))
+            if block is None:
+                continue
+            conc = np.asarray(block['conc'], dtype=bool)
+            n_c = int(conc.sum())
+            n_d = int(conc.size - n_c)
+            if n_c == 0 or n_d == 0:
+                continue
+            r = np.asarray(block['R'][:, reg_mask], dtype=float).mean(axis=1)
+            if r.shape != conc.shape or not np.all(np.isfinite(r)):
+                continue
+            cells.append({'c': float(c), 'r': r, 'conc': conc, 'n_c': n_c})
+        if len(cells) >= 2:
+            sides.append(cells)
+    return sides
+
+
+def _crf_true_slopes(sides):
+    '''Side-averaged concordant slope, discordant slope, and their difference.'''
+    scs, sds, mods = [], [], []
+    for cells in sides:
+        xs = [cell['c'] for cell in cells]
+        rc = [float(cell['r'][cell['conc']].mean()) for cell in cells]
+        rd = [float(cell['r'][~cell['conc']].mean()) for cell in cells]
+        sc = _ols_slope(xs, rc)
+        sd = _ols_slope(xs, rd)
+        if not np.isfinite(sc) or not np.isfinite(sd):
+            continue
+        scs.append(sc)
+        sds.append(sd)
+        mods.append(sc - sd)
+    if not mods:
+        return np.nan, np.nan, np.nan
+    return float(np.mean(scs)), float(np.mean(sds)), float(np.mean(mods))
+
+
+def _crf_null_slope_mods(sides, nrand, rng):
+    '''Null distribution of the side-averaged slope difference.
+
+    Within each (side, contrast) cell, concordant labels are a random subset
+    of the true concordant count (a label shuffle). Spike counts stay put.
+    '''
+    nrand = int(nrand)
+    if nrand < 1 or not sides:
+        return np.full(max(nrand, 0), np.nan)
+    side_mods = []
+    for cells in sides:
+        xs = np.array([cell['c'] for cell in cells], dtype=float)
+        mc = np.empty((nrand, len(cells)))
+        md = np.empty((nrand, len(cells)))
+        for j, cell in enumerate(cells):
+            r = cell['r']
+            n_c = int(cell['n_c'])
+            n = int(r.size)
+            n_d = n - n_c
+            noise = rng.random((nrand, n))
+            idx = np.argpartition(noise, n_c - 1, axis=1)[:, :n_c]
+            gathered = r[idx]
+            mc[:, j] = gathered.mean(axis=1)
+            md[:, j] = (float(r.sum()) - gathered.sum(axis=1)) / n_d
+        side_mods.append(_ols_slope_rows(xs, mc) - _ols_slope_rows(xs, md))
+    return np.mean(np.stack(side_mods, axis=0), axis=0)
+
+
+def _crf_nominal_side_mask(contrast_l, contrast_r, side, contrast):
+    '''Trials whose only finite contrast column is ``side`` at ``contrast``.
+
+    A trial with both contrast columns finite is on neither side, so a 0% trial
+    coded in both columns is not used twice with opposite concordant labels.
+    '''
+    if side == 'L':
+        cvals, other = contrast_l, contrast_r
+    elif side == 'R':
+        cvals, other = contrast_r, contrast_l
+    else:
+        raise ValueError(f'side must be L or R, got {side!r}')
+    cvals = np.asarray(cvals, dtype=float)
+    other = np.asarray(other, dtype=float)
+    nominal = np.isfinite(cvals) & ~np.isfinite(other)
+    return nominal & np.isclose(cvals, float(contrast))
+
+
+def _crf_curves(cond, contrasts, reg_mask):
+    '''Side-averaged region-mean rate at each contrast, for each prior group.'''
+    out = {'conc': [], 'disc': []}
+    for which, dest in (('conc', out['conc']), ('disc', out['disc'])):
+        for c in contrasts:
+            vals = []
+            for side in ('L', 'R'):
+                block = cond.get((side, c))
+                if block is None:
+                    continue
+                conc = np.asarray(block['conc'], dtype=bool)
+                m = conc if which == 'conc' else ~conc
+                if m.sum() == 0:
+                    continue
+                R = np.asarray(block['R'][:, reg_mask], dtype=float)
+                vals.append(float(R[m].mean()))
+            dest.append(float(np.mean(vals)) if vals else np.nan)
+    return out['conc'], out['disc']
+
+
 def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
                   contrasts=CONTRASTS, nrand=1000, min_reg=min_reg):
     '''
-    Goal 3: contrast-response function (CRF) per region, split by block prior,
-    and a test of whether the prior modulates the CRF slope (gain).
+    Contrast-response slope per region, split by true-block prior.
 
-    For each stimulus side (L/R) and |contrast| in ``contrasts`` we compute the
-    mean post-stim population response per neuron over ``window`` (single time
-    bin from stimOn), then average within region. The CRF is response vs contrast.
+    For each stimulus side and |contrast|, take the spike count in one bin
+    covering ``window`` (default 0–150 ms from stimOn) and average neurons in
+    the region. Concordant = true block favors that stimulus side
+    (``probabilityLeft`` 0.8 on the left, 0.2 on the right). 0.5-blocks are
+    dropped. 0% contrast is included on its nominal side (the column that is
+    0; the other column is NaN).
 
-    "concordant" prior = block favors the stimulus side (high prior for that side),
-    "discordant" = block favors the opposite side. At 0% contrast behavior is fully
-    prior-driven, so it anchors the low end of the CRF.
+    Gain statistic = OLS slope(response vs raw contrast | concordant)
+    minus the discordant slope, averaged over sides that have ≥2 contrasts
+    with both prior groups. Linear in contrast, not log.
 
-    Prior modulation of gain = slope(concordant) - slope(discordant), averaged over
-    sides. Significance via a null that shuffles block (concordant/discordant)
-    labels *within* each (side, contrast) cell, preserving side/contrast structure.
-
-    Returns per region: {'nclus', 'contrasts', 'crf_conc', 'crf_disc',
-    'slope_conc', 'slope_disc', 'slope_mod', 'p_slope_mod'}.
+    Null: shuffle concordant labels inside each (side, contrast) cell.
+    ``p_slope_mod`` = (1 + #{|null| ≥ |obs|}) / (1 + nrand).
+    ``null_slope_mod`` is saved so insertions can be combined without
+    averaging p-values.
     '''
     satur = 'saturation_stim_plus04'
     eid = None
+    probe = None
     if cached is not None:
         spikes = cached['spikes']
         clusters = cached['clusters']
         trials = cached['trials'][satur].copy()
         eid = cached.get('eid')
+        probe = cached.get('probe')
     if eid is None:
         eid, probe = one.pid2eid(pid)
-    else:
-        probe = cached.get('probe')
     if cached is None:
         spikes, clusters = load_good_units(one, pid)
         trials, mask = load_trials_for_saturation(one, eid, satur)
         trials = trials[mask]
-    trials = trials[trials['probabilityLeft'] != 0.5]  # block-biased trials only
+
+    pl_all = trials['probabilityLeft'].to_numpy(dtype=float)
+    stim_ok = np.isfinite(trials['stimOn_times'].to_numpy(dtype=float))
+    keep = stim_ok & np.isfinite(pl_all) & ~np.isclose(pl_all, 0.5)
+    trials = trials.iloc[np.flatnonzero(keep)].reset_index(drop=True)
 
     acs = np.array(br.id2acronym(clusters['atlas_id'], mapping=mapping))
     good = ~np.bitwise_or.reduce([acs == r for r in ['void', 'root']])
     acs = acs[good]
 
     contrasts = sorted(set(float(c) for c in contrasts))
-    pre_t = 0.0
-    post_t = float(window[1] - window[0])
+    pre_t = float(window[0])
+    post_t = float(window[1])
+    bin_size = post_t - pre_t
+    if pre_t != 0.0 or bin_size <= 0:
+        raise ValueError(
+            f'CRF window must be a single bin starting at stimOn, got {window}')
 
-    # Per (side, contrast): single-bin response (ntr, n_good_neurons) + conc mask.
+    # One nominal side per trial: the contrast column that is finite.
+    # A trial with both columns finite would be double-counted (and, at 0%,
+    # labeled concordant on one side and discordant on the other).
+    contrast_l = trials['contrastLeft'].to_numpy(dtype=float)
+    contrast_r = trials['contrastRight'].to_numpy(dtype=float)
+    stim_on = trials['stimOn_times'].to_numpy(dtype=float)
+    pl = trials['probabilityLeft'].to_numpy(dtype=float)
     cond = {}
-    stim_on = trials['stimOn_times'].values
-    pl = trials['probabilityLeft'].values
-    for side, cside in (('L', 'contrastLeft'), ('R', 'contrastRight')):
+    for side in ('L', 'R'):
         conc_pleft = 0.8 if side == 'L' else 0.2
-        cvals = trials[cside].values
         for c in contrasts:
-            sel = np.isclose(cvals, c)
-            if sel.sum() == 0:
+            sel = _crf_nominal_side_mask(contrast_l, contrast_r, side, c)
+            if int(sel.sum()) == 0:
                 continue
-            ev = stim_on[sel]
+            ev = np.asarray(stim_on[sel], dtype=float)
             bi, _ = bin_spikes2D(
                 spikes['times'],
                 clusters['cluster_id'][spikes['clusters']],
                 clusters['cluster_id'],
-                np.array(ev), pre_t, post_t, post_t)
-            R = bi[:, :, 0][:, good]  # (ntr, n_good)
-            cond[(side, c)] = {'R': R, 'conc': pl[sel] == conc_pleft}
+                ev, pre_t, post_t, bin_size)
+            if bi.ndim != 3 or bi.shape[0] != ev.shape[0] or bi.shape[2] != 1:
+                raise RuntimeError(
+                    f'CRF bin for {side} c={c} has shape {getattr(bi, "shape", None)}; '
+                    f'expected (n_trials, n_clusters, 1)')
+            cond[(side, c)] = {
+                'R': np.asarray(bi[:, :, 0][:, good], dtype=float),
+                'conc': np.isclose(pl[sel], conc_pleft),
+            }
 
-    def _slope_mod(reg_mask, perm=None):
-        side_mods = []
-        for side in ('L', 'R'):
-            xs, rc, rd = [], [], []
-            for c in contrasts:
-                key = (side, c)
-                if key not in cond:
-                    continue
-                R = cond[key]['R'][:, reg_mask]
-                conc = cond[key]['conc'] if perm is None else perm[key]
-                if conc.sum() == 0 or (~conc).sum() == 0:
-                    continue
-                xs.append(c)
-                rc.append(float(R[conc].mean()))
-                rd.append(float(R[~conc].mean()))
-            if len(xs) >= 2:
-                xs = np.array(xs)
-                side_mods.append(np.polyfit(xs, rc, 1)[0] - np.polyfit(xs, rd, 1)[0])
-        return float(np.mean(side_mods)) if side_mods else np.nan
-
-    def _crf(reg_mask, which):
-        out = []
-        for c in contrasts:
-            vals = []
-            for side in ('L', 'R'):
-                key = (side, c)
-                if key not in cond:
-                    continue
-                R = cond[key]['R'][:, reg_mask]
-                m = cond[key]['conc'] if which == 'conc' else ~cond[key]['conc']
-                if m.sum():
-                    vals.append(float(R[m].mean()))
-            out.append(np.mean(vals) if vals else np.nan)
-        return out
+    import hashlib
+    seed_key = f'{pid}|{eid}|{probe}|crf|{nrand}|{pre_t}|{post_t}|{contrasts}'
+    seed = int(hashlib.md5(seed_key.encode()).hexdigest()[:8], 16)
+    rng = np.random.default_rng(seed)
 
     regs = Counter(acs)
     D = {}
@@ -4502,50 +4641,58 @@ def get_crf_slope(pid, cached=None, mapping='Beryl', window=(0.0, 0.15),
         if n < min_reg:
             continue
         rm = (acs == reg)
-        true_mod = _slope_mod(rm)
-        if np.isnan(true_mod):
+        sides = _crf_side_cells(cond, contrasts, rm)
+        slope_conc, slope_disc, true_mod = _crf_true_slopes(sides)
+        if not np.isfinite(true_mod):
             continue
-        null = np.array([
-            _slope_mod(rm, perm={k: np.random.permutation(v['conc']) for k, v in cond.items()})
-            for _ in range(nrand)
-        ])
-        null = null[~np.isnan(null)]
-        p = float(np.mean(np.abs(null) >= abs(true_mod))) if null.size else np.nan
-        crf_c = _crf(rm, 'conc')
-        crf_d = _crf(rm, 'disc')
+        null = _crf_null_slope_mods(sides, nrand, rng)
+        crf_c, crf_d = _crf_curves(cond, contrasts, rm)
         D[reg] = {
             'nclus': int(n),
             'contrasts': list(contrasts),
             'crf_conc': crf_c,
             'crf_disc': crf_d,
-            'slope_conc': (np.polyfit(contrasts, crf_c, 1)[0]
-                           if not np.any(np.isnan(crf_c)) else np.nan),
-            'slope_disc': (np.polyfit(contrasts, crf_d, 1)[0]
-                           if not np.any(np.isnan(crf_d)) else np.nan),
+            'slope_conc': slope_conc,
+            'slope_disc': slope_disc,
             'slope_mod': true_mod,
-            'p_slope_mod': p,
+            'p_slope_mod': _two_sided_perm_p(true_mod, null),
+            'null_slope_mod': np.asarray(null, dtype=np.float32),
         }
-    return {'pid': pid, 'eid': eid, 'D': D, 'contrasts': list(contrasts)}
+    return {
+        'pid': pid, 'eid': eid, 'probe': probe, 'D': D,
+        'contrasts': list(contrasts), 'nrand': int(nrand),
+        'window': [pre_t, post_t], 'prior': 'true_block',
+    }
 
 
 def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
-                      nrand=1000, restart=True, use_cache=True):
-    '''Driver: per-insertion CRF slope + prior-modulation test; save per insertion.'''
+                      nrand=1000, restart=True, use_cache=True,
+                      window=(0.0, 0.15)):
+    '''Driver: per-insertion CRF slope + prior-modulation test; save per insertion.
+
+    ``restart=True`` skips insertions whose output file already exists.
+    The insertion cache is always reused (``build_insertion_cache(restart=True)``);
+    ``restart=False`` recomputes the CRF file without reloading spikes.
+    '''
+    del control  # retained so older call sites keep working
     if eids_plus is None:
         df = bwm_query(one)
         eids_plus = df[['eid', 'probe_name', 'pid']].values
     pth = Path(one.cache_dir, 'manifold', 'crf_slope')
     pth.mkdir(parents=True, exist_ok=True)
     Fs = []
+    n_skip = 0
     for k, (eid, probe, pid) in enumerate(eids_plus, 1):
         eid_probe = f'{eid}_{probe}'
         outp = Path(pth, f'{eid_probe}.npy')
         if restart and outp.exists():
+            n_skip += 1
             continue
         t0 = time.perf_counter()
         try:
-            cache = build_insertion_cache(pid, restart=restart) if use_cache else None
-            D_ = get_crf_slope(pid, cached=cache, mapping=mapping, nrand=nrand)
+            cache = build_insertion_cache(pid, restart=True) if use_cache else None
+            D_ = get_crf_slope(
+                pid, cached=cache, mapping=mapping, nrand=nrand, window=window)
             np.save(outp, D_, allow_pickle=True)
             del cache
             gc.collect()
@@ -4554,49 +4701,114 @@ def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
             Fs.append(pid)
             gc.collect()
             print(k, 'of', len(eids_plus), 'fail', pid, exc)
-    print(f'{len(Fs)} failures:', Fs)
+            import traceback
+            traceback.print_exc()
+    print(f'{len(Fs)} failures, {n_skip} skipped (existing):', Fs)
 
 
 def crf_slope_stacked(min_reg=min_reg, alpha_sig=0.05):
     '''
-    Pool CRF-slope prior modulation across insertions per region.
+    Pool CRF slope modulation across insertions per region.
 
-    Aggregates slope_mod (concordant-discordant CRF slope) by nanmean across
-    insertions, averages the per-insertion p-values, and reports the mean CRF
-    curves. Writes manifold/res/crf_slope_stacked.npy.
+    The region statistic is the mean of per-insertion ``slope_mod``.
+    Its null is the mean of the saved per-insertion null draws (same draw
+    index; draws are independent across insertions). Region p is two-sided
+    with the +1 correction. BH-FDR across regions is written beside the npy.
+
+    Averaging per-insertion p-values is not the region test.
     '''
     pth = Path(one.cache_dir, 'manifold', 'crf_slope')
-    files = [f for f in os.listdir(pth) if f.endswith('.npy')]
+    files = sorted(f for f in os.listdir(pth) if f.endswith('.npy'))
     agg = {}
+    n_missing_null = 0
     for f in files:
-        D_ = np.load(Path(pth, f), allow_pickle=True).item()
+        try:
+            D_ = np.load(Path(pth, f), allow_pickle=True).item()
+        except Exception as exc:
+            print('crf_slope_stacked skip', f, exc)
+            continue
+        if not isinstance(D_, dict) or not isinstance(D_.get('D'), dict):
+            print('crf_slope_stacked skip', f, 'missing D')
+            continue
         contrasts = D_.get('contrasts')
         for reg, r in D_['D'].items():
-            a = agg.setdefault(reg, {'slope_mod': [], 'p': [], 'nclus': [],
-                                     'crf_conc': [], 'crf_disc': [], 'contrasts': contrasts})
+            a = agg.setdefault(reg, {
+                'slope_mod': [], 'p': [], 'nclus': [],
+                'crf_conc': [], 'crf_disc': [], 'nulls': [],
+                'contrasts': contrasts,
+            })
             a['slope_mod'].append(r['slope_mod'])
             a['p'].append(r['p_slope_mod'])
             a['nclus'].append(r['nclus'])
             a['crf_conc'].append(r['crf_conc'])
             a['crf_disc'].append(r['crf_disc'])
+            null = r.get('null_slope_mod')
+            if null is None:
+                n_missing_null += 1
+            else:
+                a['nulls'].append(np.asarray(null, dtype=float))
     res = {}
     for reg, a in agg.items():
         if np.nansum(a['nclus']) < min_reg or len(a['slope_mod']) == 0:
             continue
+        obs = float(np.nanmean(a['slope_mod']))
+        p_region = np.nan
+        n_draws = 0
+        if a['nulls'] and len(a['nulls']) == len(a['slope_mod']):
+            n_draws = min(int(v.size) for v in a['nulls'])
+            if n_draws > 0:
+                stacked = np.vstack([v[:n_draws] for v in a['nulls']])
+                p_region = _two_sided_perm_p(obs, np.nanmean(stacked, axis=0))
+        p_ins = np.asarray(a['p'], dtype=float)
         res[reg] = {
             'n_insertions': len(a['slope_mod']),
             'nclus_total': int(np.nansum(a['nclus'])),
-            'slope_mod_mean': float(np.nanmean(a['slope_mod'])),
-            'p_slope_mod_mean': float(np.nanmean(a['p'])),
-            'frac_sig': float(np.nanmean(np.array(a['p']) < alpha_sig)),
+            'slope_mod_mean': obs,
+            'p_region': p_region,
+            'n_null': int(n_draws),
+            'frac_sig': float(np.nanmean(p_ins < alpha_sig)),
             'crf_conc_mean': np.nanmean(np.array(a['crf_conc'], dtype=float), axis=0).tolist(),
             'crf_disc_mean': np.nanmean(np.array(a['crf_disc'], dtype=float), axis=0).tolist(),
             'contrasts': a['contrasts'],
         }
+    if n_missing_null:
+        print(f'crf_slope_stacked: {n_missing_null} region-rows had no null draws')
+
+    regs = list(res)
+    pvals = np.array([res[reg]['p_region'] for reg in regs], dtype=float)
+    from statsmodels.stats.multitest import multipletests
+    for alpha, key in ((0.05, 'p_fdr_0.05'), (0.01, 'p_fdr_0.01')):
+        adj = np.full(len(regs), np.nan)
+        ok = np.isfinite(pvals)
+        if int(ok.sum()) > 0:
+            _, padj, _, _ = multipletests(pvals[ok], alpha=alpha, method='fdr_bh')
+            adj[ok] = padj
+        for reg, p_adj in zip(regs, adj):
+            res[reg][key] = float(p_adj) if np.isfinite(p_adj) else np.nan
+
     outp = Path(one.cache_dir, 'manifold', 'res', 'crf_slope_stacked.npy')
     outp.parent.mkdir(parents=True, exist_ok=True)
     np.save(outp, res, allow_pickle=True)
+    csvp = outp.with_name('crf_slope_by_region.csv')
+    import csv
+    with csvp.open('w', newline='') as fh:
+        fields = [
+            'region', 'n_insertions', 'nclus_total', 'slope_mod_mean',
+            'p_region', 'p_fdr_0.05', 'p_fdr_0.01', 'frac_sig', 'n_null',
+        ]
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        for reg in sorted(res, key=lambda g: (not np.isfinite(res[g]['p_region']),
+                                               res[g]['p_region'])):
+            row = {k: res[reg].get(k, '') for k in fields if k != 'region'}
+            row['region'] = reg
+            writer.writerow(row)
+    n05 = sum(np.isfinite(res[g]['p_fdr_0.05']) and res[g]['p_fdr_0.05'] <= 0.05
+              for g in res)
+    n01 = sum(np.isfinite(res[g]['p_fdr_0.01']) and res[g]['p_fdr_0.01'] <= 0.01
+              for g in res)
     print(f'crf_slope_stacked: {len(res)} regions -> {outp}')
+    print(f'FDR 0.05: {n05} regions; FDR 0.01: {n01} regions -> {csvp}')
     return res
 
 
