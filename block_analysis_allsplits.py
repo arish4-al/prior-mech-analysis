@@ -2967,7 +2967,8 @@ def load_trials_for_saturation(one, eid, saturation_intervals):
     return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
 
 
-def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True):
+def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=True,
+                          eid=None, probe=None):
     '''
     Load an insertion's raw data ONCE (the expensive step) and cache it so every
     split reuses it instead of re-loading per split.
@@ -2975,8 +2976,12 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     Caches: spikes (times, clusters), clusters (cluster_id, atlas_id), and the
     bad-trial-masked trials table for each saturation type (one per alignment
     event: stim / move / feedback). Saved to manifold/insertion_cache/{eid_probe}.npy.
+
+    Pass ``eid`` and ``probe`` when they are already known. ``one.pid2eid`` needs
+    a remote Alyx connection and raises in ``mode='local'``.
     '''
-    eid, probe = one.pid2eid(pid)
+    if eid is None or probe is None:
+        eid, probe = one.pid2eid(pid)
     eid_probe = f'{eid}_{probe}'
     cpath = Path(one.cache_dir, 'manifold', 'insertion_cache', f'{eid_probe}.npy')
     if restart and cpath.exists():
@@ -4682,6 +4687,7 @@ def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
     pth.mkdir(parents=True, exist_ok=True)
     Fs = []
     n_skip = 0
+    n_ok = 0
     for k, (eid, probe, pid) in enumerate(eids_plus, 1):
         eid_probe = f'{eid}_{probe}'
         outp = Path(pth, f'{eid_probe}.npy')
@@ -4690,12 +4696,15 @@ def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
             continue
         t0 = time.perf_counter()
         try:
-            cache = build_insertion_cache(pid, restart=True) if use_cache else None
+            cache = (
+                build_insertion_cache(pid, restart=True, eid=eid, probe=probe)
+                if use_cache else None)
             D_ = get_crf_slope(
                 pid, cached=cache, mapping=mapping, nrand=nrand, window=window)
             np.save(outp, D_, allow_pickle=True)
             del cache
             gc.collect()
+            n_ok += 1
             print(k, 'of', len(eids_plus), 'ok', round(time.perf_counter() - t0, 1), 'sec')
         except Exception as exc:
             Fs.append(pid)
@@ -4703,7 +4712,10 @@ def get_all_crf_slope(eids_plus=None, control=True, mapping='Beryl',
             print(k, 'of', len(eids_plus), 'fail', pid, exc)
             import traceback
             traceback.print_exc()
-    print(f'{len(Fs)} failures, {n_skip} skipped (existing):', Fs)
+    print(f'{len(Fs)} failures, {n_ok} ok, {n_skip} skipped (existing):', Fs)
+    if Fs and n_ok == 0 and n_skip == 0:
+        raise RuntimeError(
+            f'all {len(Fs)} insertions failed; no crf_slope files written')
 
 
 def crf_slope_stacked(min_reg=min_reg, alpha_sig=0.05):
