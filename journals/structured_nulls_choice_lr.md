@@ -4,7 +4,7 @@
 
 **Status:** valid arms compared at α=0.01: Harris unique, AK strat ×3, min5 shuffle, AK fixed-stim, and **option 1 + copy-last** (`_pseudo_strat_sticky`, post-08-24 sign/0.5-drop, factor 1). **Choice L–R sticky is more liberal than shuffle** (183 / 184 FDR hits) — do not use as a conservative choice null. **Prior L–R f1/f2 and stim-side unsplit:** sticky and Harris unique are **0 FDR @0.01**. **Fully unsplit prior** (08-24e; L+R mixed, no stratum): still 0 FDR @0.01 duringstim (Harris and sticky); duringchoice sticky **11**, Harris **0** (BH p-floor — Harris is *more* liberal on median p and FDR @0.05). Pooling L+R liberalizes both structured nulls; the f1/f2 / stim-side total null is partly a stratum effect, not unique-null thinning. `_harris_unique` remains the preferred file for **choice** claims. **Bayes prior L–R Harris unique** (09-01; 6 local duringstim maps): **0 FDR @0.01** on 4-split and stim-side — shuffle 57 / 116 do not survive; same qualitative result as act Harris. Details: [Bayesian prior](bayesian_vs_act_prior.md). Bayes-agent sticky and choice Harris `*_bayes` still unscored. A 2026-08-22 job ran option 2 (`_pseudo_fixed_sticky`) by mistake; those FDR numbers are deleted. Pre-08-24 `act_block_*` AK `strat`/`fixedstim` outputs are invalid (sign bug).
 
-Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d / 24e:** fully unsplit act-prior campaign + FDR. **2026-08-27b:** Bayes Harris unique submitter. **2026-09-01:** Bayes Harris unique FDR on the 6 local duringstim prior maps (0 @0.01).
+Sources: dated entries 2026-07-12 (Goal 2), 07-13 (Harris donor-window), 07-18, 07-21 (AK audit), 07-23, 07-23b, 07-24, 07-24b–f, 07-27, 07-27b–e, 08-14, 08-14b–d, 08-17, 08-17b, 08-18. **2026-08-21:** `--actkernel-late-sticky`. **2026-08-22:** quintile match; option-1 + copy-last wired (`pseudo_strat_sticky`). **2026-08-23:** Bayes-agent sampler (not AK) for `*bayes*` splits. **2026-08-24 / 24b:** sign fix + 0.5-drop/additive sizing. **2026-08-24c:** sticky FDR. **2026-08-24d / 24e:** fully unsplit act-prior campaign + FDR. **2026-08-27b:** Bayes Harris unique submitter. **2026-09-01:** Bayes Harris unique FDR on the 6 local duringstim prior maps (0 @0.01). **2026-10-13:** summary bar of FDR region counts across these nulls, `alyx.../meta/bar_null_schemes_choice_prior.{svg,png}`.
 
 ---
 
@@ -1271,6 +1271,18 @@ Label shuffle (not Harris) for duringstim **stim L–R** (`stim_choice_*_block_*
 bash scripts/submit_goal2_bayes_harris_orcd.sh
 bash scripts/submit_goal2_bayes_shuffle_orcd.sh
 ```
+
+---
+
+## 2026-10-13 — bar plot of FDR counts across nulls
+
+Summary figure for the choice L–R and prior L–R maps under the label shuffle, the late-session trim, the action-kernel pseudosession, and Harris. Counts are BH-corrected `p_mean_c` from the existing alyx `meta/` comparison CSVs (not a new combine).
+
+`alyx.../meta/bar_null_schemes_choice_prior.svg` and `.png`.
+
+**Left, FDR 0.01.** Each alternative is paired with the shuffle it was scored against. Choice drop-late uses the pre-min5 shuffle (46 → 69 during stimulus, 84 → 100 around movement). Action-kernel and Harris choice use the min5 shuffle (88 → 183 and 88 → 21 during stimulus; 122 → 184 and 122 → 58 around movement). Prior four-split drop-late is 42 → 28 and 42 → 33. Prior stimulus-only during stimulus, from [sticky exclusion](sticky_end_of_session_exclusion.md), is 126 → 95. There is no around-movement stimulus-only drop-late file, so that slot is empty. Action-kernel and Harris prior on the four-split are 0 and 0.
+
+**Right, FDR 0.05, prior as the stratum is relaxed.** Drop-late is included only where a file exists: stimulus × choice 69 / 71, stimulus-only during stimulus 127. No drop-late run with the stratum removed. Action-kernel and Harris stay 0 on stimulus × choice. Stimulus only: action kernel 0, Harris 9 during stimulus and 0 around movement. No stratum: action kernel 17 / 24, Harris 32 / 39.
 
 ---
 

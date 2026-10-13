@@ -9,11 +9,10 @@ basin (`d_s≈50`, `g_i` intact). Two freeze sets. Rank later at extras=0,
 **Not in scope:** cold 8-seed `full` reruns; 150 / split windows;
 `gm0` / `mleak`; incongruent RT machinery; regular-mask Stage B.
 
-**Status:** 2026-10-05 — scored (8/8 `FIT_DONE`). Fair tot at extras=0:
-`wii` **s7 1.014** beats source s89 **1.054**. Stim-M overshoot drops
-on `wii` (0.133 → 0.070) but the curve still ramps through 40–80 ms.
-Choice I still collapses in the last ~20 ms before move (`d_i≈0`).
-**Queued:** `d_i` punch from `wii` s7 (`s89ft_di_choicei`).
+**Status:** 2026-10-09 — `di` / `wiigi` scored (8/8). Neither beats
+`wii` s7 tot **1.014**. Best `di` is s89 **1.033** (`d_i≈1.1`). Late
+choice-I hinge improves a little; I at commit stays ~0.043 (data ~0.08).
+Seeds that kept `d_i≈5` wreck stim M. `wiigi` does not help tot.
 
 **Code:** `--freeze-hold`, `--choice-im-extra-weight`,
 `--m-stim-overshoot-weight` in
@@ -222,3 +221,55 @@ Rank later at extras=0. JSON loss includes the hinge.
 PARTITION=mit_preemptable FORCE=0 \
   bash scripts/submit_fit_stage_b_s89ft_di_choicei.sh
 ```
+
+---
+
+## 2026-10-09 — `di` / `wiigi` scored
+
+Eight `cma_only` warm restarts from `wii` s7, all `FIT_DONE`. Same
+shared-stim protocol as the `wii` eval (`bps=20`, seed **12345**,
+regular s101, `m_pre=1`, extras off). Freeze-hold held `d_s=49.7`.
+JSON loss includes the late-I hinge — do not rank on it.
+
+Init was `d_i=5`. CMA backed `di` down to **1.1–1.2** on the tot-usable
+seeds; s12 stayed at 4.8 and blew stim M. `wiigi` mostly sat at `d_i≈5`
+with `g_i` still ~138 (s45 hit `g_i=200`).
+
+### Fair tot (extras off)
+
+| arm | seed | rec | fair | traj | IM | S | `L_S` | Ich | Ilate≥−40 | Iact0 | `d_i` | `g_i` | Mov≥40 |
+|-----|-----:|----:|-----:|-----:|---:|--:|------:|----:|----------:|------:|------:|------:|-------:|
+| **wii** | **7** | 1.135 | **1.014** | 0.385 | 0.151 | 0.017 | 0.460 | 0.026 | 0.023 | 0.042 | 0.003 | 138 | **0.070** |
+| di | 89 | 1.947 | **1.033** | 0.373 | 0.190 | 0.013 | 0.458 | 0.021 | 0.019 | 0.043 | 1.08 | 138 | 0.118 |
+| di | 7 | 1.064 | 1.048 | 0.360 | 0.211 | 0.016 | 0.460 | 0.020 | 0.015 | 0.045 | 1.25 | 138 | 0.136 |
+| di | 45 | 1.694 | 1.129 | 0.373 | 0.287 | 0.017 | 0.452 | 0.021 | 0.016 | 0.045 | 2.23 | 138 | 0.191 |
+| di | 12 | 1.166 | 1.441 | 0.290 | 0.650 | 0.055 | 0.446 | 0.014 | **0.003** | 0.055 | 4.80 | 138 | 0.471 |
+| wiigi | 7 | 1.119 | 1.095 | 0.360 | 0.238 | 0.042 | 0.456 | 0.021 | 0.031 | 0.043 | 5.05 | 140 | 0.152 |
+| wiigi | 45 | 1.440 | 1.138 | 0.248 | 0.409 | 0.028 | 0.453 | 0.020 | **0.001** | 0.058 | 2.83 | **200** | 0.298 |
+| wiigi | 12 | 1.386 | 1.185 | 0.360 | 0.350 | 0.028 | 0.447 | 0.018 | 0.019 | 0.045 | 5.03 | 133 | 0.241 |
+| wiigi | 89 | 1.096 | 1.229 | 0.332 | 0.431 | 0.021 | 0.445 | 0.016 | 0.012 | 0.048 | 5.07 | 141 | 0.309 |
+
+Action-aligned I at t=0 (commit) is still ~0.04–0.06 vs data ~0.08.
+`d_i~1` shaves Ich / Ilate a bit and **raises** stim-M hinge vs `wii`
+s7 (0.070 → 0.12). `d_i~5` can flatten late I only by wrecking stim M.
+
+Act-prior: `di` s89/s7 stay near `wii` s7 (perf ~0.82, inc RT ~−0.80).
+`wiigi` is worse (inc −1.4 to −2.3; s45 inc −0.44 with `g_i=200`).
+
+Overlays (SVG+PNG, including `prior_effects_80ms`) in each run dir.
+Drivers: `_tmp_s89ft_di_choicei_eval.py`, `_tmp_s89ft_di_choicei_plots.py`.
+
+- `di`: `weights_run_fj_stageB_hold_s89_full_s89ft_di_choicei_meancell_full_mask0-1-2-3-4-5-6-7-9-10-11-12-13-14-15-16-17-18-19-20_s{89,7,12,45}/`
+- `wiigi`: `weights_run_fj_stageB_hold_s89_full_s89ft_wiigi_choicei_meancell_full_mask1-3-4-10-11-12-13-14-15-16-17-18-19-20_s{89,7,12,45}/`
+
+Best tot among this punch: **`di` s89** (still loses to `wii` s7). Best
+to inspect for the I-at-commit aim: same, or `di` s7.
+
+### Verdict
+
+Punching `d_i` from 5 with a late-I hinge does **not** hold choice I at
+move onset. CMA walks `d_i` back toward 1 (stim I/M cost) or keeps 5
+and blows M. Freeing `g_i` (`wiigi`) does not trade that stack off —
+`g_i` stays ~138 except one ceiling hit. Keep **`wii` s7** as the tot
+winner. The commit cliff needs a different hold than a modest `d_i`
+fine-tune.

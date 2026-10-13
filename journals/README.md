@@ -18,8 +18,8 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Retinal then joint](retinal_then_joint_fitting.md) | Pivot: fit retinal @ all prior g/d≈0, then joint with retinal free to tweak; regular/sensory; modernize `fit_retinal` |
 | [Testing / revising model details](modeling_details_revisions.md) | Ablations: P→I/M ITI gate, I/M −400→−100 ms zero penalty, `W_pp` slow-prior box, one vs two action thresholds; 3× pre-action M (08-31; 09-16 mpre3 × 150 / full scored); I/M prior at full 150 ms (09-07); `im150stim` / `stimonly` (09-08; open `g_i` floor worse; restore `0.1`); model I/M distance = `mean_c ‖Δ‖` (09-08f; im150 meancell rerun); 09-16b/09-17 cross-window 80 vs 150 fair tables (incl. split 150/80); 09-18 rank at stim150/choice80 |
 | [Prior-curve dips and discordant RT](modeling_details_prior_rt_gaps.md) | Remaining shape gaps after tests 1–6: **M** stim-aligned ramps through the S-peak pause; incongruent RT still the wrong shape. 09-14 act-prior RT (s101); 10-04/10-05 s89ft → [s89ft imshape](s89ft_imshape.md) |
-| [s89ft I/M shape fine-tune](s89ft_imshape.md) | Warm CMA from 80 ms `full_mpre3_meancell` s89. `wii` s7 tot **1.014**. Choice I still collapses at commit. Queued 10-05b: `d_i` punch from wii s7 + late choice-I extra; `wiigi` also frees `g_i`. |
-| [Stage B fit variants (catalog)](stage_b_fit_variants.md) | Index of every scored Stage B / joint tag. 09-16b/09-17 fair 80 vs 150; 09-18 stim150/choice80 rank; 10-05 s89ft (`wii` s7 **1.014**); 10-05b `di_choicei` queued |
+| [s89ft I/M shape fine-tune](s89ft_imshape.md) | Warm CMA from 80 ms `full_mpre3_meancell` s89. `wii` s7 tot **1.014**. 10-09 `di`/`wiigi`: best `di` s89 **1.033**, commit I still ~0.043; `wiigi` worse. |
+| [Stage B fit variants (catalog)](stage_b_fit_variants.md) | Index of every scored Stage B / joint tag. 09-16b/09-17 fair 80 vs 150; 09-18 stim150/choice80 rank; 10-05 s89ft (`wii` s7 **1.014**); 10-09 `di` s89 1.033 |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
 ## Real data (`block_analysis_allsplits.py`, BWM)
@@ -33,6 +33,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Prior modulation by contrast](prior_modulation_by_contrast.md) | Contrast-stratified during-trial splits, cell retention, FDR p-floor analysis, and the revised 0 %-contrast choice-conditioned result |
 | [Structured nulls for choice L–R](structured_nulls_choice_lr.md) | Why label shuffle is too narrow; Harris; AK; option-1 + copy-last (`_pseudo_strat_sticky`); Bayes-agent sampler (08-23) and Bayes Harris unique submitter (08-27b), FDR not yet run; fully unsplit prior FDR (08-24e) |
 | [Sticky / end-of-session trial exclusion](sticky_end_of_session_exclusion.md) | Late 20 % ∪ perseveration-tail drop; choice FDR *expanded*; prior 4-split duringstim expands @0.05 / shrinks @0.01 (08-25); f1/unsplit *shrink* and stay Harris-nonzero; sticky tails not concentrated late; last 20 % slower not inaccurate / not more block-aligned |
+| [Figure 4.5: block effects on rastermap cell types](fig45_block_effects_cell_types.md) | Paper fig 4.5 (S/C/M block distance vs shuffles). 10-13: b/e reproduce from 2025 files; panel c = 67-cell `vis_subset0`, not `stim_res`; old types → new `concat_cvTrue` rm clusters; PETH recompute parity 3e-8; picks + S choice open |
 | [Single-neuron variance partition](variance_partition_mixed_regions.md) | Mixed stim×choice target set, OLS variance partition, full BWM results, neuron- and region-level nulls. 10-05: redo on the 12-region same-block (choice-unmatched) mixed list; not run |
 
 ## Other files
