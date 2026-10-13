@@ -28,7 +28,7 @@ export ONE_CACHE_DIR ONE_BASE_URL="${ONE_BASE_URL:-https://alyx.internationalbra
 
 STEP="${STEP:?Set STEP=compute|stack|select}"
 OUT="${OUT:-$ONE_CACHE_DIR/dmn/res/fig45/cvTrue/sensitivity}"
-CELL_TYPES="${CELL_TYPES:-$ONE_CACHE_DIR/dmn/res/fig45/cvTrue/cell_types.npy}"
+CELL_TYPES="${CELL_TYPES:-$REPO_DIR/data/fig45/cell_types.npy}"
 NRAND="${NRAND:-2000}"
 SEED="${SEED:-0}"
 PRIOR="${PRIOR:-act}"

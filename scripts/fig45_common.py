@@ -19,6 +19,9 @@ DMN_RES = DMN / 'res'
 NEW_STACK = Path.home() / 'Downloads/concat_cvTrue.npy'
 OUT_ROOT = DMN_RES / 'fig45'
 CLUSTERS_TABLE = DMN.parent / 'bwm_tables' / 'clusters.pqt'
+# Built locally from NEW_STACK (not on ORCD); git-tracked so jobs read it from the repo.
+TYPES_DIR = Path(__file__).resolve().parents[1] / 'data' / 'fig45'
+CELL_TYPES = TYPES_DIR / 'cell_types.npy'
 
 T_BIN = 0.0125   # bin size [s]
 STS = 0.002      # stride [s] for overlapping bins -> int(T_BIN // STS) = 6 sub-bins

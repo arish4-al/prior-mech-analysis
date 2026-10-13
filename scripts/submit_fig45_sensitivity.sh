@@ -4,8 +4,8 @@
 #
 #   bash scripts/submit_fig45_sensitivity.sh
 #
-# Needs: $CELL_TYPES (fig45_define_cell_types.py save, with stimint / rm22-rm28 /
-# integrator / move_all), manifold/insertion_cache
+# Needs: data/fig45/cell_types.npy in the repo (fig45_define_cell_types.py save,
+# with stimint / rm22-rm28 / integrator / move_all), manifold/insertion_cache
 # and bwm_tables/trials.pqt under ONE_CACHE_DIR.
 #
 # Override: N_SHARDS=8 MEM_SHARD=8G PARTITION=mit_preemptable Q=0.05 \
@@ -18,7 +18,7 @@ cd "$REPO_DIR"
 
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 OUT="${OUT:-$ONE_CACHE_DIR/dmn/res/fig45/cvTrue/sensitivity}"
-CELL_TYPES="${CELL_TYPES:-$ONE_CACHE_DIR/dmn/res/fig45/cvTrue/cell_types.npy}"
+CELL_TYPES="${CELL_TYPES:-$REPO_DIR/data/fig45/cell_types.npy}"
 N_SHARDS="${N_SHARDS:-8}"
 N_SHARDS_B="${N_SHARDS_B:-4}"
 MEM_SHARD="${MEM_SHARD:-8G}"
