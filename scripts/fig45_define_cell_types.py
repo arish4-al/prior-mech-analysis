@@ -28,7 +28,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 
-from fig45_common import CLUSTERS_TABLE, DMN_RES, NEW_STACK, OUT_ROOT, savefig_svg_png
+from fig45_common import (CELL_TYPES, CLUSTERS_TABLE, DMN_RES, NEW_STACK, OUT_ROOT, TYPES_DIR,
+                          savefig_svg_png)
 
 OLD_TYPE_FILES = {
     'stim_res': 'concat_block_pairs_act_normFalse_shuffleTrue_stim_res.npy',
@@ -201,7 +202,7 @@ REVIEW_COLORS = {'integrator': 'goldenrod', 'move_init': 'tomato', 'move': 'dark
 def cmd_review(args):
     """Train | test rastermap of the whole new stack (isort order, all trial
     types), side band + cluster-id ticks coloured by picked type."""
-    picks = json.loads((OUT / 'cell_types_picks.json').read_text())
+    picks = json.loads((TYPES_DIR / 'cell_types_picks.json').read_text())
     new = load_new(keys=('isort', 'rm_labels', 'len', 'concat_z', 'concat_z_train'))
     isort = new['isort']
     ls = new['rm_labels'][isort]
@@ -310,10 +311,10 @@ def cmd_save(args):
                               'ids': new['ids'][m], 'cluster_id': cids[m]}
         print(f'{name}: clusters {picks.get(name, "union")} -> {m.sum()} cells, '
               f'{len(set(new["pid"][m]))} insertions')
-    OUT.mkdir(parents=True, exist_ok=True)
-    np.save(OUT / 'cell_types.npy', out, allow_pickle=True)
-    (OUT / 'cell_types_picks.json').write_text(json.dumps(picks, indent=2))
-    print('wrote', OUT / 'cell_types.npy')
+    TYPES_DIR.mkdir(parents=True, exist_ok=True)
+    np.save(CELL_TYPES, out, allow_pickle=True)
+    (TYPES_DIR / 'cell_types_picks.json').write_text(json.dumps(picks, indent=2))
+    print('wrote', CELL_TYPES)
 
 
 def main():

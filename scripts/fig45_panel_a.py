@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 
-from fig45_common import NEW_STACK, OUT_ROOT, savefig_svg_png, sum_for_key
+from fig45_common import NEW_STACK, OUT_ROOT, TYPES_DIR, savefig_svg_png, sum_for_key
 
 OUT = OUT_ROOT / 'cvTrue'
 FIRST, LAST = 'quiescence', 'choiceR'
@@ -69,7 +69,7 @@ def main():
     X = raw[key][isort, c0:c1]
     norm = PowerNorm(gamma=0.5, vmin=0, vmax=1.5)
 
-    picks_f = OUT / 'cell_types_picks.json'
+    picks_f = TYPES_DIR / 'cell_types_picks.json'
     picks = json.loads(picks_f.read_text()) if picks_f.exists() else {}
 
     fig = plt.figure(figsize=(8, 9))

@@ -49,7 +49,7 @@ from pathlib import Path
 
 import numpy as np
 
-from fig45_common import (ALPHA_AK, BLOCK_PAIRS, MOVE_WIN, NRAND, OUT_ROOT,
+from fig45_common import (ALPHA_AK, BLOCK_PAIRS, CELL_TYPES, MOVE_WIN, NRAND, OUT_ROOT,
                           SATURATION_INTERVALS, STIM_WIN, STS, T_BIN, TTYPES,
                           sum_for_key)
 
@@ -376,7 +376,7 @@ def main():
         p.add_argument('--prior', choices=['act', 'true'], default='act')
         p.set_defaults(func=fn)
         if name == 'compute':
-            p.add_argument('--cell-types', type=Path, default=OUT / 'cell_types.npy')
+            p.add_argument('--cell-types', type=Path, default=CELL_TYPES)
             p.add_argument('--shard', type=int, default=0)
             p.add_argument('--n-shards', type=int, default=1)
             p.add_argument('--nrand', type=int, default=NRAND)

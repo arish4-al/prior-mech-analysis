@@ -69,10 +69,9 @@ import numpy as np
 
 from fig45_block_peths import (DEFAULT_ONE_CACHE, Loader, binned, insertion_list,
                                load_cell_types, shuffled_diffs, typed_spikes)
-from fig45_common import COLORS, NRAND, OUT_ROOT, STS, T_BIN, savefig_svg_png
+from fig45_common import CELL_TYPES, COLORS, NRAND, OUT_ROOT, STS, T_BIN, savefig_svg_png
 
 OUT = OUT_ROOT / 'cvTrue' / 'sensitivity'
-CELL_TYPES = OUT_ROOT / 'cvTrue' / 'cell_types.npy'
 MIN_TRIALS = 5
 CKPT = 5
 Q_FDR = 0.05

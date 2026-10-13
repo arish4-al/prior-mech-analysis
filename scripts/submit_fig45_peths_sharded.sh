@@ -4,8 +4,8 @@
 #
 #   bash scripts/submit_fig45_peths_sharded.sh
 #
-# Needs on ORCD: $OUT/cell_types.npy (from fig45_define_cell_types.py save,
-# copied from the laptop), manifold/insertion_cache and bwm_tables/trials.pqt
+# Needs: data/fig45/cell_types.npy in the repo (fig45_define_cell_types.py save),
+# manifold/insertion_cache and bwm_tables/trials.pqt
 # under ONE_CACHE_DIR. Cached insertions take ~1-30 s each at nrand=2000.
 #
 # Override: N_SHARDS=4 MEM_SHARD=8G PARTITION=mit_preemptable \
@@ -19,7 +19,7 @@ cd "$REPO_DIR"
 
 ONE_CACHE_DIR="${ONE_CACHE_DIR:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx}"
 OUT="${OUT:-$ONE_CACHE_DIR/dmn/res/fig45/cvTrue}"
-CELL_TYPES="${CELL_TYPES:-$OUT/cell_types.npy}"
+CELL_TYPES="${CELL_TYPES:-$REPO_DIR/data/fig45/cell_types.npy}"
 TYPES="${TYPES:-integrator move_all move_init move move_fback}"
 N_SHARDS="${N_SHARDS:-8}"
 MEM_SHARD="${MEM_SHARD:-6G}"

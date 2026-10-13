@@ -497,3 +497,9 @@ It runs automatically after stack B on ORCD.
 At q = 1 the selected sets are almost the whole pools, so their traces overlap
 those of the pools. M choice has p = 0.005 (the floor) in both windows; nothing
 else is significant on 6 sessions.
+
+**10-13e follow-up — cell types in the repo.** `cell_types.npy` (8.9 MB) and
+`cell_types_picks.json` moved from `dmn/res/fig45/cvTrue/` to git-tracked
+`data/fig45/`. They are built from the local-only `concat_cvTrue.npy`.
+All fig45 scripts and the ORCD job scripts default to
+`$REPO_DIR/data/fig45/cell_types.npy`, so no scp is needed.

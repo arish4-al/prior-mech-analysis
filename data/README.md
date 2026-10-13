@@ -1,3 +1,14 @@
+# Fig 4.5 cell types (git-tracked)
+
+| File | Role |
+|------|------|
+| `fig45/cell_types.npy` | Rastermap C / M / S-pool cell picks (uuid, pid, cluster_id, insertions); default `--cell-types` / `CELL_TYPES` for `scripts/fig45_*` and the ORCD jobs |
+| `fig45/cell_types_picks.json` | Cluster ranges used to build it |
+
+Built locally from `~/Downloads/concat_cvTrue.npy` (not on ORCD) with
+`python scripts/fig45_define_cell_types.py save --pick … --union …`; commit the
+regenerated file to change the picks.
+
 # Region lists for variance-partition analysis (git-tracked)
 
 | File | Role |
