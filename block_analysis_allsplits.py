@@ -1382,11 +1382,75 @@ def configure_excl_sticky_output_dirs(cache_dir=None):
     return pth_res
 
 
+def configure_standard_output_dirs(cache_dir=None):
+    '''Point pth_res / stream_acc at manifold/res_standard (avoid overwrite).'''
+    global pth_res, pth_stream_acc
+    root = Path(cache_dir or one.cache_dir)
+    pth_res = root / 'manifold' / 'res_standard'
+    pth_res.mkdir(parents=True, exist_ok=True)
+    pth_stream_acc = pth_res / '_stream_acc'
+    pth_stream_acc.mkdir(parents=True, exist_ok=True)
+    print(f'standard outputs -> {pth_res}')
+    return pth_res
+
+
+def _standard_act_pack(full):
+    '''Action-kernel labels on a full session, including masked and 0.5 trials.'''
+    choice = full['choice'].to_numpy(dtype=float)
+    cont, binary = action_kernel_priors(alpha, list(choice))
+    return {
+        'index': np.asarray(full.index),
+        'continuous': np.asarray(cont, dtype=float),
+        'binary': np.asarray(binary, dtype=float),
+        'true_pleft': full['probabilityLeft'].to_numpy(dtype=float),
+    }
+
+
+def attach_standard_act_prior(cache):
+    '''Compute the full-session act prior once per insertion and stash it.
+
+    The insertion cache only keeps masked trials. Their index is the row in
+    the unmasked ``load_trials_and_mask`` table, so later splits can look up
+    labels without recomputing the kernel.
+    '''
+    if cache.get('standard_act') is not None:
+        return cache
+    eid = cache.get('eid')
+    if eid is None:
+        raise RuntimeError('standard act prior needs eid on the insertion cache')
+    full, _ = load_trials_and_mask(one, eid, saturation_intervals=None)
+    cache['standard_act'] = _standard_act_pack(full)
+    return cache
+
+
+def apply_standard_act_prior(trials, pack):
+    '''Write full-session act labels onto masked trials, then drop true 0.5.
+
+    ``pack['index']`` is the full session. ``trials.index`` must be a subset.
+    The drop uses the true block, not the overwritten act label (that label
+    is only 0.8 or 0.2).
+    '''
+    pos = pd.Index(pack['index']).get_indexer(np.asarray(trials.index))
+    if np.any(pos < 0):
+        raise RuntimeError(
+            'standard act prior: masked trial index is not in the full session')
+    out = trials.copy()
+    out['true_priors'] = np.asarray(pack['true_pleft'], dtype=float)[pos]
+    out['act_priors'] = np.asarray(pack['continuous'], dtype=float)[pos]
+    out['probabilityLeft'] = np.asarray(pack['binary'], dtype=float)[pos]
+    keep = ~np.isclose(out['true_priors'].to_numpy(dtype=float), 0.5)
+    return out.loc[keep]
+
+
 def _null_labels(split, ntr, dx, choices=None):
     '''One boolean trial label vector for a null draw.
 
     ``choices``: choice (±1) in temporal trial order (same as sorted dx[:,1]).
     Used for stim_block nulls (shuffle stim-side labels within choice class).
+
+    ``*block_only*`` uses ``generate_pseudo_blocks`` (0.8/0.2 runs), including
+    the standard pipeline's ``act_block_only``. Every other split permutes
+    the observed labels.
     '''
     if 'block_only' in split:
         if _is_true_block_iti_split(split):
@@ -2732,12 +2796,21 @@ def action_kernel_priors(alpha, actions):
     '''Causal action-kernel prior: ``priors[t]`` uses ``actions[0..t-1]`` only.
 
     That is the label for the ITI before stimOn[t] (t−1's action and earlier).
+    A left choice (``>0``) steps the left prior up; a right choice (``<0``)
+    steps it down. A no-choice (``0``) or missing choice (NaN) leaves the
+    prior unchanged, matching IBL ``behavior_models.ActionKernel``.
     '''
     prior = 0.5
     priors = [prior]
     for t in range(len(actions)-1):
-        action = actions[t]
-        prior = alpha * int(action>0) + (1-alpha) * prior
+        action = np.asarray(actions[t], dtype=float)
+        if action.shape != ():
+            action = np.asarray(action).reshape(-1)[0]
+        action = float(action)
+        if (not np.isfinite(action)) or action == 0.0:
+            priors.append(prior)
+            continue
+        prior = alpha * int(action > 0) + (1 - alpha) * prior
         priors.append(prior)
     
     binary_priors = np.double(list(np.double(priors)>=0.5))
@@ -3018,7 +3091,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                actkernel_late_sticky=False,
                exclude_sticky_trials=False,
                sticky_late_frac=STICKY_LATE_FRAC,
-               sticky_min_run=STICKY_MIN_RUN):
+               sticky_min_run=STICKY_MIN_RUN,
+               standard_act_prior=False):
 
     '''
     for a given session, probe, bin neural activity
@@ -3062,7 +3136,7 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         from the same conditioning (or the full biased session if none)
       - ``block_only``: no stratum; donor true-block labels lagged to t−1
     Default False → label shuffle (``*block_only*`` still uses
-    ``generate_pseudo_blocks``).
+    ``generate_pseudo_blocks``, including under ``standard_act_prior``).
 
     ``exclude_sticky_trials``: drop last ``sticky_late_frac`` of the session and
     the **tail** of perseveration runs (≥ ``sticky_min_run`` same choice poorly
@@ -3090,8 +3164,18 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
 
         # Load in trials data and mask bad trials (False if bad)
         trials, mask = load_trials_for_saturation(one, eid, saturation_intervals)
-        # remove certain trials
-        trials = trials[mask]
+        if standard_act_prior:
+            # Kernel on the full table (masked trials and the unbiased block
+            # still in the sequence), then keep the masked rows.
+            pack = _standard_act_pack(trials)
+            trials = trials[mask]
+            trials = apply_standard_act_prior(trials, pack)
+        else:
+            trials = trials[mask]
+    if standard_act_prior and cached is not None:
+        if cached.get('standard_act') is None:
+            attach_standard_act_prior(cached)
+        trials = apply_standard_act_prior(trials, cached['standard_act'])
     # Bayes-optimal prior needs the full stimulus history (incl. 0.5 blocks).
     # Compute before dropping unbiased trials; labels are applied after.
     if 'bayes' in split:
@@ -3103,7 +3187,9 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
 
     # Drop true 0.5 only for prior-distance *block_* splits. Choicestim family
     # keeps 0.5 trials (priors overwritten later for act/bayes).
-    if 'block' in split and not is_choicestim_split(split):
+    # Standard act prior already dropped true 0.5 after the full-session kernel.
+    if (not standard_act_prior and 'block' in split
+            and not is_choicestim_split(split)):
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
     # ITI true-block: label the pre-stimOn[t] window with pLeft[t-1].
     # Act / Bayes already include trial t-1's observation in priors[t].
@@ -3116,7 +3202,11 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
                                trials['contrastLeft']>0.1])
         trials  = trials[~rm_trials]
         
-    if _split_uses_act_prior(split):
+    if standard_act_prior:
+        if not _split_uses_act_prior(split):
+            raise ValueError(
+                f'standard act prior is only for act splits, got {split}')
+    elif _split_uses_act_prior(split):
         # calculate action kernel prior to use for analysis
         trials['true_priors'] = trials['probabilityLeft']
         actions = list(trials['choice'])
@@ -4191,7 +4281,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                              actkernel_late_sticky=False,
                              exclude_sticky_trials=False,
                              sticky_late_frac=STICKY_LATE_FRAC,
-                             sticky_min_run=STICKY_MIN_RUN):
+                             sticky_min_run=STICKY_MIN_RUN,
+                             standard_act_prior=False):
     '''
     Time-efficient driver: iterate insertions in the OUTER loop, load each
     insertion's raw data ONCE (build_insertion_cache), then compute ALL splits
@@ -4226,7 +4317,12 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
     distance/null (see ``apply_sticky_trial_exclusion``). Prefer directing
     outputs to ``manifold/res_excl_sticky`` via ``configure_excl_sticky_output_dirs``.
     '''
-    if exclude_sticky_trials:
+    if exclude_sticky_trials and standard_act_prior:
+        raise ValueError(
+            'standard_act_prior and exclude_sticky_trials use different output dirs')
+    if standard_act_prior:
+        configure_standard_output_dirs()
+    elif exclude_sticky_trials:
         configure_excl_sticky_output_dirs()
     ak_mode = _resolve_actkernel_null_mode(
         actkernel_choice_null, actkernel_null_mode)
@@ -4262,7 +4358,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
           'actkernel_null_mode', actkernel_null_mode,
           'actkernel_pseudo_len_factor', actkernel_pseudo_len_factor,
           'actkernel_late_sticky', actkernel_late_sticky,
-          'exclude_sticky_trials', exclude_sticky_trials)
+          'exclude_sticky_trials', exclude_sticky_trials,
+          'standard_act_prior', standard_act_prior)
 
     donor_bank = None
     use_donor = (session_shuffle_null
@@ -4325,6 +4422,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
 
         try:
             cache = build_insertion_cache(pid, save=save_cache, restart=restart) if use_cache else None
+            if standard_act_prior and cache is not None:
+                attach_standard_act_prior(cache)
         except Exception as exc:
             Fs.append(pid)
             gc.collect()
@@ -4346,7 +4445,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                                 actkernel_late_sticky=actkernel_late_sticky,
                                 exclude_sticky_trials=exclude_sticky_trials,
                                 sticky_late_frac=sticky_late_frac,
-                                sticky_min_run=sticky_min_run)
+                                sticky_min_run=sticky_min_run,
+                                standard_act_prior=standard_act_prior)
                 if stream_pool:
                     accumulators[split].add(eid_probe, D_)
                     accumulators[split].save()

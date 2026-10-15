@@ -98,6 +98,48 @@ CHOICE_DURINGSTIM_ACT = [
     'choice_duringstim_r_block_l_act',
     'choice_duringstim_l_block_r_act',
 ]
+# Figure 2 act-prior splits. Must match analysis_functions.run_align.
+# stim_duringstim_short_act is not in this standard set.
+FIG2_STIM_DURINGSTIM1_ACT = [
+    'stim_block_l_act',
+    'stim_block_r_act',
+]
+FIG2_STIM_DURINGSTIM_ACT = [
+    'stim_choice_r_block_r_act',
+    'stim_choice_l_block_l_act',
+    'stim_choice_r_block_l_act',
+    'stim_choice_l_block_r_act',
+]
+FIG2_STIM_DURINGCHOICE_ACT = [
+    'stim_duringchoice_r_block_r_act',
+    'stim_duringchoice_l_block_l_act',
+    'stim_duringchoice_r_block_l_act',
+    'stim_duringchoice_l_block_r_act',
+]
+FIG2_STANDARD = (
+    FIG2_STIM_DURINGSTIM1_ACT
+    + FIG2_STIM_DURINGSTIM_ACT
+    + FIG2_STIM_DURINGCHOICE_ACT
+    + CHOICE_DURINGSTIM_ACT
+    + CHOICE_DURINGCHOICE_ACT
+)
+# Figure 4 prior rows. prior_80ms is the first 80 ms of the unsplit duringstim
+# curves, not a separate window. See journals/standard_splits.md.
+FIG4_PRIOR_DURINGSTIM = list(RUN_ALIGN['stimOn_times'])
+FIG4_PRIOR_DURINGCHOICE = list(RUN_ALIGN['firstMovement_times'])
+FIG4_PRIOR_UNSPLIT_STIM = [
+    'act_block_duringstim_l',
+    'act_block_duringstim_r',
+]
+FIG4_PRIOR = (
+    FIG4_PRIOR_DURINGSTIM
+    + FIG4_PRIOR_DURINGCHOICE
+    + FIG4_PRIOR_UNSPLIT_STIM
+)
+# ITI prior L vs R, no stim/choice stratum. Window is stimOn [−400, −100] ms.
+# Null is generate_pseudo_blocks (the only standard split that uses it).
+ITI_ACT = ['act_block_only']
+STANDARD_SPLITS = list(FIG2_STANDARD) + list(FIG4_PRIOR) + ITI_ACT
 CHOICE_DURINGCHOICE_BAYES = [
     'choice_stim_r_block_r_bayes',
     'choice_stim_l_block_l_bayes',
@@ -173,6 +215,12 @@ PRESETS = {
     'choice_lr_session_null_all': (
         CHOICE_DURINGCHOICE_ACT + CHOICE_DURINGSTIM_ACT
     ),
+    # Standard pipeline: full-session act prior, then mask, min5, drop true
+    # 0.5. Writes manifold/res_standard. See journals/standard_splits.md.
+    'fig2_standard': list(FIG2_STANDARD),
+    'fig4_prior': list(FIG4_PRIOR),
+    'iti_act': list(ITI_ACT),
+    'standard': list(STANDARD_SPLITS),
     'choice_lr_session_null_true': (
         CHOICE_DURINGCHOICE + CHOICE_DURINGSTIM
     ),
@@ -409,6 +457,12 @@ def main():
                    help='On AK synthetic choices, signed copy-last so each '
                         'draw\'s post-0.5 quintile mean_run matches that real '
                         'session. Default off. Appends _sticky to the AK suffix')
+    p.add_argument('--standard-act-prior', action='store_true', default=False,
+                   help='Figure 2 standard labels: action kernel on the full '
+                        'session (masked trials and the unbiased block kept in '
+                        'the EMA), then the bad-trial mask, then drop true '
+                        'pLeft==0.5. min_trials_per_side stays 5. Writes '
+                        'manifold/res_standard')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -433,6 +487,8 @@ def main():
     args = p.parse_args()
     if os.environ.get('ACTKERNEL_LATE_STICKY') == '1':
         args.actkernel_late_sticky = True
+    if os.environ.get('STANDARD_ACT_PRIOR') == '1':
+        args.standard_act_prior = True
 
     if (
         args.preset == 'goal3_c0_choice'
@@ -485,7 +541,12 @@ def main():
     splits = _validate_splits(splits)
 
     if args.finalize_only:
-        if args.exclude_sticky_trials:
+        if args.standard_act_prior and args.exclude_sticky_trials:
+            raise SystemExit(
+                'standard-act-prior and exclude-sticky-trials use different output dirs')
+        if args.standard_act_prior:
+            ba.configure_standard_output_dirs(args.one_cache_dir)
+        elif args.exclude_sticky_trials:
             ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
         ak_mode = args.actkernel_null_mode
         ba.configure_null_file_suffix(
@@ -529,9 +590,15 @@ def main():
           'actkernel_null_mode:', args.actkernel_null_mode,
           'actkernel_pseudo_len_factor:', args.actkernel_pseudo_len_factor,
           'actkernel_late_sticky:', args.actkernel_late_sticky,
-          'exclude_sticky_trials:', args.exclude_sticky_trials)
+          'exclude_sticky_trials:', args.exclude_sticky_trials,
+          'standard_act_prior:', args.standard_act_prior)
 
-    if args.exclude_sticky_trials:
+    if args.standard_act_prior and args.exclude_sticky_trials:
+        raise SystemExit(
+            'standard-act-prior and exclude-sticky-trials use different output dirs')
+    if args.standard_act_prior:
+        ba.configure_standard_output_dirs(args.one_cache_dir)
+    elif args.exclude_sticky_trials:
         ba.configure_excl_sticky_output_dirs(args.one_cache_dir)
 
     ba.configure_null_file_suffix(
@@ -567,6 +634,7 @@ def main():
         exclude_sticky_trials=args.exclude_sticky_trials,
         sticky_late_frac=args.sticky_late_frac,
         sticky_min_run=args.sticky_min_run,
+        standard_act_prior=args.standard_act_prior,
     )
     print('Done. Outputs under:', ba.pth_res,
           'suffix=', repr(ba.RES_FILE_SUFFIX))
