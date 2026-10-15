@@ -18,6 +18,7 @@ DMN = Path.home() / 'Downloads/ONE/openalyx.internationalbrainlab.org/dmn'
 DMN_RES = DMN / 'res'
 NEW_STACK = Path.home() / 'Downloads/concat_cvTrue.npy'
 OUT_ROOT = DMN_RES / 'fig45'
+PAPER_FIGS = DMN.parent / 'manifold' / 'paper_figs'
 CLUSTERS_TABLE = DMN.parent / 'bwm_tables' / 'clusters.pqt'
 # Built locally from NEW_STACK (not on ORCD); git-tracked so jobs read it from the repo.
 TYPES_DIR = Path(__file__).resolve().parents[1] / 'data' / 'fig45'

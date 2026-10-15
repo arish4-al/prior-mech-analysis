@@ -69,7 +69,8 @@ import numpy as np
 
 from fig45_block_peths import (DEFAULT_ONE_CACHE, Loader, binned, insertion_list,
                                load_cell_types, shuffled_diffs, typed_spikes)
-from fig45_common import CELL_TYPES, COLORS, NRAND, OUT_ROOT, STS, T_BIN, savefig_svg_png
+from fig45_common import (CELL_TYPES, COLORS, NRAND, OUT_ROOT, PAPER_FIGS, STS, T_BIN,
+                          savefig_svg_png)
 
 OUT = OUT_ROOT / 'cvTrue' / 'sensitivity'
 MIN_TRIALS = 5
@@ -332,6 +333,58 @@ def population_traces(r):
     return keys, np.mean(d, 0), np.mean(c, 0)
 
 
+# Regional offset/gain, on the 12.5 ms bins (mean of the 6 overlapping sub-bins).
+# Offset: mean of the first 5 stim-aligned bins (0-62.5 ms) minus the shuffle mean.
+# Gain: after removing that offset when it is significant, the peak of the remaining
+# bins (from 50 ms, or from -100 ms on the move trace) minus the shuffle at that time.
+PRIOR_OFFSET_BINS = 5
+PRIOR_GAIN_SKIP = 4
+PRIOR_ALPHA = 0.05
+
+
+def coarse_bins(tr):
+    st = int(T_BIN // STS)
+    n = tr.shape[-1] // st
+    return tr.reshape(tr.shape[:-1] + (n, st)).mean(-1)
+
+
+def prior_offset_gain(md, sc, win, alpha=PRIOR_ALPHA, offset_from=None):
+    """Offset and gain of one prior-distance curve against its shuffles.
+
+    offset_from=(md, sc) uses another curve's stim-aligned onset for the offset
+    removed before the gain test, as the move-aligned regional test does.
+    Sizes are the real value minus the shuffle mean (early-window mean for the
+    offset; the curve's peak for the gain).
+    """
+    md_c, sc_c = coarse_bins(md), coarse_bins(sc)
+    if offset_from is None:
+        off_md, off_sc = md_c, sc_c
+    else:
+        off_md, off_sc = coarse_bins(offset_from[0]), coarse_bins(offset_from[1])
+    early = np.concatenate([[off_md[:PRIOR_OFFSET_BINS].mean()],
+                            off_sc[:, :PRIOR_OFFSET_BINS].mean(1)])
+    p_offset = float(np.mean(early >= early[0]))
+    offset = float(early[0] - early[1:].mean())
+    shifted = md_c - (offset if p_offset < alpha else 0.0)
+    real_g = shifted[PRIOR_GAIN_SKIP:]
+    shuf_g = sc_c[:, PRIOR_GAIN_SKIP:]
+    joined = np.concatenate([[real_g.mean()], shuf_g.mean(1)])
+    p_gain = float(np.mean(joined >= joined[0]))
+    peak = int(np.argmax(real_g))
+    centers = (-win[0] + (np.arange(len(md_c)) + 0.5) * T_BIN) * 1000
+    return {'p_offset': p_offset,
+            'offset': offset,
+            'offset_real': float(early[0]),
+            'offset_shuffle': float(early[1:].mean()),
+            'offset_sig': bool(p_offset < alpha),
+            'p_gain': p_gain,
+            'gain': float(real_g[peak] - shuf_g[:, peak].mean()),
+            'gain_real': float(real_g[peak]),
+            'gain_shuffle': float(shuf_g[:, peak].mean()),
+            'gain_t_ms': float(centers[PRIOR_GAIN_SKIP + peak]),
+            'gain_sig': bool(p_gain < alpha)}
+
+
 def plot_pop(name, t, x, md, sc, st, n, out_dir):
     spec = ANALYSES[name]
     col = STAGE_COLORS.get(t, COLORS.get(t, 'k'))
@@ -421,12 +474,20 @@ def cmd_compare(args):
                     cm = sc.mean(0)
                     lo, hi = np.percentile(sc - cm, [2.5, 97.5], axis=0)
                     n = int(np.median([r['n'][k] for k in keys]))
+                    og = None
+                    if spec['contrast'] == 'b':
+                        off_from = None
+                        if name == 'prior_move':
+                            _, smd, ssc = population_traces(pops[stage]['prior_stim'][t])
+                            off_from = (smd, ssc)
+                        og = prior_offset_gain(md, sc, spec['win'], offset_from=off_from)
                     ax.fill_between(x, lo, hi, color=col, alpha=0.12, lw=0)
                     ax.plot(x, md - cm, color=col, ls=ls, lw=1.8,
                             label=f"{label} ({n} cells/pair) p={st['p_mean']:.4f}")
                     summary.setdefault(name, {})[t] = {
                         'label': label, 'stage': stage, 'n_median': n,
-                        **{k: v for k, v in st.items() if k != 'shifted'}}
+                        **{k: v for k, v in st.items() if k != 'shifted'},
+                        **({'offset_gain': og} if og else {})}
                 ax.axhline(0, color='k', lw=0.5)
                 ax.axvline(0, color='k', lw=0.5)
                 strata = ' x '.join(FNAME[s] for s in spec['strata'])
@@ -444,7 +505,21 @@ def cmd_compare(args):
     for name, v in summary.items():
         for t, st in v.items():
             print(f'{name:12s} {st["label"]:20s} n~{st["n_median"]:5d} '
-                  f'p_mean={st["p_mean"]:.4f} p_gain={st["p_gain"]:.4f}')
+                  f'p_mean={st["p_mean"]:.4f}')
+            og = st.get('offset_gain')
+            if not og:
+                continue
+            off_label = 'offset (from stim)' if name == 'prior_move' else 'offset'
+            off = 'SIG' if og['offset_sig'] else 'ns'
+            gn = 'SIG' if og['gain_sig'] else 'ns'
+            removed = 'removed' if og['offset_sig'] else 'kept'
+            print(f'{"":12s} {off_label:20s} {og["offset_real"]:.4f} vs shuffle '
+                  f'{og["offset_shuffle"]:.4f}  excess {og["offset"]:+.4f}  '
+                  f'p={og["p_offset"]:.4f} {off}')
+            print(f'{"":12s} {"gain peak":20s} {og["gain_real"]:.4f} vs shuffle '
+                  f'{og["gain_shuffle"]:.4f}  excess {og["gain"]:+.4f}  '
+                  f'at {og["gain_t_ms"]:.0f} ms  p={og["p_gain"]:.4f} {gn}'
+                  f'  (offset {removed})')
     print('wrote', cdir)
 
 
@@ -500,11 +575,275 @@ def cmd_select(args):
     print(json.dumps(info, indent=2, default=str))
 
 
+def _block_curve(pops, stage, name, typ):
+    r = pops[stage][name][typ]
+    keys, md, sc = population_traces(r)
+    n = int(np.median([r['n'][k] for k in keys]))
+    return md, sc, n
+
+
+def _badge(ax, letter, color, xy=(0.1, 0.9)):
+    ax.scatter(*xy, s=220, c=[color], transform=ax.transAxes, zorder=6,
+               clip_on=False, edgecolors='none')
+    ax.text(*xy, letter, transform=ax.transAxes, ha='center', va='center',
+            fontsize=8, zorder=7, clip_on=False)
+
+
+def _stars(hist, rows):
+    """rows: (y, sig). A star sits to the right of a significant reference line."""
+    from matplotlib.transforms import blended_transform_factory
+    trans = blended_transform_factory(hist.transAxes, hist.transData)
+    for y, sig in rows:
+        if sig:
+            hist.text(1.08, y, '*', transform=trans, ha='left', va='center',
+                      fontsize=11, clip_on=False)
+
+
+def _draw_block_panel(ax, md, sc, color, win, stim=True, hist=None,
+                      badge=None, inset_loc='upper left'):
+    """Fig 4.5 distance panel. The blue offset mark is the first 5 samples."""
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    from fig45_plot_distances import GAIN_SKIP, OFFSET_WINDOW, distance_stats
+    st = distance_stats(md, sc)
+    x = time_axis_ms(win, len(md))
+    early, gain0 = OFFSET_WINDOW, GAIN_SKIP
+    for i in range(min(80, len(sc))):
+        if stim:
+            ax.plot(x[:early], sc[i, :early], color='#5f7ea3', lw=0.2, alpha=0.35)
+            ax.plot(x[early - 1:], sc[i, early - 1:], color='0.75', lw=0.2, alpha=0.35)
+        else:
+            ax.plot(x, sc[i], color='0.75', lw=0.2, alpha=0.35)
+    if stim:
+        ax.plot(x[:early], md[:early], color='blue', ls='--', lw=1.3)
+        ax.plot(x[early - 1:], md[early - 1:], color=color, ls='--', lw=1.3)
+    else:
+        ax.plot(x, md, color=color, ls='--', lw=1.3)
+    if st['offset'] != 0.0:
+        ax.plot(x, st['shifted'], color=color, lw=1.5)
+    ins = inset_axes(ax, width='32%', height='30%', loc=inset_loc, borderpad=0.6)
+    cm = sc.mean(0)
+    lo, hi = np.percentile(sc - cm, [2.5, 97.5], axis=0)
+    ins.fill_between(x, lo, hi, color='0.75', alpha=0.7, lw=0)
+    ins.plot(x, md - cm, color=color, lw=0.8)
+    ins.axhline(0, color='k', lw=0.4)
+    ins.set_xticks([])
+    ins.set_yticks([])
+    for s in ins.spines.values():
+        s.set_visible(False)
+    if hist is not None:
+        hist.hist(sc.mean(1), bins=18, density=True, orientation='horizontal',
+                  color='0.6', alpha=0.7)
+        hist.axhline(md.mean(), ls='--', lw=1.1, color=color)
+        rows = [(md.mean(), st['p_mean'] < PRIOR_ALPHA)]
+        if stim:
+            hist.hist(sc[:, :early].mean(1), bins=18, density=True, orientation='horizontal',
+                      color='#5f7ea3', alpha=0.45)
+            hist.axhline(md[:early].mean(), color='blue', ls='--', lw=1.1)
+            rows.append((md[:early].mean(), st['p_offset'] < PRIOR_ALPHA))
+        hist.hist(sc[:, gain0:].mean(1), bins=18, density=True, orientation='horizontal',
+                  color='#c8a2d6', alpha=0.55)
+        hist.axhline(st['shifted'][gain0:].mean(), color=color, lw=1.1)
+        rows.append((st['shifted'][gain0:].mean(), st['p_gain'] < PRIOR_ALPHA))
+        xright = hist.get_xlim()[1]
+        dy = 0.028 * (hist.get_ylim()[1] - hist.get_ylim()[0])
+        for y, _sig in rows:
+            hist.plot([xright, xright], [y - dy, y + dy], color='k', lw=0.8,
+                      clip_on=False, zorder=5, solid_capstyle='butt')
+        _stars(hist, rows)
+        hist.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+        for s in ('top', 'right', 'bottom'):
+            hist.spines[s].set_visible(False)
+        hist.spines['left'].set_visible(True)
+        hist.spines['left'].set_linewidth(0.8)
+    ax.axvline(0, color='#57C1EB' if stim else '#e74c3c', lw=1.4)
+    ax.set_xticks([0, 40, 80] if (stim and win[1] <= 0.1) else
+                  ([0, 40, 80, 120] if stim else [0, -40, -80, -120]))
+    ax.tick_params(labelsize=10)
+    for s in ('top', 'right'):
+        ax.spines[s].set_visible(False)
+    if badge:
+        _badge(ax, *badge)
+    return st
+
+
+def _panel_letter(ax, letter):
+    ax.text(0.0, 1.01, letter, transform=ax.transAxes, fontsize=14,
+            fontweight='bold', va='bottom', ha='left', clip_on=False)
+
+
+def _cap_ticks(ax):
+    """At most five labeled ticks, at the original's size."""
+    from matplotlib.ticker import MaxNLocator
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 5, 10]))
+    ax.tick_params(axis='both', labelsize=10)
+
+
+def _draw_schematic(ax):
+    """Panel d, black line drawing. Marks and fills are left for later."""
+    ax.set_xlim(-0.2, 10.2)
+    ax.set_ylim(0.2, 4.2)
+    ax.axis('off')
+    nodes = [(1.1, 1.7, 'P'), (4.0, 1.7, 'S'), (6.7, 1.7, 'C'), (9.2, 1.7, 'M')]
+    for x, y, lab in nodes:
+        ax.add_patch(plt.Circle((x, y), 0.52, fc='white', ec='k', lw=1.0, zorder=3))
+        ax.text(x, y, lab, ha='center', va='center', fontsize=10, color='k', zorder=4)
+    for x0, x1 in ((1.7, 3.4), (4.6, 6.1), (7.3, 8.6)):
+        ax.annotate('', xy=(x1, 1.55), xytext=(x0, 1.55),
+                    arrowprops=dict(arrowstyle='-|>', color='k', lw=1.0,
+                                    mutation_scale=8))
+    ax.text(2.55, 1.15, 'stim', ha='center', fontsize=7, color='k')
+    for x0, x1 in ((1.1, 4.0), (4.0, 6.7), (6.7, 9.2)):
+        ax.annotate('', xy=(x1 - 0.15, 2.35), xytext=(x0 + 0.15, 2.35),
+                    arrowprops=dict(arrowstyle='-', color='k', lw=0.7,
+                                    connectionstyle='arc3,rad=-0.35'))
+
+
+def cmd_fig45(args):
+    """Figure 4.5 in the published layout: a raster, b C/M 2x2, c S, d schematic, e C vs M.
+
+    C and M are the act-block distance within stim x choice. S per cell is its
+    act-block distance within stim side, 0-80 ms.
+    """
+    import matplotlib.image as mpimg
+    from fig45_plot_distances import distance_stats
+    pops = {s: np.load(stage_dir(args.out, s) / 'population.npy', allow_pickle=True).item()
+            for s in STAGES}
+    spec = {name: ANALYSES[name] for name in ('S_prior', 'prior_stim', 'prior_move')}
+    curves = {
+        'S': _block_curve(pops, 'B', 'S_prior', 'S_cell'),
+        'C_stim': _block_curve(pops, 'A', 'prior_stim', 'integrator'),
+        'C_move': _block_curve(pops, 'A', 'prior_move', 'integrator'),
+        'M_stim': _block_curve(pops, 'A', 'prior_stim', 'move_all'),
+        'M_move': _block_curve(pops, 'A', 'prior_move', 'move_all'),
+    }
+    og = {}
+    for key, (md, sc, _) in curves.items():
+        if key == 'S':
+            win, off = spec['S_prior']['win'], None
+        elif key.endswith('move'):
+            win = spec['prior_move']['win']
+            off = curves[key.replace('move', 'stim')][:2]
+        else:
+            win, off = spec['prior_stim']['win'], None
+        og[key] = prior_offset_gain(md, sc, win, offset_from=off)
+    odir = args.fig_dir
+    wins = {'S': spec['S_prior']['win'], 'C_stim': spec['prior_stim']['win'],
+            'C_move': spec['prior_move']['win'], 'M_stim': spec['prior_stim']['win'],
+            'M_move': spec['prior_move']['win']}
+    colors = {'S': '#5BA4D9', 'C_stim': '#f4d03f', 'C_move': '#f4d03f',
+              'M_stim': '#e07a5f', 'M_move': '#e07a5f'}
+    badges = {'S': ('S', '#5BA4D9'), 'C_stim': ('C', '#f4d03f'), 'C_move': ('C', '#f4d03f'),
+              'M_stim': ('M', '#e07a5f'), 'M_move': ('M', '#e07a5f')}
+    ylabels = {
+        'S': r'$d^{\mathrm{prior},s}_{S}(t)$',
+        'C_stim': r'$d^{\mathrm{prior},s}_{C}(t)$',
+        'C_move': r'$d^{\mathrm{prior},m}_{C}(t)$',
+        'M_stim': r'$d^{\mathrm{prior},s}_{M}(t)$',
+        'M_move': r'$d^{\mathrm{prior},m}_{M}(t)$',
+    }
+    insets = {'S': 'lower right', 'C_stim': 'center right', 'C_move': 'lower left',
+              'M_stim': 'center right', 'M_move': 'upper left'}
+    summary = {k: {'n': n, 'p_mean': distance_stats(md, sc)['p_mean'], 'offset_gain': o}
+               for k, ((md, sc, n), o) in ((k, (curves[k], og[k])) for k in curves)}
+
+    fig = plt.figure(figsize=(13.2, 7.3))
+    grid = fig.add_gridspec(2, 1, height_ratios=[2.2, 1], hspace=0.38,
+                            left=0.02, right=0.99, top=0.96, bottom=0.06)
+    upper = grid[0].subgridspec(1, 2, width_ratios=[1.05, 1.05], wspace=0.16)
+    lower = grid[1].subgridspec(1, 3, width_ratios=[1.0, 2.2, 1.65], wspace=0.22)
+
+    ax_a = fig.add_subplot(upper[0])
+    raster = mpimg.imread(OUT_ROOT / 'cvTrue' / 'plots' / 'panel_a_raster_test.png')
+    rgb = raster[..., :3] if raster.ndim == 3 else raster
+    ink = (rgb < 0.98).any(2) if rgb.ndim == 3 else rgb < 0.98
+    ys, xs = ink.any(1), ink.any(0)
+    y0, y1 = int(ys.argmax()), int(len(ys) - ys[::-1].argmax())
+    x0, x1 = int(xs.argmax()), int(len(xs) - xs[::-1].argmax())
+    ax_a.imshow(raster[y0:y1, x0:x1], aspect='auto')
+    ax_a.axis('off')
+    _panel_letter(ax_a, 'a')
+
+    block = upper[1].subgridspec(2, 2, hspace=0.42, wspace=0.42)
+    slots = {'C_stim': block[0, 0], 'C_move': block[0, 1],
+             'M_stim': block[1, 0], 'M_move': block[1, 1]}
+    first_b = None
+    for key, slot in slots.items():
+        inner = slot.subgridspec(1, 2, width_ratios=[5.2, 0.9], wspace=0.12)
+        ax = fig.add_subplot(inner[0])
+        hist = fig.add_subplot(inner[1], sharey=ax)
+        md, sc, _ = curves[key]
+        _draw_block_panel(ax, md, sc, colors[key], wins[key],
+                          stim=not key.endswith('move'), hist=hist, badge=badges[key],
+                          inset_loc=insets[key])
+        ax.set_ylabel(ylabels[key], fontsize=10)
+        ax.set_xlabel('time (ms)', fontsize=10)
+        _cap_ticks(ax)
+        if first_b is None:
+            first_b = ax
+    _panel_letter(first_b, 'b')
+    apos = ax_a.get_position()
+    bpos = first_b.get_position()
+    # Panel c's ylabel sticks out of the figure and bbox-tight then pads a.
+    # Start a left of that so the raster sits on the left edge, short of b.
+    right = bpos.x0 - 0.14
+    x0 = -0.03
+    ax_a.set_position([x0, apos.y0, right - x0, apos.height])
+
+    inner = lower[0].subgridspec(1, 2, width_ratios=[5.2, 0.9], wspace=0.12)
+    ax_c = fig.add_subplot(inner[0])
+    hist_c = fig.add_subplot(inner[1], sharey=ax_c)
+    md, sc, _ = curves['S']
+    _draw_block_panel(ax_c, md, sc, colors['S'], wins['S'], stim=True,
+                      hist=hist_c, badge=badges['S'], inset_loc=insets['S'])
+    ax_c.set_ylabel(ylabels['S'], fontsize=10)
+    ax_c.set_xlabel('time (ms)', fontsize=10)
+    _cap_ticks(ax_c)
+    _panel_letter(ax_c, 'c')
+
+    egs = lower[2].subgridspec(1, 2, wspace=0.28)
+    amps = {}
+    ax_e0 = None
+    for i, (side, akey, bkey) in enumerate((('stim', 'C_stim', 'M_stim'),
+                                            ('move', 'C_move', 'M_move'))):
+        ax = fig.add_subplot(egs[i])
+        if ax_e0 is None:
+            ax_e0 = ax
+        for key in (akey, bkey):
+            md, sc, _ = curves[key]
+            tr = md - sc.mean(0)
+            x = time_axis_ms(wins[key], len(tr))
+            ax.plot(x, tr, color=colors[key], lw=1.3)
+            amps.setdefault(side, {})[key[0]] = float(tr.max() - tr.min())
+        amps[side]['M_over_C'] = amps[side]['M'] / amps[side]['C']
+        ax.axvline(0, color='#57C1EB' if side == 'stim' else '#e74c3c', lw=1.4)
+        ax.set_xlabel('time (ms)', fontsize=10)
+        ax.set_xticks([0, 40, 80, 120] if side == 'stim' else [0, -40, -80, -120])
+        _cap_ticks(ax)
+        for s in ('top', 'right'):
+            ax.spines[s].set_visible(False)
+        tag = 's' if side == 'stim' else 'm'
+        ax.set_ylabel(rf'$d^{{\mathrm{{prior}},{tag}}}_{{\{{C,M\}}}}(t)$', fontsize=10)
+    _badge(ax_e0, 'C', '#f4d03f', (0.16, 0.88))
+    _badge(ax_e0, 'M', '#e07a5f', (0.30, 0.88))
+    _panel_letter(ax_e0, 'e')
+
+    savefig_svg_png(fig, odir / 'fig45_Spercell_Call_Mall', dpi=160)
+    plt.close(fig)
+    summary['C_vs_M_amp'] = amps
+    (odir / 'summary.json').write_text(json.dumps(summary, indent=2))
+    print(json.dumps({k: {'n': v['n'], 'p_mean': v['p_mean'],
+                          'p_offset': v['offset_gain']['p_offset'],
+                          'p_gain': v['offset_gain']['p_gain']}
+                      for k, v in summary.items() if k != 'C_vs_M_amp'}, indent=2))
+    print('amp', amps)
+    print('wrote', odir)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name, fn in (('compute', cmd_compute), ('stack', cmd_stack), ('select', cmd_select),
-                     ('compare', cmd_compare)):
+                     ('compare', cmd_compare), ('fig45', cmd_fig45)):
         p = sub.add_parser(name)
         p.add_argument('--out', type=Path, default=OUT)
         p.add_argument('--cell-types', type=Path, default=None)
@@ -513,6 +852,8 @@ def main():
             p.add_argument('--stage', choices=list(STAGES), required=True)
         if name == 'select':
             p.add_argument('--q', type=float, default=Q_FDR)
+        if name == 'fig45':
+            p.add_argument('--fig-dir', type=Path, default=PAPER_FIGS / 'fig45')
         if name == 'compute':
             p.add_argument('--shard', type=int, default=0)
             p.add_argument('--n-shards', type=int, default=1)

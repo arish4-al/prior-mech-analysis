@@ -116,13 +116,18 @@ the fitted choice model.
 
 \paragraph{Analysis helper (fixed \(\alpha\) only).}
 Our \texttt{action\_kernel\_priors} implements the same EMA on a scalar
-\(p_t\):
+left-prior \(p_t\), and holds it on a no-choice or missing choice,
+matching \eqref{eq:prior-update}:
 \begin{equation}
 \label{eq:simple-prior}
 p_0 = \tfrac12,\qquad
-p_t = \alpha\,\mathbf{1}[a_{t-1}>0] + (1-\alpha)\,p_{t-1},
+p_t =
+\begin{cases}
+p_{t-1} & \text{if } a_{t-1}=0 \text{ or missing},\\
+\alpha\,\mathbf{1}[a_{t-1}>0] + (1-\alpha)\,p_{t-1} & \text{otherwise.}
+\end{cases}
 \end{equation}
-then binarises \(p_t\mapsto\{0.8,0.2\}\) for L/R-prior splits.
+It then binarises \(p_t\mapsto\{0.8,0.2\}\) for L/R-prior splits.
 It does \emph{not} fit \(\zeta\) or lapses.
 
 \subsection{Sensory likelihood combined with prior}

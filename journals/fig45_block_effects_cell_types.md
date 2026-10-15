@@ -503,3 +503,39 @@ else is significant on 6 sessions.
 `data/fig45/`. They are built from the local-only `concat_cvTrue.npy`.
 All fig45 scripts and the ORCD job scripts default to
 `$REPO_DIR/data/fig45/cell_types.npy`, so no scp is needed.
+
+## 2026-10-13f — prior offset and gain on the compare populations
+
+`compare` now scores offset and gain on the act-prior curves (S prior, C/M prior stim, C/M prior move). The distance traces are averaged onto the 12.5 ms bins (mean of the 6 sub-bins) so the windows match the regional test.
+
+- **Offset:** mean of the first 5 stim-aligned bins (0–62.5 ms) minus the shuffle mean. Significant if that early mean beats the shuffles at p < 0.05.
+- **Gain:** if the offset is significant it is subtracted, then the mean of the later bins (from 50 ms stim-aligned, or from −100 ms move-aligned) is tested against the shuffles. The move test uses the stim-aligned offset of the same population.
+- **Gain size:** the peak of that later window minus the shuffle mean at that time. The p-value is the late-window mean test, not a test of the peak itself.
+
+Numbers are in `manifold/res/fig45/cvTrue/sensitivity/compare/summary.json` under `offset_gain`. Every prior offset is significant at the 2000-shuffle floor (p = 0.0005). Gain fails for S per cell (p = 0.098) and for choice-selected C before movement (p = 0.112). S pool and S per cluster gain are p ≈ 0.004, significant at 0.05 and not at 0.01. S per cluster kept all 7 clusters, so it is the same population as the S pool.
+
+## 2026-10-13g — Figure 4.5 panels b, c, e with S per cell, C all, M all
+
+`fig45_sensitivity.py fig45` draws the block-distance panels from the sensitivity
+accumulators into `manifold/res/fig45/cvTrue/sensitivity/fig45/`.
+
+- **b.** C all and M all. Act-block L vs R within stim × choice, stim 0–150 ms and move −150–0 ms.
+- **c.** S per cell (54 cells). Act-block L vs R within stim side, 0–80 ms. This is the S prior test, not the 150 ms stim × choice protocol used for C and M.
+- **e.** C vs M, distance minus shuffle mean. Amplitude ratio M/C is 0.80 (stim) and 0.89 (move).
+
+Dashed curve is the raw distance. The blue segment is the first 62.5 ms. The solid curve is the raw distance minus the offset excess, drawn because every offset is significant. The inset is the distance minus the shuffle mean. p_mean is at the 2000-shuffle floor for all five panels. S per cell p_gain is 0.098; the other gains are at or under 0.001.
+
+## 2026-10-14 — Figure 4.5 redrawn in the published layout
+
+The composite `sensitivity/fig45/fig45_Spercell_Call_Mall.{svg,png}` follows the original panel arrangement: **a** full raster plus the M/C zoom, **b** C and M in a 2×2 (stim, then move), **c** S, **d** the P–S–C–M schematic, **e** C vs M with the shuffle mean removed.
+
+Each distance panel has the shuffle cloud, a dashed raw curve, a solid offset-removed curve, an inset of the shuffle-subtracted trace, and a side histogram. A star marks a test with p < 0.05. On the schematic the left mark of each pair is the offset and the right mark is the gain. S is a check then a cross (offset significant, gain not). C and M are two checks.
+
+**10-14 follow-up — figure details.** Panel proportions follow the original (a about as wide as b; the top block is two rows tall). The blue offset mark, its histogram, and its average line use the first 5 samples. Histogram reference lines end in a short vertical cap, including the lower one, and the left spine of the histogram is kept. Inset frames are off. Panel d is left blank. Panels b, c, and e use at most five ticks, at the original label size.
+
+**10-14b — figure folder moved.** The figure folder moved from `manifold/res/fig45/cvTrue/sensitivity/fig45/` to openalyx `manifold/paper_figs/fig45/`, next to the other main figures ([paper main figures](paper_main_figures.md)). `fig45_sensitivity.py fig45` now writes there by default (`--fig-dir`). The accumulators (`stageA`, `stageB`, `compare/`) stay in `sensitivity/`. Rerun to regenerate the composite in the new folder:
+
+```bash
+python scripts/fig45_sensitivity.py fig45 \
+    --out ~/Downloads/ONE/openalyx.internationalbrainlab.org/manifold/res/fig45/cvTrue/sensitivity
+```

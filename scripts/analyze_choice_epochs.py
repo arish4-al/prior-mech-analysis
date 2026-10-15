@@ -172,11 +172,18 @@ def tertile_slices(n: int) -> dict[str, slice]:
 
 
 def action_kernel_binary(actions: np.ndarray, alpha: float = ACT_ALPHA) -> np.ndarray:
-    '''Match block_analysis_allsplits.action_kernel_priors → 0.8/0.2 labels.'''
+    '''Match block_analysis_allsplits.action_kernel_priors → 0.8/0.2 labels.
+
+    0 / NaN holds the prior. Left (>0) steps up, right (<0) steps down.
+    '''
     prior = 0.5
     priors = [prior]
     for t in range(len(actions) - 1):
-        prior = alpha * int(actions[t] > 0) + (1 - alpha) * prior
+        action = float(np.asarray(actions[t], dtype=float).reshape(-1)[0])
+        if (not np.isfinite(action)) or action == 0.0:
+            priors.append(prior)
+            continue
+        prior = alpha * int(action > 0) + (1 - alpha) * prior
         priors.append(prior)
     binary = (np.asarray(priors, dtype=float) >= 0.5).astype(float)
     return binary * 0.6 + 0.2

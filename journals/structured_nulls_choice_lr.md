@@ -1284,6 +1284,49 @@ Summary figure for the choice L–R and prior L–R maps under the label shuffle
 
 **Right, FDR 0.05, prior as the stratum is relaxed.** Drop-late is included only where a file exists: stimulus × choice 69 / 71, stimulus-only during stimulus 127. No drop-late run with the stratum removed. Action-kernel and Harris stay 0 on stimulus × choice. Stimulus only: action kernel 0, Harris 9 during stimulus and 0 around movement. No stratum: action kernel 17 / 24, Harris 32 / 39.
 
+## 2026-10-14 — openalyx vs min5 choice shuffle: min5 is not the only difference
+
+The 07-27b note above ("all other analysis aspects are intended to be identical") is wrong for the 8 choice L–R act splits. Openalyx choice files came from `choicestim_analysis.py`; alyx `res/new` (08-14) came from the 07-13 port into `block_analysis_allsplits.get_d_vars` (commit 0f2aaf6). Diagnosis only, no code changed.
+
+**Region-level gap** (8 per-split files, 1,586 region-splits, alyx / openalyx medians): cells 0.89, observed mean 0.90, null mean 0.88, null SD **0.80**, observed-curve correlation **0.75**. The z-score of observed vs null rises from about 0.8–1.4 to 1.3–2.6; uncorrected p < 0.01 goes from 22 % to 34 %.
+
+**Differences found:**
+
+1. **min5 gate** (`block_analysis_allsplits.py:3508`). The original only asserted non-empty sides. In choice L–R the minority side is error trials within a stim × act-block stratum. Over 60 random BWM sessions (standard BWM mask), **17 %** of session × stratum cells have 1–4 minority trials (median 11; median stratum 92). That is consistent with the ~11 % cell loss. Means over 1–4 trials are very noisy and widen both the observed curve and its null. Dropping them narrows the null more than it lowers the observed curve, so p falls. The gate depends only on behavioural counts and the shuffle is still exchangeable within each kept insertion, so the test stays valid. It gains power, not false positives.
+2. **Act-kernel input sequence.** `choicestim_analysis` runs `action_kernel_priors` on the **full** session choice sequence and applies the mask only when selecting trials. The port runs it on the **masked** trials (cache `trials[sat]`, or `trials[mask]` uncached). Masks remove 30–70 % of trials in the 5 local cached sessions, so the EMA skips many choices. **9–22 %** of analysed trials get a different act-block label (choices match 100 % after time alignment). This changes stratum membership; it is the most likely reason the observed curves correlate at only 0.75. Journals that say "full sequence" (`prior_definitions` open question 2; variance partition 07-20h) mean **keep the unbiased block**, not "include trials the saturation mask dropped." `get_var_partition` does the same as `get_d_vars`: kernel on the already-masked table, with 0.5 kept. See the correction below.
+3. **Trials revision.** Not a major factor: about 1 % of `stimOn_times` differ by up to 0.7 s, and in one session `firstMovement_times` differ by a median of 11 ms.
+4. **Not differences:** both keep pLeft = 0.5 trials for choice/stim L–R (only prior-distance `*block_*` drops them). The null is the same plain label shuffle within the stratum. `nclus ≠ ws.shape[1]` is benign: zero cells are kept in `ws` but excluded from the count, so sums are unchanged.
+
+The prior-distance `act_block_*` path has always run the kernel on the masked, 0.5-dropped sequence (`_original_ba_stripped.py` lines 328–345), in both openalyx and alyx. Definitions in use: full session then mask (openalyx choice and stim L–R, from `choicestim_analysis`; Fig 4.5 rerun), masked with 0.5 kept (alyx choice L–R port, `get_var_partition`), and masked with 0.5 dropped (all `act_block_*`).
+
+**Which act-prior shuffle results are min5 / port:**
+
+| family | location | min5 + masked kernel? |
+|---|---|---|
+| choice L–R, 8 splits | alyx `res/new` (08-14) | yes |
+| choice L–R, 8 splits | openalyx `res` (per-split 2025-07/10) | no (full kernel, no gate) |
+| stim L–R `stim_block_*_act`, `stim_choice_*_act`, `_short_act`, `stim_duringchoice_*_act` | openalyx only | no; no alyx re-run |
+| `act_block` duringstim 4-split, stim-side unsplit, contrast | alyx `res/new` (07-14) | min5 yes (kernel path unchanged) |
+| `act_block` duringchoice 4-split | openalyx only (2025) | masked + 0.5 drop, no min5 |
+| `act_block_only` | alyx `res/new` (08-30) and openalyx (2025-10) | both masked + 0.5 drop; min5 on alyx only |
+| excl-sticky (all) | alyx `res_excl_sticky` (08-24) | yes |
+
+Mixed comparisons in use: the 08-14 choice FDR (88 / 122) and every "vs min5 shuffle" table use the port. Duringchoice prior comparisons and all stim L–R (Figure 2 a/b and the stim terms in e/f) are still pre-min5 openalyx. The two choice baselines (46 / 84 vs 88 / 122) differ by **both** the gate and the kernel input. The split between those two causes is not measured yet; that needs a re-run of the 8 choice splits with one change at a time (ORCD).
+
+**Correction (same day, later).** The masked-kernel order in `get_d_vars` was never fixed. `git log -L` on that call shows it has sat after `trials = trials[mask]` since the file was added (2025-12-15), through the 07-12 Bayes port and the 07-24 routing change. What was journaled under "full sequence" is a different, smaller choice:
+
+- [Prior definitions](prior_definitions.md) open question 2 (07-27) and variance partition 07-20h: keep pLeft = 0.5 inside the kernel. The 0.8–1 % flip table there is that drop only. `get_var_partition` (line 4964) keeps 0.5 but still kernels the saturation-masked table.
+- 07-27e donor parity and 08-24b pseudo cold-start were written to **match** `get_d_vars` (drop 0.5, then kernel on what remains), not to restore the pre-mask sequence.
+- Bayes is the case that was actually moved earlier: `bayesian_priors` runs on the full stim history before the 0.5 drop (`prior_definitions.md`).
+- Fig 4.5 is the distance pipeline that does use the full session: `fig45_block_peths.py` kernels `trials.pqt` choices, then indexes the kept rows (`fig45_block_effects_cell_types.md`, cache section). `fig45_sensitivity.py` uses that loader. The 2025 Fig 4.5 intermediates were also "kernel over all choices."
+- Behavioral scripts `analyze_perseveration_counts.py` and `analyze_choice_epochs.py` kernel the `trials.pqt` session (sticky journal 08-24; the former after the `bwm_include` filter). They do not feed the regional distance files.
+
+`choicestim_analysis.py` still kernels before the mask, and no submitter calls it.
+
+**2026-10-14b — openalyx vs alyx `act_block` duringstim, and a full-session kernel.** Both caches kernel after the mask and the 0.5 drop. The four splits (`act_block_duringstim_{l,r}_choice_{l,r}_{f1,f2}`) have the same 208 / 207 / 201 / 200 regions. Observed distance curves match to float noise except 12–15 regions whose cell counts also change (both directions: PF 149→108, CP 2639→2749 on the left-stim correct split). Those are not a one-way min5 deletion; prior L and prior R are both large, so the ≥5 gate rarely fires. Stored 4-split combine: FDR @0.01 **37 → 42** (kept 35, lost 2, gained 7), median p 0.112 → 0.119, p correlation 0.999, median |Δp| 0.004.
+
+Labels, if the kernel instead saw every trial in `bwm_tables/trials.pqt` (459 sessions, 165,208 analysed biased trials; `bwm_include` plus stim saturation matches the insertion-cache mask on the checked session). **8.5%** of analysed trials flip (session median 8.5%, 90th percentile 15%, max 43%; every session flips at least one). Of that, 8.3% is skipping masked trials inside the EMA and 0.4% is dropping the unbiased block before the kernel. This 8.5% is not the openalyx–alyx gap above; neither file uses the full session.
+
 ---
 
 ## Open questions

@@ -21,7 +21,7 @@ Sources: dated entries 2026-07-12 (Goal 1), 07-12e, 07-12f, 07-12h, 07-20h, 07-2
 Already in `get_d_vars` when `'act' in split`:
 
 1. Drop true-block 0.5 trials (`probabilityLeft != 0.5`).
-2. EMA over **choices**: `prior ← α·[choice>0] + (1−α)·prior` (choice > 0 = left).
+2. EMA over **choices**, a left prior. Left (`choice>0`): `prior ← α + (1−α)·prior`. Right (`choice<0`): `prior ← (1−α)·prior`. No choice (`0`) or missing choice (NaN): **hold** `prior` (IBL `ActionKernel`, as of 2026-10-15). Before that date the helper treated `0` and NaN as a right step. Existing `manifold/res` files used the old step.
 3. Binarize to **0.8 / 0.2** (`≥0.5 → 0.8`) and **overwrite** `probabilityLeft` (the true block is kept in `true_priors`).
 4. Downstream L-vs-R-prior splits use that overwritten column unchanged.
 

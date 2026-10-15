@@ -61,10 +61,15 @@ EXCLUDE_REGIONS = {'stim_res': {'AUDp'}}
 
 
 def action_kernel_priors(alpha, actions):
+    '''Left prior. 0 / NaN holds; left (>0) steps up; right (<0) steps down.'''
     prior = 0.5
     priors = [prior]
     for t in range(len(actions) - 1):
-        prior = alpha * int(actions[t] > 0) + (1 - alpha) * prior
+        action = float(np.asarray(actions[t], dtype=float).reshape(-1)[0])
+        if (not np.isfinite(action)) or action == 0.0:
+            priors.append(prior)
+            continue
+        prior = alpha * int(action > 0) + (1 - alpha) * prior
         priors.append(prior)
     binary = np.double(np.double(priors) >= 0.5) * 0.6 + 0.2
     return priors, binary

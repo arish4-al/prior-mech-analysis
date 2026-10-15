@@ -37,6 +37,7 @@ ACTKERNEL_CHOICE_NULL="${ACTKERNEL_CHOICE_NULL:-0}"
 ACTKERNEL_NULL_MODE="${ACTKERNEL_NULL_MODE:-}"
 ACTKERNEL_PSEUDO_LEN_FACTOR="${ACTKERNEL_PSEUDO_LEN_FACTOR:-}"
 ACTKERNEL_LATE_STICKY="${ACTKERNEL_LATE_STICKY:-0}"
+STANDARD_ACT_PRIOR="${STANDARD_ACT_PRIOR:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -53,7 +54,7 @@ fi
 echo "Host: $(hostname) Date: $(date)"
 git log -1 --oneline
 echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
-echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default} late_sticky=$ACTKERNEL_LATE_STICKY pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
+echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default} late_sticky=$ACTKERNEL_LATE_STICKY standard_act_prior=${STANDARD_ACT_PRIOR:-0} pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
 ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
@@ -70,11 +71,13 @@ ARGS+=(--stream-pool)
   --sticky-late-frac "$STICKY_LATE_FRAC"
   --sticky-min-run "$STICKY_MIN_RUN"
 )
+[[ "${STANDARD_ACT_PRIOR:-0}" == "1" ]] && ARGS+=(--standard-act-prior)
 
 python3 -u scripts/run_goal2_splits.py "${ARGS[@]}"
 echo "Shard done: $(date)"
 RES_ROOT="$ONE_CACHE_DIR/manifold/res"
 [[ "$EXCLUDE_STICKY_TRIALS" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_excl_sticky"
+[[ "${STANDARD_ACT_PRIOR:-0}" == "1" ]] && RES_ROOT="$ONE_CACHE_DIR/manifold/res_standard"
 SUFFIX=""
 if [[ -n "$ACTKERNEL_NULL_MODE" ]]; then
   case "$ACTKERNEL_NULL_MODE" in

@@ -656,10 +656,14 @@ SIM_TIMEFRAME_SPLITS = {
 
 
 def action_kernel_priors(alpha, actions):
+    '''Left prior. 0 / NaN holds; left (>0) steps up; right (<0) steps down.'''
     prior = 0.5
     priors = [prior]
     for t in range(len(actions) - 1):
-        action = actions[t]
+        action = float(np.asarray(actions[t], dtype=float).reshape(-1)[0])
+        if (not np.isfinite(action)) or action == 0.0:
+            priors.append(prior)
+            continue
         prior = alpha * int(action > 0) + (1 - alpha) * prior
         priors.append(prior)
     binary_priors = np.double(list(np.double(priors) >= 0.5))

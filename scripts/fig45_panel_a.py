@@ -95,8 +95,6 @@ def main():
             if len(r):
                 ax_z.plot([X.shape[1] + 3] * len(r), r, '|', color=col, ms=1, clip_on=False)
         ax_z.set_xlim(-0.5, X.shape[1] + 6)
-    fig.suptitle(f'concat_cvTrue rastermap ({args.half} half, isort from train), '
-                 f'{X.shape[0]} cells', fontsize=8)
     savefig_svg_png(fig, OUT / 'plots' / f'panel_a_raster_{args.half}', dpi=200)
     plt.close(fig)
     print('wrote', OUT / 'plots')
