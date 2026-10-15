@@ -51,20 +51,18 @@ export ACTKERNEL_NULL_MODE=""
 export ACTKERNEL_PSEUDO_LEN_FACTOR=""
 export STANDARD_ACT_PRIOR=1
 
-module load miniforge 2>/dev/null || true
-if [[ -f "$HOME/conda_envs/ibl/bin/activate" ]]; then
-  # shellcheck disable=SC1091
-  source "$HOME/conda_envs/ibl/bin/activate"
-elif command -v conda >/dev/null 2>&1; then
-  # shellcheck disable=SC1091
-  source "$(conda info --base)/etc/profile.d/conda.sh"
-  conda activate ibl 2>/dev/null || conda activate iblenv 2>/dev/null || true
+# List splits with the ibl env. `module load miniforge` puts a python3
+# without `one` first on PATH, and --list-splits imports block_analysis.
+PY="${PY:-$HOME/conda_envs/ibl/bin/python}"
+if [[ ! -x "$PY" ]]; then
+  echo "ERROR: ibl python not found at $PY" >&2
+  exit 1
 fi
 
 SPLITS=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && SPLITS+=("$line")
-done < <(python3 -u scripts/run_goal2_splits.py --preset "$PRESET" --list-splits)
+done < <("$PY" -u scripts/run_goal2_splits.py --preset "$PRESET" --list-splits)
 
 if [[ ${#SPLITS[@]} -eq 0 ]]; then
   echo "ERROR: no splits for PRESET=$PRESET" >&2
