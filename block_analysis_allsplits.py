@@ -2274,6 +2274,27 @@ def _block_null_prior_left(split, choice, stim_side):
     return np.isclose(pbin, 0.8)
 
 
+def _choice_strat_ys(split, choice, stim_side, pleft, n_elig, rng,
+                    standard_act_prior=False):
+    '''Choice L labels from a pseudo's stim×prior stratum.
+
+    Default keeps the 0.5 warm-up in the stratum. ``standard_act_prior``
+    kernels the full pseudo, drops those trials, then remakes the stratum
+    on the kept trials — the same stim × act-prior pool as choice Harris.
+    '''
+    choice = np.asarray(choice, dtype=float).reshape(-1)
+    stim_side = np.asarray(stim_side, dtype=float).reshape(-1)
+    pleft = np.asarray(pleft, dtype=float).reshape(-1)
+    if standard_act_prior and _split_uses_act_prior(split):
+        pbin = _act_prior_binary_from_choice(choice)
+        keep = ~np.isclose(pleft, 0.5)
+        mask = _stratum_mask_stim_pleft(stim_side[keep], pbin[keep], split)
+        return _ys_from_stratum_choices(choice[keep], mask, n_elig, rng)
+    mask = _stratum_mask_for_stream(
+        split, stim_side, choice, pleft_schedule=pleft)
+    return _ys_from_stratum_choices(choice, mask, n_elig, rng)
+
+
 def _strat_pseudo_prior_left(split, choice, stim_side, pleft,
                              standard_act_prior=False):
     '''Prior-L on a stratified pseudo after dropping pLeft=0.5.
@@ -2417,7 +2438,7 @@ def _compute_control_D_actkernel_choice(
         b, acs, acs1, choices_true, half1, half2, ntr, nrand, split,
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
         actkernel_null_mode='strat', actkernel_pseudo_len_factor=None,
-        actkernel_late_sticky=False):
+        actkernel_late_sticky=False, standard_act_prior=False):
     '''
     Synthetic-choice nulls (journal options 1–2 + legacy).
 
@@ -2429,7 +2450,8 @@ def _compute_control_D_actkernel_choice(
     - ``strat``: new pseudo stim/blocks + generated choices; take choices
       from the pseudo's stim×prior stratum via ``_stratum_mask_for_stream``
       (same act/bayes/true prior rules as real ``elig_idx``), length-matched
-      to ``n_elig``.
+      to ``n_elig``. ``standard_act_prior`` kernels that stratum on the full
+      pseudo, then drops the 0.5 warm-up, matching choice Harris.
     - ``fixedstim``: choices on the real stim/side stream; labels at
       ``elig_idx``.
     - ``unconstrained``: legacy — pseudo choices at calendar ``elig_idx``.
@@ -2472,10 +2494,14 @@ def _compute_control_D_actkernel_choice(
     n_elig = len(elig_idx)
     n_pseudo = (_strat_pseudo_n_trials(trials, len_factor)
                 if mode == 'strat' else len(trials))
+    if mode == 'strat' and standard_act_prior:
+        stream_tag = 'full-session kernel, then drop 0.5'
+    else:
+        stream_tag = 'pseudo stratum'
     print(f'actkernel-choice [{split}]: mode={mode}; '
           f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
-          f'(real={len(trials)}, n_elig={n_elig}); '
+          f'(real={len(trials)}, n_elig={n_elig}, {stream_tag}); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
           f'fit mode={fit.get("mode")} '
           f'params={np.array2string(np.asarray(fit["params"]), precision=3)}')
@@ -2523,11 +2549,9 @@ def _compute_control_D_actkernel_choice(
 
         for i in range(ch_mat.shape[0]):
             if mode == 'strat':
-                ch = ch_mat[i]
-                side = side_mat[i]
-                mask = _stratum_mask_for_stream(
-                    split, side, ch, pleft_schedule=pleft_mat[i])
-                ys = _ys_from_stratum_choices(ch, mask, n_elig, rng)
+                ys = _choice_strat_ys(
+                    split, ch_mat[i], side_mat[i], pleft_mat[i], n_elig, rng,
+                    standard_act_prior=standard_act_prior)
             else:
                 ys = ch_mat[i, elig_idx] == 1
             if not _ok(ys):
@@ -2588,6 +2612,8 @@ def _compute_control_D_actkernel_choice(
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
         'actkernel_late_sticky': bool(actkernel_late_sticky),
+        'actkernel_prior_on_full_pseudo': bool(
+            standard_act_prior and mode == 'strat'),
         'null_choice_model': choice_model,
     }
 
@@ -2856,7 +2882,7 @@ def _get_d_vars_session_shuffle(
         split, trials, spikes, clusters, mapping, control, nrand,
         null_batch_size, donor_bank, eid, actkernel_choice_null=False,
         actkernel_null_mode=None, actkernel_pseudo_len_factor=None,
-        actkernel_late_sticky=False):
+        actkernel_late_sticky=False, standard_act_prior=False):
     '''
     Choice L vs R under fixed stim (± prior), with structured nulls.
 
@@ -2934,6 +2960,7 @@ def _get_d_vars_session_shuffle(
                 actkernel_null_mode=ak_mode,
                 actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
                 actkernel_late_sticky=actkernel_late_sticky,
+                standard_act_prior=standard_act_prior,
             )
         if not donor_bank:
             raise InsufficientTrials(
@@ -3429,7 +3456,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             actkernel_choice_null=bool(actkernel_choice_null),
             actkernel_null_mode=actkernel_null_mode,
             actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
-            actkernel_late_sticky=actkernel_late_sticky)
+            actkernel_late_sticky=actkernel_late_sticky,
+            standard_act_prior=standard_act_prior)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info

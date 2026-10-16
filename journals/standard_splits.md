@@ -100,9 +100,9 @@ The null is `generate_pseudo_blocks` (`first5050=0`, length equal to the kept tr
 
 Same label pipeline as the sections above. Not run yet. Driver: `scripts/submit_standard_alt_nulls_orcd.sh` (`ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|all`). `nrand=2000`. Files land in `manifold/res_standard` with the suffix below.
 
-### Act prior, action-kernel pseudo-session + choice stickiness
+### Action-kernel pseudo-session + choice stickiness
 
-The 10 Figure 4 prior splits. Each null draw is a new pseudo-session (option 1): fitted ActionKernel on the real session, simulated choices on that full schedule (the 0.5 warm-up stays in the sequence), copy-last so the post-0.5 quintile mean run matches that session. The act-binary is the α=0.2 kernel on that full pseudo, then the 0.5 trials are dropped, then the stim×choice or stim-side stratum is remade on the kept trials. Pseudo length starts at 1× the real kept session and grows up to 16× if the stratum is short. Suffix `_pseudo_strat_sticky`. Preset `standard_prior_sticky`. Runs without `--standard-act-prior` still cold-start the kernel after the drop.
+The same splits as the Harris section below: 8 choice, 2 stim-side prior, 2 fully unsplit prior. Not the Figure 4 f1/f2 prior splits. Each null draw is a new pseudo-session (option 1): fitted ActionKernel on the real session, simulated choices on that full schedule (the 0.5 warm-up stays in the sequence), copy-last so the post-0.5 quintile mean run matches that session. The act-binary is the α=0.2 kernel on that full pseudo, then the 0.5 trials are dropped, then the stratum is remade on the kept trials (stim × act prior for choice; stim side for the stim-stratum prior; none for the fully unsplit prior). Pseudo length starts at 1× the real kept session and grows up to 16× if the stratum is short. Suffix `_pseudo_strat_sticky`. Preset `standard_prior_sticky`. Runs without `--standard-act-prior` still cold-start the kernel after the drop.
 
 ### Harris session transplant
 
@@ -114,4 +114,4 @@ Unique donor draws, suffix `_harris_unique`. The donor bank is `manifold/choice_
 | prior, stim | `standard_prior_harris_stim` | `act_block_duringstim_{l,r}` | act prior L vs R | stim side |
 | prior, none | `standard_prior_harris_none` | `act_block_duringstim_fully_unsplit`, `act_block_duringchoice_fully_unsplit` | act prior L vs R | none |
 
-Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. The f1/f2 prior splits stay on the sticky arm above.
+Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. Sticky uses these same windows and strata. The Figure 4 f1/f2 prior splits stay on the shuffle catalog only.
