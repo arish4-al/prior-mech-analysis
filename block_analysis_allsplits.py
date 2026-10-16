@@ -1107,7 +1107,8 @@ def _donor_block_prior_labels(rec, split):
 
     Matches recipient ``get_d_vars``:
       - drop true 0.5 blocks for the keep mask
-      - **act**: kernel on the remaining choice sequence
+      - **act**: kernel on the remaining choice sequence, or ``act_binary``
+        when the record is a standard full-session view
       - **bayes**: ``bayesian_priors`` on the **full** stim history (needs 0.5
         blocks), then restrict labels to the keep mask
       - **true**: ``pleft_true`` on keep; ``block_only`` ITI lags to t−1
@@ -1116,7 +1117,7 @@ def _donor_block_prior_labels(rec, split):
     ``(None, None)`` if unusable. ``keep_mask`` is True on non-0.5 trials
     (and not the first biased trial for true-block ITI).
     '''
-    rec = _normalize_donor_rec(rec)
+    rec = _donor_analysis_rec(rec, split)
     if rec.get('_legacy'):
         return None, None
     ch = np.asarray(rec['choice'], dtype=float).reshape(-1)
@@ -1128,7 +1129,12 @@ def _donor_block_prior_labels(rec, split):
     if int(keep.sum()) < 2 * min_trials_per_side:
         return None, None
     ch_k = ch[keep]
-    if _split_uses_act_prior(split):
+    if _split_uses_act_prior(split) and rec.get('act_binary') is not None:
+        pbin = np.asarray(rec['act_binary'], dtype=float).reshape(-1)
+        if len(pbin) != len(ch):
+            return None, None
+        lab_k = pbin[keep] == 0.8
+    elif _split_uses_act_prior(split):
         _, pbin = action_kernel_priors(alpha, list(ch_k))
         lab_k = np.asarray(pbin, dtype=float) == 0.8
     elif _split_uses_bayes_prior(split):
@@ -1153,7 +1159,7 @@ def _donor_block_conditioning_mask(rec, split, keep=None):
     only or choice-side only. For choice×stim splits, further intersect
     stim × choice (±c).
     '''
-    rec = _normalize_donor_rec(rec)
+    rec = _donor_analysis_rec(rec, split)
     if rec.get('_legacy'):
         return None
     if keep is None:
@@ -1569,6 +1575,58 @@ def _choice_donors_path():
     return Path(one.cache_dir, 'manifold', 'choice_donors.npy')
 
 
+def _choice_donors_standard_path():
+    '''Harris bank whose act labels use the standard full-session kernel.'''
+    return Path(one.cache_dir, 'manifold', 'choice_donors_standard.npy')
+
+
+def _donor_analysis_rec(rec, split):
+    '''Donor fields on the analysis trials for ``split``.
+
+    A standard-act record stores stim- and move-aligned views. Each view is
+    already masked and true-0.5-dropped, and ``act_binary`` is the full-session
+    kernel indexed onto those rows. Other records are the masked table from
+    ``choice_donors.npy``.
+    '''
+    if isinstance(rec, dict) and rec.get('standard_act') and 'views' in rec:
+        st = saturation_for_split(split)
+        key = 'move' if st == 'saturation_move_minus02' else 'stim'
+        view = (rec.get('views') or {}).get(key)
+        if not isinstance(view, dict):
+            return {
+                'choice': np.zeros(0, dtype=float),
+                'stim_is_left': np.zeros(0, dtype=bool),
+                'pleft_true': np.zeros(0, dtype=float),
+                '_legacy': True,
+            }
+        return _normalize_donor_rec(view)
+    return _normalize_donor_rec(rec)
+
+
+def _usable_standard_donor_view(view):
+    '''A saturation view can donate when it has enough biased trials.'''
+    if not isinstance(view, dict) or 'choice' not in view or 'act_binary' not in view:
+        return False
+    ch = np.asarray(view['choice'], dtype=float).reshape(-1)
+    ab = np.asarray(view['act_binary'], dtype=float).reshape(-1)
+    return len(ch) == len(ab) and len(ch) >= 2 * min_trials_per_side
+
+
+def _standard_donor_view(trials_kept, pack):
+    '''Mask already applied. Drop true 0.5; keep the full-session kernel.'''
+    out = apply_standard_act_prior(trials_kept, pack)
+    cr = out['contrastRight'].to_numpy(dtype=float)
+    cl = out['contrastLeft'].to_numpy(dtype=float)
+    return {
+        'choice': out['choice'].to_numpy(dtype=float),
+        'stim_is_left': np.isnan(cr),
+        'pleft_true': np.asarray(out['true_priors'], dtype=float),
+        'contrast_left': cl,
+        'contrast_right': cr,
+        'act_binary': np.asarray(out['probabilityLeft'], dtype=float),
+    }
+
+
 def _normalize_donor_rec(rec):
     '''
     Donor bank entry → dict with choice, stim_is_left, pleft_true
@@ -1606,6 +1664,10 @@ def _normalize_donor_rec(rec):
             if len(cl) == len(ch) and len(cr) == len(ch):
                 out['contrast_left'] = cl
                 out['contrast_right'] = cr
+        if 'act_binary' in rec:
+            ab = np.asarray(rec['act_binary'], dtype=float).reshape(-1)
+            if len(ab) == len(ch):
+                out['act_binary'] = ab
         return out
     ch = np.asarray(rec, dtype=float)
     return {
@@ -1687,13 +1749,83 @@ def build_choice_donor_bank(restart=True):
     return bank
 
 
-def load_choice_donor_bank():
+def build_standard_choice_donor_bank(restart=True):
+    '''Per-eid stim and move views for Harris under the standard act prior.
+
+    Kernel on the full session (bad trials and the unbiased block included),
+    then the bad-trial and saturation mask, then drop true ``probabilityLeft
+    == 0.5``. ``act_binary`` on each view is that kernel, not a kernel rerun
+    on the kept choices. A view with fewer than ``2 * min_trials_per_side``
+    biased trials is omitted; the other view is kept. ``restart=True``
+    returns the file if it exists.
+    '''
+    path = _choice_donors_standard_path()
+    if restart and path.exists():
+        bank = np.load(path, allow_pickle=True).item()
+        print(f'standard choice donor bank (cached): {len(bank)} eids -> {path}')
+        return bank
+
+    df = bwm_query(one)
+    eids = sorted(df['eid'].astype(str).unique())
+    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    bank = {}
+    n_skip = 0
+    for i, eid in enumerate(eids):
+        try:
+            trials, base_mask = load_trials_and_mask(
+                one, eid, saturation_intervals=None)
+            pack = _standard_act_pack(trials)
+            views = {}
+            for key, st in (
+                ('stim', 'saturation_stim_plus04'),
+                ('move', 'saturation_move_minus02'),
+            ):
+                _, mask = _apply_saturation_mask(
+                    trials, base_mask, one, eid, st, all_trials=all_trials)
+                view = _standard_donor_view(trials[mask], pack)
+                if not _usable_standard_donor_view(view):
+                    print(f'  skip {eid} {key}: '
+                          f'{len(view["choice"])} biased trials')
+                    continue
+                views[key] = view
+            if not views:
+                raise InsufficientTrials('no usable stim or move view')
+            bank[str(eid)] = {'standard_act': True, 'views': views}
+        except Exception as exc:
+            n_skip += 1
+            print(f'  skip {eid}: {exc}')
+        if (i + 1) % 25 == 0 or (i + 1) == len(eids):
+            print(f'  standard donors {i + 1}/{len(eids)}  '
+                  f'ok={len(bank)} skip={n_skip}', flush=True)
+    if not bank:
+        raise RuntimeError('standard choice donor bank is empty')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(path, bank, allow_pickle=True)
+    print(f'standard choice donor bank: {len(bank)} eids, '
+          f'skip={n_skip} -> {path}')
+    return bank
+
+
+def load_choice_donor_bank(standard_act=False):
     '''Load donor bank; prefer the on-disk copy with the most eids.
 
     Checks ``manifold/choice_donors.npy`` and ``manifold/res/choice_donors.npy``
     so a tiny local smoke bank does not shadow a full ORCD export under res/.
     Builds from insertion_cache if none exist.
+
+    ``standard_act=True`` loads ``choice_donors_standard.npy`` only.
     '''
+    if standard_act:
+        path = _choice_donors_standard_path()
+        if not path.exists():
+            raise FileNotFoundError(
+                f'standard Harris needs {path}. Build it with '
+                'scripts/run_goal2_splits.py --build-standard-choice-donors')
+        bank = np.load(path, allow_pickle=True).item()
+        if not isinstance(bank, dict) or not bank:
+            raise FileNotFoundError(f'empty standard donor bank: {path}')
+        print(f'standard choice donor bank: {len(bank)} eids <- {path}')
+        return bank
     best_path, best_bank, best_n = None, None, -1
     for path in _choice_donors_candidates():
         if not path.exists():
@@ -1714,14 +1846,19 @@ def load_choice_donor_bank():
 
 def _donor_stratum_mask(rec, split):
     '''Stim×prior mask on a donor session for ``split`` (None if unusable).'''
-    rec = _normalize_donor_rec(rec)
+    rec = _donor_analysis_rec(rec, split)
     if rec.get('_legacy'):
         return None
     ch = rec['choice']
     stim_side = np.where(rec['stim_is_left'], -1.0, 1.0)
     try:
-        mask = _stratum_mask_for_stream(
-            split, stim_side, ch, pleft_schedule=rec['pleft_true'])
+        ab = rec.get('act_binary')
+        if ab is not None and _split_uses_act_prior(split):
+            # Full-session kernel, already indexed to these kept trials.
+            mask = _stratum_mask_stim_pleft(stim_side, ab, split)
+        else:
+            mask = _stratum_mask_for_stream(
+                split, stim_side, ch, pleft_schedule=rec['pleft_true'])
     except ValueError:
         return None
     if len(mask) != len(ch):
@@ -1747,11 +1884,17 @@ def _harris_donor_candidates(n_elig, donor_bank, eid, split):
         if mask is None:
             n_legacy += 1
             continue
-        ch = _normalize_donor_rec(rec)['choice']
+        # Same unwrapped view as the mask. A standard record keeps choice
+        # inside stim/move views, not on the wrapper.
+        view = _donor_analysis_rec(rec, split)
+        ch = np.asarray(view['choice'], dtype=float).reshape(-1)
+        if len(ch) != len(mask):
+            n_legacy += 1
+            continue
         if int(np.asarray(mask).sum()) < n_elig:
             n_short += 1
             continue
-        candidates.append((np.asarray(ch, dtype=float), np.asarray(mask, dtype=bool)))
+        candidates.append((ch, np.asarray(mask, dtype=bool)))
     return candidates, {'n_legacy': n_legacy, 'n_short': n_short}
 
 
@@ -2131,6 +2274,29 @@ def _block_null_prior_left(split, choice, stim_side):
     return np.isclose(pbin, 0.8)
 
 
+def _strat_pseudo_prior_left(split, choice, stim_side, pleft,
+                             standard_act_prior=False):
+    '''Prior-L on a stratified pseudo after dropping pLeft=0.5.
+
+    The default act path cold-starts the kernel on the biased choices.
+    ``standard_act_prior`` runs it on the full pseudo, warm-up included,
+    then drops 0.5, matching the standard labels. Bayes always uses the
+    full stim history, then drops.
+    Returns ``(prior_left, keep)`` with ``prior_left`` on the kept trials.
+    '''
+    choice = np.asarray(choice, dtype=float).reshape(-1)
+    stim_side = np.asarray(stim_side, dtype=float).reshape(-1)
+    pleft = np.asarray(pleft, dtype=float).reshape(-1)
+    keep = ~np.isclose(pleft, 0.5)
+    on_full = bool(standard_act_prior) or _split_uses_bayes_prior(split)
+    if on_full:
+        prior_l = _block_null_prior_left(split, choice, stim_side)[keep]
+    else:
+        prior_l = _block_null_prior_left(
+            split, choice[keep], stim_side[keep])
+    return prior_l, keep
+
+
 def _act_block_stream_mask(split, stim_side, choice, signed_contrast=None):
     '''act_block stim×choice (±contrast) mask on a synthetic stream.'''
     spec = _act_block_conditioning_spec(split)
@@ -2150,7 +2316,7 @@ def _get_d_vars_block_harris(
         split, trials, spikes, clusters, mapping, control, nrand,
         null_batch_size, donor_bank, eid,
         actkernel_null_mode=None, actkernel_pseudo_len_factor=None,
-        actkernel_late_sticky=False):
+        actkernel_late_sticky=False, standard_act_prior=False):
     '''Prior L vs R (act_block_*) with Harris or AK null on the conditioning stratum.'''
     alignment = align[split]
     spec = _act_block_conditioning_spec(split)
@@ -2217,6 +2383,7 @@ def _get_d_vars_block_harris(
                 actkernel_null_mode=actkernel_null_mode,
                 actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
                 actkernel_late_sticky=actkernel_late_sticky,
+                standard_act_prior=standard_act_prior,
             )
         if not donor_bank:
             raise InsufficientTrials(
@@ -2429,7 +2596,7 @@ def _compute_control_D_actkernel_block(
         b, acs, acs1, labels_true, half1, half2, ntr, nrand, split,
         trials, elig_idx, eid, null_batch_size=NULL_BATCH_SIZE,
         actkernel_null_mode='fixedstim', actkernel_pseudo_len_factor=None,
-        actkernel_late_sticky=False):
+        actkernel_late_sticky=False, standard_act_prior=False):
     '''Synthetic-prior nulls for act_block / bayes_block / ITI true-block.
 
     ``act_block_*``: fit ActionKernel, simulate under θ, labels = act-binary.
@@ -2440,7 +2607,9 @@ def _compute_control_D_actkernel_block(
     - ``fixedstim``: real stim stream; priors at the real stim×choice
       ``elig_idx`` (within-stratum).
     - ``strat``: new pseudo stim/blocks; take priors from the pseudo's own
-      stim×choice stratum, length-matched to ``n_elig``.
+      stim×choice stratum, length-matched to ``n_elig``. Act labels
+      cold-start after the 0.5 drop, unless ``standard_act_prior``, which
+      kernels the full pseudo (warm-up included) and then drops.
     - ``unconstrained``: ITI ``*_block_only`` only — full pseudo-session,
       no stratum. True-block: real block labels. Act: AK choices → kernel.
       Bayes: stim sequence → ``bayesian_priors`` (no choice model).
@@ -2499,12 +2668,18 @@ def _compute_control_D_actkernel_block(
     fit_mode = fit.get('mode') if fit is not None else 'none'
     fit_params = (np.asarray(fit['params'], dtype=float) if fit is not None
                   else np.array([]))
+    if mode == 'unconstrained':
+        stream_tag = 'unstratified ITI'
+    elif mode == 'strat' and standard_act_prior:
+        stream_tag = 'full-session kernel, then drop 0.5'
+    else:
+        stream_tag = 'drop-0.5 pseudo strata'
     print(f'actkernel-block [{split}]: mode={mode}; '
           f'choice_model={choice_model}; '
           f'pseudo_len_factor={len_factor:g} n_pseudo={n_pseudo} '
           f'(real={len(trials)}, n_elig={n_elig}, '
           f'biased≈{n_pseudo - ACTKERNEL_PSEUDO_UNBIASED_PAD if mode != "fixedstim" else n_pseudo}, '
-          f'{"unstratified ITI" if mode == "unconstrained" else "drop-0.5 pseudo strata"}); '
+          f'{stream_tag}); '
           f'late_sticky={bool(actkernel_late_sticky)}; '
           f'fit mode={fit_mode} '
           f'params={np.array2string(fit_params, precision=3) if fit_params.size else "—"}')
@@ -2571,20 +2746,16 @@ def _compute_control_D_actkernel_block(
                 ys = _ys_from_stratum_labels(
                     prior_l, np.ones(len(prior_l), dtype=bool), n_elig, rng)
             elif mode == 'strat':
-                # Match the real act_block path: drop the pseudo's pLeft=0.5
-                # warm-up block before forming the stim×choice stratum, and
-                # cold-start the act-kernel prior on the biased choices (Bayes
-                # priors need full stim history, so compute then drop). Journal
-                # 2026-08-24b.
-                keep = ~np.isclose(pleft_mat[i], 0.5)
+                # Drop the pseudo's pLeft=0.5 warm-up before the stratum.
+                # Default act path cold-starts the kernel on the biased
+                # choices (journal 2026-08-24b). Standard labels kernel the
+                # full pseudo first, warm-up included, then drop.
+                prior_l, keep = _strat_pseudo_prior_left(
+                    split, ch_mat[i], side_mat[i], pleft_mat[i],
+                    standard_act_prior=standard_act_prior)
                 ch_k = ch_mat[i][keep]
                 side_k = side_mat[i][keep]
                 signed_k = signed_mat[i][keep]
-                if _split_uses_bayes_prior(split):
-                    prior_l = _block_null_prior_left(
-                        split, ch_mat[i], side_mat[i])[keep]
-                else:
-                    prior_l = _block_null_prior_left(split, ch_k, side_k)
                 mask = _act_block_stream_mask(
                     split, side_k, ch_k, signed_contrast=signed_k)
                 ys = _ys_from_stratum_labels(prior_l, mask, n_elig, rng)
@@ -2655,6 +2826,8 @@ def _compute_control_D_actkernel_block(
         'actkernel_pseudo_len_factor': len_factor,
         'actkernel_n_pseudo_trials': n_pseudo,
         'actkernel_late_sticky': bool(actkernel_late_sticky),
+        'actkernel_prior_on_full_pseudo': bool(
+            standard_act_prior and mode == 'strat'),
         'null_choice_model': choice_model,
     }
 
@@ -3005,15 +3178,20 @@ SATURATION_TYPES = (
 )
 
 
-def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals):
+def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
+                           all_trials=None):
     '''
     Saturation exclusion on top of load_trials_and_mask base mask.
 
     load_trials_and_mask(..., saturation_intervals=st) can assert when
     truncate_to_pass shortens trials vs the aggregate table; we apply saturation
     here with row alignment instead.
+
+    ``all_trials``: optional aggregate trials table, so a donor-bank build can
+    read the parquet once.
     '''
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    if all_trials is None:
+        all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
     sess_trials = all_trials[all_trials['eid'] == str(eid)].copy()
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
@@ -3237,7 +3415,8 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
             null_batch_size, donor_bank, eid,
             actkernel_null_mode=ak_mode,
             actkernel_pseudo_len_factor=actkernel_pseudo_len_factor,
-            actkernel_late_sticky=actkernel_late_sticky)
+            actkernel_late_sticky=actkernel_late_sticky,
+            standard_act_prior=standard_act_prior)
         if excl_info is not None and isinstance(D, dict):
             D = dict(D)
             D['trial_exclusion'] = excl_info
@@ -4366,20 +4545,23 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                  and ak_mode is None
                  and any(is_harris_eligible_split(sp) for sp in splits_list))
     if use_donor:
-        donor_bank = load_choice_donor_bank()
-        print(f'harris donor bank: {len(donor_bank)} eids')
+        donor_bank = load_choice_donor_bank(
+            standard_act=bool(standard_act_prior))
+        print(f'harris donor bank: {len(donor_bank)} eids'
+              f'{" (standard act)" if standard_act_prior else ""}')
     elif session_shuffle_null and ak_mode is None:
         print('WARNING: --session-shuffle-null set but no choice_stim*/'
               'choice_duringstim*/act_block* splits in list')
     elif ak_mode is not None and any(
-            is_choice_lr_split(sp) for sp in splits_list):
-        print(f'actkernel null mode={ak_mode} enabled for choice L–R splits'
+            is_choice_lr_split(sp) or is_act_block_prior_split(sp)
+            for sp in splits_list):
+        print(f'actkernel null mode={ak_mode} enabled'
               f' (pseudo_len_factor='
               f'{_actkernel_pseudo_len_factor(actkernel_pseudo_len_factor):g}'
               f', late_sticky={bool(actkernel_late_sticky)})')
     elif ak_mode is not None:
         print('WARNING: actkernel null set but no choice_stim*/'
-              'choice_duringstim* splits in list')
+              'choice_duringstim*/act_block* splits in list')
 
     if eids_plus is None:
         df = bwm_query(one)

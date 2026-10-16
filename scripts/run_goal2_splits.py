@@ -221,6 +221,17 @@ PRESETS = {
     'fig4_prior': list(FIG4_PRIOR),
     'iti_act': list(ITI_ACT),
     'standard': list(STANDARD_SPLITS),
+    # Same labels as ``standard``. Alternative nulls: see
+    # journals/standard_splits.md. Sticky is option-1 AK pseudo-session
+    # plus copy-last on the 10 Figure 4 prior splits. Harris is unique-null
+    # session transplant: choice L–R inside its stim×act stratum, prior L–R
+    # inside stim side, and prior L–R with no stratum.
+    'standard_prior_sticky': list(FIG4_PRIOR),
+    'standard_choice_harris': (
+        list(CHOICE_DURINGSTIM_ACT) + list(CHOICE_DURINGCHOICE_ACT)
+    ),
+    'standard_prior_harris_stim': list(FIG4_PRIOR_UNSPLIT_STIM),
+    'standard_prior_harris_none': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
     'choice_lr_session_null_true': (
         CHOICE_DURINGCHOICE + CHOICE_DURINGSTIM
     ),
@@ -421,6 +432,10 @@ def main():
     p.add_argument('--build-choice-donors', action='store_true',
                    help='Rebuild manifold/choice_donors.npy from insertion_cache '
                         '(full-session choice sequences for Harris nulls)')
+    p.add_argument('--build-standard-choice-donors', action='store_true',
+                   help='Build manifold/choice_donors_standard.npy: full-session '
+                        'act kernel, then mask and true-0.5 drop. '
+                        'REBUILD_DONORS=1 rebuilds an existing file')
     p.add_argument('--session-shuffle-null', action='store_true', default=False,
                    help='Harris unique-null session-permutation for '
                         'choice_stim*/choice_duringstim* (choice labels in '
@@ -522,6 +537,14 @@ def main():
         print('ONE cache:', ba.one.cache_dir)
         bank = ba.build_choice_donor_bank(restart=False)
         print(f'Done. {len(bank)} donor eids ->', ba._choice_donors_path())
+        return
+
+    if args.build_standard_choice_donors:
+        print('ONE cache:', ba.one.cache_dir)
+        rebuild = os.environ.get('REBUILD_DONORS') == '1'
+        bank = ba.build_standard_choice_donor_bank(restart=not rebuild)
+        print(f'Done. {len(bank)} standard donor eids ->',
+              ba._choice_donors_standard_path())
         return
 
     if args.cache_only:
