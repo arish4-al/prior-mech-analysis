@@ -1,6 +1,6 @@
 # Standard splits
 
-Catalog of the regional-distance splits that count as the current standard analysis. Figure 2 is the first set. More splits will be added later; do not treat an older `manifold/res` or `res/new` file as this standard until it is listed here and rerun.
+Catalog of the regional-distance splits that count as the current standard analysis. Figure 2, Figure 4 prior, and the ITI split are the shuffle set. Alternative nulls are at the end. Do not treat an older `manifold/res` or `res/new` file as this standard until it is listed here and rerun.
 
 ## Pipeline
 
@@ -10,11 +10,11 @@ Order, for every split in this catalog:
 2. Then the existing bad-trial and saturation mask.
 3. Then drop trials whose **true** `probabilityLeft` is 0.5. The kernel has already seen them.
 4. `min_trials_per_side=5` on the two sides of the split, after that drop.
-5. Plain within-stratum label shuffle, `nrand=2000`, except `act_block_only`, whose null is `generate_pseudo_blocks` (0.8/0.2 runs, same length as the kept trials, no t−1 lag). No Harris unique-null and no action-kernel pseudosession.
+5. Plain within-stratum label shuffle, `nrand=2000`, except `act_block_only`, whose null is `generate_pseudo_blocks` (0.8/0.2 runs, same length as the kept trials, no t−1 lag). That null is the Figure 2, Figure 4, and ITI sections. The alternative-null section below keeps these labels and changes the null.
 
-Outputs go to `manifold/res_standard` (and `_stream_acc` under it). Existing `manifold/res` and `res/new` files are left in place.
+Outputs go to `manifold/res_standard` (and `_stream_acc` under it). Existing `manifold/res` and `res/new` files are left in place. Alternative nulls use the same directory with a suffix, so they do not replace `{split}.npy`.
 
-Flag: `--standard-act-prior` on `scripts/run_goal2_splits.py`, or `STANDARD_ACT_PRIOR=1`. Default off, so other campaigns keep the masked-then-kernel path. Driver: `scripts/submit_standard_fig2_orcd.sh`. Preset: `standard`.
+Flag: `--standard-act-prior` on `scripts/run_goal2_splits.py`, or `STANDARD_ACT_PRIOR=1`. Default off, so other campaigns keep the masked-then-kernel path. Shuffle driver: `scripts/submit_standard_fig2_orcd.sh` (preset `standard`). Alternative nulls: `scripts/submit_standard_alt_nulls_orcd.sh`.
 
 ### Dropping the unbiased block
 
@@ -95,3 +95,23 @@ Same pipeline. One split, no stim/choice stratum. stimOn window `[0.4, −0.1]` 
 The null is `generate_pseudo_blocks` (`first5050=0`, length equal to the kept trials). This is the only split in the standard set that uses it. The other 28 permute the observed labels inside their stratum. This is the historical `{split}.npy` null, not the action-kernel `_pseudosession`.
 
 - `act_block_only`
+
+## 2026-10-15 — alternative nulls
+
+Same label pipeline as the sections above. Not run yet. Driver: `scripts/submit_standard_alt_nulls_orcd.sh` (`ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|all`). `nrand=2000`. Files land in `manifold/res_standard` with the suffix below.
+
+### Act prior, action-kernel pseudo-session + choice stickiness
+
+The 10 Figure 4 prior splits. Each null draw is a new pseudo-session (option 1): fitted ActionKernel on the real session, simulated choices on that full schedule (the 0.5 warm-up stays in the sequence), copy-last so the post-0.5 quintile mean run matches that session. The act-binary is the α=0.2 kernel on that full pseudo, then the 0.5 trials are dropped, then the stim×choice or stim-side stratum is remade on the kept trials. Pseudo length starts at 1× the real kept session and grows up to 16× if the stratum is short. Suffix `_pseudo_strat_sticky`. Preset `standard_prior_sticky`. Runs without `--standard-act-prior` still cold-start the kernel after the drop.
+
+### Harris session transplant
+
+Unique donor draws, suffix `_harris_unique`. The donor bank is `manifold/choice_donors_standard.npy`: the kernel runs on the donor’s full session, then that split’s saturation mask, then the true-0.5 drop. Stim-aligned splits use the stim view; movement-aligned splits use the move view. `REBUILD_DONORS=1` rewrites the bank.
+
+| Arm | Preset | Splits | What is contrasted | Stratum |
+|---|---|---|---|---|
+| choice | `standard_choice_harris` | the 8 `choice_*_act` splits | choice L vs R | stim × act prior |
+| prior, stim | `standard_prior_harris_stim` | `act_block_duringstim_{l,r}` | act prior L vs R | stim side |
+| prior, none | `standard_prior_harris_none` | `act_block_duringstim_fully_unsplit`, `act_block_duringchoice_fully_unsplit` | act prior L vs R | none |
+
+Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. The f1/f2 prior splits stay on the sticky arm above.
