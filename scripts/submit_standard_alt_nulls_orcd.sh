@@ -3,15 +3,14 @@
 # action kernel (α=0.2) on the full session, then the bad-trial / saturation
 # mask, then drop true probabilityLeft==0.5, then min_trials_per_side=5.
 #
-# Aim: those labels, scored under
-#   sticky — Figure 4 act-prior splits (10). Option-1 action-kernel
-#            pseudo-session plus copy-last. Writes
-#            res_standard/{split}_pseudo_strat_sticky.npy
-#   harris_choice — choice L vs R (8), stratum = stim × act prior.
-#            Harris unique transplant. Writes {split}_harris_unique.npy
-#   harris_prior_stim — prior L vs R inside stim side (2). Harris unique.
-#   harris_prior_none — prior L vs R with no stratum (2 fully unsplit).
-#            Harris unique.
+# Aim: those labels, scored under the same splits for both nulls:
+#   sticky — option-1 action-kernel pseudo-session plus copy-last.
+#            Writes res_standard/{split}_pseudo_strat_sticky.npy
+#   harris — unique session transplant.
+#            Writes res_standard/{split}_harris_unique.npy
+#   choice — choice L vs R (8), stratum = stim × act prior.
+#   prior_stim — prior L vs R inside stim side (2).
+#   prior_none — prior L vs R with no stratum (2 fully unsplit).
 #
 # Harris reads manifold/choice_donors_standard.npy (full-session kernel on
 # the donor, then the same mask and true-0.5 drop). The shuffle catalog in
@@ -23,9 +22,9 @@
 #   N_SHARDS=  MEM_SHARD=  TIME_SHARD=  override that arm's defaults
 #     (ARM=all applies one override to every arm)
 #
-# Defaults: sticky 4×12G, choice Harris 4×6G, stim-stratum Harris 4×8G,
-# no-stratum Harris 12×16G. nrand=2000. CLEAR_STREAM=1 clears only that
-# arm's suffix under res_standard.
+# Defaults: choice 4 shards (sticky 12G, Harris 6G), stim-stratum prior
+# 4 shards (sticky 12G, Harris 8G), no-stratum prior 12×16G. nrand=2000.
+# CLEAR_STREAM=1 clears only that arm's suffix under res_standard.
 
 set -euo pipefail
 
@@ -183,7 +182,9 @@ if [[ "$need_donors" == "1" ]]; then
 fi
 
 if [[ "$ARM" == "sticky" || "$ARM" == "all" ]]; then
-  submit_arm standard_prior_sticky sticky 4 12G 12:00:00 stdss
+  submit_arm standard_choice_harris sticky 4 12G 12:00:00 stdssc
+  submit_arm standard_prior_harris_stim sticky 4 12G 12:00:00 stdsss
+  submit_arm standard_prior_harris_none sticky 12 16G 12:00:00 stdssn
 fi
 if [[ "$ARM" == "harris_choice" || "$ARM" == "all" ]]; then
   submit_arm standard_choice_harris harris 4 6G 12:00:00 stdhc

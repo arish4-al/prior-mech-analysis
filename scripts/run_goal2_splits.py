@@ -223,10 +223,14 @@ PRESETS = {
     'standard': list(STANDARD_SPLITS),
     # Same labels as ``standard``. Alternative nulls: see
     # journals/standard_splits.md. Sticky is option-1 AK pseudo-session
-    # plus copy-last on the 10 Figure 4 prior splits. Harris is unique-null
-    # session transplant: choice L–R inside its stim×act stratum, prior L–R
-    # inside stim side, and prior L–R with no stratum.
-    'standard_prior_sticky': list(FIG4_PRIOR),
+    # plus copy-last on the same splits as Harris: 8 choice, 2 stim-side
+    # prior, 2 fully unsplit prior. Harris is the unique-null transplant
+    # of those splits.
+    'standard_prior_sticky': (
+        list(CHOICE_DURINGSTIM_ACT) + list(CHOICE_DURINGCHOICE_ACT)
+        + list(FIG4_PRIOR_UNSPLIT_STIM)
+        + list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS)
+    ),
     'standard_choice_harris': (
         list(CHOICE_DURINGSTIM_ACT) + list(CHOICE_DURINGCHOICE_ACT)
     ),
