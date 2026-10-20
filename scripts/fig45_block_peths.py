@@ -2,10 +2,14 @@
 rastermap cell types, then stack into the files the distance plots read.
 
 Re-implements paper-brain-wide-map ``dmn_avgbystim.concat_PETHs`` (vers
-``concat_block_pairs_act``) + ``stack_concat(shuffling=True)``:
-  - trials: ``load_trials_and_mask`` with the six saturation intervals
-  - 'act' prior: action kernel (alpha=0.2) over all choices, binarised
-    (>=0.5 -> 0.8 else 0.2), replaces ``probabilityLeft``
+``concat_block_pairs_act``) + ``stack_concat(shuffling=True)``, with the
+standard-splits trial table:
+  - action kernel (alpha=0.2) over the full choice sequence, binarised
+    (>=0.5 -> 0.8 else 0.2), then written onto ``probabilityLeft``
+  - bad-trial mask, then one saturation key for that alignment
+    (stimOn: saturation_stim_plus04; firstMovement: saturation_move_minus02)
+  - then drop trials whose true ``probabilityLeft`` is 0.5. The kernel
+    has already seen them. The drop uses the saved true block.
   - 16 trial types = stim side x choice x block, stimOn [0, 200] ms and
     firstMovement [-150, 0] ms, 12.5 ms bins at 2 ms stride (6 sub-bins)
   - real PETH = trial-mean spike count per bin
@@ -49,9 +53,8 @@ from pathlib import Path
 
 import numpy as np
 
-from fig45_common import (ALPHA_AK, BLOCK_PAIRS, CELL_TYPES, MOVE_WIN, NRAND, OUT_ROOT,
-                          SATURATION_INTERVALS, STIM_WIN, STS, T_BIN, TTYPES,
-                          sum_for_key)
+from fig45_common import (ALIGN_SATURATION, ALPHA_AK, BLOCK_PAIRS, CELL_TYPES, MOVE_WIN,
+                          NRAND, OUT_ROOT, STIM_WIN, STS, T_BIN, TTYPES, sum_for_key)
 
 VERS = 'concat_block_pairs_act'
 OUT = OUT_ROOT / 'cvTrue'
@@ -61,17 +64,31 @@ EXCLUDE_REGIONS = {'stim_res': {'AUDp'}}
 
 
 def action_kernel_priors(alpha, actions):
+    '''Left prior. 0 / NaN holds; left (>0) steps up; right (<0) steps down.'''
     prior = 0.5
     priors = [prior]
     for t in range(len(actions) - 1):
-        prior = alpha * int(actions[t] > 0) + (1 - alpha) * prior
+        action = float(np.asarray(actions[t], dtype=float).reshape(-1)[0])
+        if (not np.isfinite(action)) or action == 0.0:
+            priors.append(prior)
+            continue
+        prior = alpha * int(action > 0) + (1 - alpha) * prior
         priors.append(prior)
     binary = np.double(np.double(priors) >= 0.5) * 0.6 + 0.2
     return priors, binary
 
 
-def trial_types(trials, mask):
-    """{name: (align event, bool mask, (pre, post))} for the 16 block-pair types."""
+def not_true_half(probability_left):
+    """Rows whose true block is not 0.5. Call this before overwriting the column."""
+    return ~np.isclose(np.asarray(probability_left, dtype=float), 0.5)
+
+
+def trial_types(trials, masks):
+    """{name: (align event, bool mask, (pre, post))} for the 16 block-pair types.
+
+    ``masks['stim']`` is the stimOn keep (bad-trial + stim saturation + true-0.5
+    drop). ``masks['move']`` is the same for firstMovement.
+    """
     pl, ch = trials['probabilityLeft'], trials['choice']
     side = {'L': ~np.isnan(trials['contrastLeft']), 'R': ~np.isnan(trials['contrastRight'])}
     block = {'L': pl == 0.8, 'R': pl == 0.2}
@@ -80,9 +97,12 @@ def trial_types(trials, mask):
     for s in 'LR':
         for b in 'LR':
             for c in 'LR':
-                m = np.bitwise_and.reduce([mask, side[s], block[b], choice[c]])
-                tts[f'stim{s}b{b}c{c}'] = ('stimOn_times', m, STIM_WIN)
-                tts[f's{s}b{b}choice{c}'] = ('firstMovement_times', m, MOVE_WIN)
+                common = [np.asarray(side[s]), np.asarray(block[b]), np.asarray(choice[c])]
+                tts[f'stim{s}b{b}c{c}'] = (
+                    'stimOn_times', np.bitwise_and.reduce([masks['stim'], *common]), STIM_WIN)
+                tts[f's{s}b{b}choice{c}'] = (
+                    'firstMovement_times', np.bitwise_and.reduce([masks['move'], *common]),
+                    MOVE_WIN)
     return tts
 
 
@@ -151,51 +171,73 @@ def uuid_by_cluster(ct_raw, types, pid):
     return out
 
 
+def _sat_column(sess_trials, n_trials, key):
+    """Saturation flag aligned to the truncated session-loader table."""
+    sess = sess_trials.iloc[:n_trials]
+    if len(sess) < n_trials:
+        raise AssertionError(
+            f'trials.pqt ({len(sess)}) shorter than the session table ({n_trials})')
+    return sess[key].to_numpy() == True
+
+
 def load_from_one(one, eid, pid, sess_trials, cell_types, types):
-    """Saturation keys are applied by row from the aggregate table (as the
-    insertion cache does), so sessions cut by truncate_to_pass do not hit
-    load_trials_and_mask's length assert."""
+    """Full loader table for the kernel. Masks are applied later, per alignment.
+
+    Saturation flags come from the aggregate table by row, so a session cut by
+    truncate_to_pass does not hit load_trials_and_mask's length assert.
+    """
     from brainwidemap import load_good_units, load_trials_and_mask
-    trials, mask = load_trials_and_mask(one, eid, saturation_intervals=None)
-    sat = sess_trials.iloc[:len(trials)][SATURATION_INTERVALS].to_numpy() == True
-    mask = np.asarray(mask) & ~sat.any(axis=1)
+    trials, base = load_trials_and_mask(one, eid, saturation_intervals=None)
+    base = np.asarray(base)
+    keep = not_true_half(trials['probabilityLeft'])
+    masks = {}
+    for align, key in ALIGN_SATURATION.items():
+        sat = _sat_column(sess_trials, len(trials), key)
+        masks[align] = base & ~sat & keep
     choices = list(trials['choice'])
     spikes, clusters = load_good_units(one, pid)
     uu = np.asarray(clusters['uuids'])
     in_any = np.isin(uu, list(set().union(*(cell_types[t] for t in types))))
-    return trials, mask, choices, spikes, clusters, in_any, uu[in_any]
+    return trials, masks, choices, spikes, clusters, in_any, uu[in_any]
 
 
 def load_from_cache(cache, sess_trials, cid2uuid):
-    """Same inputs as load_from_one, from manifold/insertion_cache + trials.pqt.
+    """Same trial rules as load_from_one, from manifold/insertion_cache + trials.pqt.
 
-    The cache holds trials masked by the base BWM criteria and one saturation
-    key each (SATURATION_TYPES, original trial index kept). Their index
-    intersection is base & ~(those 3 keys); the other Fig 4.5 saturation keys
-    are applied from the aggregate table by row, as load_trials_and_mask does.
-    The action-kernel prior runs over the session's full choice sequence from
-    the aggregate table.
+    Each cache table is already the bad-trial mask plus one saturation key, with
+    the original trial index kept. StimOn uses the stim table; firstMovement
+    uses the move table. The action-kernel prior runs over the session's full
+    choice sequence from trials.pqt, then those labels are indexed onto the
+    union of the two tables. True probabilityLeft == 0.5 is removed after that.
     """
+    import pandas as pd
     tabs = cache['trials']
-    other = [s for s in SATURATION_INTERVALS if s not in tabs]
-    assert set(tabs) <= set(SATURATION_INTERVALS), sorted(tabs)
-    idx = np.array(sorted(set.intersection(*(set(t.index) for t in tabs.values()))))
-    trials = next(iter(tabs.values())).loc[idx].reset_index(drop=True)
-    mask = ~(sess_trials.loc[idx, other].to_numpy() == True).any(axis=1)
+    missing = [k for k in ALIGN_SATURATION.values() if k not in tabs]
+    if missing:
+        raise KeyError(f'insertion cache lacks saturation tables {missing}')
+    stim_df = tabs[ALIGN_SATURATION['stim']]
+    move_df = tabs[ALIGN_SATURATION['move']]
+    both = pd.concat([stim_df, move_df])
+    both = both[~both.index.duplicated(keep='first')].sort_index()
+    both = both.iloc[np.flatnonzero(not_true_half(both['probabilityLeft']))]
+    masks = {
+        'stim': np.asarray(both.index.isin(stim_df.index)),
+        'move': np.asarray(both.index.isin(move_df.index)),
+    }
     choices = list(sess_trials['choice'])
     clusters = cache['clusters']
     cid = np.asarray(clusters['cluster_id'])
     in_any = np.isin(cid, list(cid2uuid))
     uu_in = np.array([cid2uuid[c] for c in cid[in_any]], dtype=object)
-    return trials, mask, choices, idx, cache['spikes'], clusters, in_any, uu_in
+    return both, masks, choices, np.asarray(both.index), cache['spikes'], clusters, in_any, uu_in
 
 
-def compute_core(pid, eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in,
+def compute_core(pid, eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in,
                  cell_types, types, nrand, prior, rng, br):
     if prior_l is not None:
         trials = trials.copy()
         trials['probabilityLeft'] = prior_l
-    tts = trial_types(trials, mask)
+    tts = trial_types(trials, masks)
     acr = np.array(br.id2acronym(np.asarray(clusters['atlas_id'])[in_any], mapping='Beryl'))
     sp = typed_spikes(spikes, clusters, in_any)
     type_masks = {}
@@ -262,23 +304,32 @@ class Loader:
         return t.reset_index(drop=True)
 
     def __call__(self, pid, cell_types, types):
-        """(source, eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in)."""
+        """(source, eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in).
+
+        ``masks`` is ``{'stim', 'move'}``: bad-trial and that alignment's
+        saturation key, then true probabilityLeft == 0.5 removed. ``prior_l``
+        is the full-sequence act label on the returned rows (None for the true
+        block). On the cache path the returned frame is the union of the two
+        alignment tables, so ``prior_l`` is indexed by the original trial index.
+        """
         alpha = ALPHA_AK if self.args.prior == 'act' else None
         eid, probe = self.ct_raw['insertions'][pid]
         cpath = self.icache / f'{eid}_{probe}.npy'
         if self.args.source != 'one' and cpath.exists():
             cache = np.load(cpath, allow_pickle=True).item()
             assert cache['pid'] == pid, (cpath, cache['pid'])
-            trials, mask, choices, idx, spikes, clusters, in_any, uu_in = load_from_cache(
+            trials, masks, choices, idx, spikes, clusters, in_any, uu_in = load_from_cache(
                 cache, self.sess_trials(eid), uuid_by_cluster(self.ct_raw, types, pid))
-            prior_l = None if alpha is None else action_kernel_priors(alpha, choices)[1][idx]
-            return 'cache', eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in
+            trials = trials.reset_index(drop=True)
+            prior_l = None if alpha is None else np.asarray(
+                action_kernel_priors(alpha, choices)[1])[idx]
+            return 'cache', eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in
         if self.args.source == 'cache':
             raise FileNotFoundError(cpath)
-        trials, mask, choices, spikes, clusters, in_any, uu_in = load_from_one(
+        trials, masks, choices, spikes, clusters, in_any, uu_in = load_from_one(
             self.one, eid, pid, self.sess_trials(eid), cell_types, types)
         prior_l = None if alpha is None else action_kernel_priors(alpha, choices)[1]
-        return 'one', eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in
+        return 'one', eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in
 
 
 def cmd_compute(args):
@@ -300,14 +351,14 @@ def cmd_compute(args):
         t0 = time.perf_counter()
         rng = np.random.default_rng([args.seed, uuid.UUID(pid).int % (2 ** 32)])
         try:
-            src, eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in = load(
+            src, eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in = load(
                 pid, cell_types, args.types)
             t_load = time.perf_counter() - t0
             n_src[src] += 1
             if not in_any.any():
                 print(f'{k + 1}/{len(pids)} {pid}: no typed cells ({src})', flush=True)
                 continue
-            D = compute_core(pid, eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in,
+            D = compute_core(pid, eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in,
                              cell_types, args.types, args.nrand, args.prior, rng, br)
             D['source'] = src
             tmp = f.with_name(f'.{f.stem}.tmp.npy')
