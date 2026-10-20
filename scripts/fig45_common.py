@@ -32,6 +32,7 @@ ALPHA_AK = 0.2   # action-kernel inverse time constant ('act' prior)
 STIM_WIN = (0.0, 0.2)    # stimOn-aligned [pre, post]; plotted up to 150 ms
 MOVE_WIN = (0.15, 0.0)   # firstMovement-aligned [pre, post]
 
+# Old Fig 4.5 mask: all six, on every alignment. The loader uses ALIGN_SATURATION.
 SATURATION_INTERVALS = [
     'saturation_stim_plus04',
     'saturation_feedback_plus04',
@@ -40,6 +41,11 @@ SATURATION_INTERVALS = [
     'saturation_stim_plus06',
     'saturation_stim_minus06_plus06',
 ]
+# One key per alignment, same as block_analysis_allsplits.saturation_for_split.
+ALIGN_SATURATION = {
+    'stim': 'saturation_stim_plus04',
+    'move': 'saturation_move_minus02',
+}
 
 # Block-L vs block-R pairs at fixed stim side x choice (vers='concat_block_pairs_act').
 BLOCK_PAIRS = [

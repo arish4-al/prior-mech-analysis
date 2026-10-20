@@ -10,6 +10,9 @@ ones.
 - Figures go in openalyx `manifold/paper_figs/<fig>/`. Each figure folder holds
   the full figure, `panels/`, and the derived tables the plots read.
   `<oa> = ~/Downloads/ONE/openalyx.internationalbrainlab.org`.
+- The 10-16 `res_standard` versions sit beside the earlier ones:
+  `<oa>/manifold/paper_figs/fig2/res_standard/` and
+  `<oa>/manifold/paper_figs/fig4/res_standard/`.
 - Scripts go in `scripts/paper_figs/<fig>/`. Figure 4.5 is the exception: its
   composite is still drawn by `scripts/fig45_sensitivity.py fig45`, because that
   script also holds the ORCD compute pipeline.
@@ -18,6 +21,8 @@ ones.
 |---|---|---|---|
 | 2 (stim / choice sensitivity, function assignments) | `<oa>/manifold/paper_figs/fig2/` | `scripts/paper_figs/fig2/` | rebuilt, two choice versions (10-14) |
 | 4 (prior on region types) | `<oa>/manifold/paper_figs/fig4/` | `scripts/paper_figs/fig4/` | redrawn 10-15; a = overall earlystim table, b = sensory ∩ prior_80ms onetype, c = LGd + combined 80 ms, d–i replotted |
+| 2 res_standard | `<oa>/manifold/paper_figs/fig2/res_standard/` | `scripts/paper_figs/build_standard_figs.py` | 10-16; `fig2_res_standard`; openalyx and min5 kept. Sensory class to be revised (10-19) |
+| 4 res_standard | `<oa>/manifold/paper_figs/fig4/res_standard/` | same driver | 10-16; `figure4_res_standard`; panel b example FRP. Sensory class to be revised (10-19) |
 | 4.5 (block effects on cell types) | `<oa>/manifold/paper_figs/fig45/` | `scripts/fig45_sensitivity.py fig45` | rough draft; see [Figure 4.5](fig45_block_effects_cell_types.md) |
 | 5 (model vs data) | `<oa>/manifold/paper_figs/fig5/` | `scripts/paper_figs/fig5/` | b–i redrawn 10-15 from full mpre3 s89; a and j empty |
 
@@ -209,6 +214,38 @@ Outputs under `<oa>/manifold/paper_figs/fig4/`: `figure4.{pdf,svg,png}`, `panels
 
 ---
 
+## 2026-10-16 — alternative Figure 2 and Figure 4 (standard splits)
+
+Separate figures from the finished alyx `manifold/res_standard` run (28 splits;
+`act_block_only` is still absent and is not used). They live in the same
+`paper_figs` folders as the 10-14 / 10-15 figures, under a `res_standard`
+version. `fig2/openalyx`, `fig2/min5`, and `fig4/figure4.*` are unchanged.
+
+| | path |
+|---|---|
+| Figure 2 | `<oa>/manifold/paper_figs/fig2/res_standard/fig2_res_standard.{svg,png}` |
+| Figure 4 | `<oa>/manifold/paper_figs/fig4/res_standard/figure4_res_standard.{pdf,svg,png}` |
+| driver | `scripts/paper_figs/build_standard_figs.py` |
+
+The 80 ms stim×choice term in the Figure 2 denominator is the first 38 bins of
+the 150 ms `stim_choice_*_act` curves. `prior_80ms` is the first 38 bins of the
+unsplit 150 ms `act_block_duringstim_{l,r}` curves. `sc_table.csv` is recomputed
+on this set (α=0.01, slope 0.05, n=20, stim restriction on).
+
+Combined time-mean FDR ≤ 0.01: early stim 17/207, stim during stim 42/202, stim
+around move 53/203, choice during stim 87/202, choice around move 115/203,
+prior during stim 58/208, prior around move 74/208, prior 0–80 ms 88/209.
+Region types on the new table: stim sensory 9, sensory-early 2, integrator 60,
+move 30; choice integrator 81, move 30.
+
+Published Figure 2 examples still match their sig / nonsig rows (VISp p=0.006,
+MOs p=0.61, VeCB p≤0.006, ORBl p≥0.39, GRN p≤0.002, RSPd p=0.051). Sensory ∩
+prior_80ms is FRP, VISal, VISam, DCO. LGd is sensory but its 80 ms prior FDR is
+0.010, so panel b uses FRP. PAG is an integrator on this table and stays the C
+example. PRNc and IRN are move type; PRNc is still drawn as the second C example.
+
+---
+
 ## 2026-10-15 — Figure 5
 
 Redrawn on the published page (`~/Downloads/figure5.pdf`, MediaBox
@@ -370,3 +407,11 @@ python scripts/paper_figs/fig5/fig5_plot.py
 | i con / incon / RT | 0.338 / 0.906 / 0.751 |
 
 ΔAIC = **−1081.05** (AIC fitted −4779, null −3698). g’s R² sits upper-left because the curve fills the upper-right corner where the PDF places that number. h is the first block switch with four trials before it and five after (trials 35–44, 6146 steps). SNc is missing from the integrator region list in openalyx `res` and is skipped by the distance average.
+
+---
+
+## 2026-10-19 — sensory responding areas
+
+Figures 2 and 4 still color “sensory” from `sc_duringstim_regtype` (stim and stim-early). That label is to be replaced by the standard 80 ms prior-stratum stim hits, after dropping three onset-offset confounds.
+
+Definition, the 17 FDR hits, the offset subtraction (PRNr, DCO, SIM no longer significant), and the later early-choice cut: [sensory responding areas](sensory_responding_areas.md). Shuffle overlays are in `<oa>/manifold/paper_figs/fig2/res_standard/earlystim80_prior_only_sig.png` and `earlystim80_prior_only_offset_gain.png`. As of 10-20 the category is 10 regions (the 14 minus CP, MRN, SCm, PAG). Diagnostic redraws of panel c and the left half of panel i are in `<oa>/manifold/paper_figs/fig4/res_standard/`. The full figures still use the old type table.

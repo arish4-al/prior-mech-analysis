@@ -1,6 +1,19 @@
 # Standard splits
 
-Catalog of the regional-distance splits that count as the current standard analysis. Figure 2, Figure 4 prior, and the ITI split are the shuffle set. Alternative nulls are at the end. Do not treat an older `manifold/res` or `res/new` file as this standard until it is listed here and rerun.
+This catalog exists because earlier agents kept shipping the same splits with different trial tables, different places to drop the unbiased block, different strata, and different nulls. Those mismatches were already in the code when a job was submitted. Read this file before changing a split, a null, or a prior estimate, and check the rows that estimate actually sees. An older `manifold/res` or `res/new` file is not this standard until it is listed here and rerun.
+
+Figure 2, Figure 4 prior, and the ITI split are the shuffle set. Alternative nulls are at the end.
+
+## Subjective priors use the full session
+
+Every subjective-prior estimate is computed on the full session. The analysis mask and the true-`probabilityLeft==0.5` drop happen after that estimate, on the samples that enter the split. This covers:
+
+- The fixed α=0.2 labels, observed and on a Harris donor (`act_binary` in `choice_donors_standard.npy`). Bad trials, saturation-dropped trials, and the unbiased block stay in the kernel. The donor prior is that kernel, looked up onto the kept rows. It is not a second kernel on the kept choices, and it is not `choice_donors.npy`.
+- The ActionKernel θ fit, when a sticky pseudo-session needs one. The fit rows are the session-loader table with `truncate_to_pass` off. The pickle is `manifold/actkernel_fits/{eid8}_fullsess`. A pickle fit on the masked or 0.5-dropped table is a different session.
+
+The α=0.2 kernel uses `load_trials_and_mask` with `truncate_to_pass` left on, the same table as the observed labels. The sticky θ fit turns `truncate_to_pass` off, so a tail that fails the easy-trial criterion stays in the MCMC. Changing either table changes the estimate and every output that depends on it.
+
+Before implementing or submitting, write down the splits, what is contrasted, the stratum, the window, and which rows the prior estimate sees. If that disagrees with this file, stop. These jobs are long. A finished `res_standard` file does not show that a new arm matches.
 
 ## Pipeline
 
@@ -102,7 +115,7 @@ Same label pipeline as the sections above. Not run yet. Driver: `scripts/submit_
 
 ### Action-kernel pseudo-session + choice stickiness
 
-The same splits as the Harris section below: 8 choice, 2 stim-side prior, 2 fully unsplit prior. Not the Figure 4 f1/f2 prior splits. Each null draw is a new pseudo-session (option 1): fitted ActionKernel on the real session, simulated choices on that full schedule (the 0.5 warm-up stays in the sequence), copy-last so the post-0.5 quintile mean run matches that session. The act-binary is the α=0.2 kernel on that full pseudo, then the 0.5 trials are dropped, then the stratum is remade on the kept trials (stim × act prior for choice; stim side for the stim-stratum prior; none for the fully unsplit prior). Pseudo length starts at 1× the real kept session and grows up to 16× if the stratum is short. Suffix `_pseudo_strat_sticky`. Preset `standard_prior_sticky`. Runs without `--standard-act-prior` still cold-start the kernel after the drop.
+The same splits as the Harris section below: 8 choice, 2 stim-side prior, 2 fully unsplit prior. Not the Figure 4 f1/f2 prior splits. Each null draw is a new pseudo-session (option 1): ActionKernel θ fit on the full session-loader table (bad trials, saturation-dropped trials, and the unbiased block included; `truncate_to_pass` off), then simulated choices on that full pseudo schedule (the 0.5 warm-up stays in the sequence), copy-last so the post-0.5 quintile mean run matches that session. Pickles are `manifold/actkernel_fits/{eid8}_fullsess`. A pickle fit on the masked analysis table is not reused. The act-binary is the α=0.2 kernel on that full pseudo, then the 0.5 trials are dropped, then the stratum is remade on the kept trials (stim × act prior for choice; stim side for the stim-stratum prior; none for the fully unsplit prior). Pseudo length starts at 1× the real kept session and grows up to 16× if the stratum is short. Suffix `_pseudo_strat_sticky`. Preset `standard_prior_sticky`. Runs without `--standard-act-prior` still cold-start the kernel after the drop.
 
 ### Harris session transplant
 
@@ -115,3 +128,11 @@ Unique donor draws, suffix `_harris_unique`. The donor bank is `manifold/choice_
 | prior, none | `standard_prior_harris_none` | `act_block_duringstim_fully_unsplit`, `act_block_duringchoice_fully_unsplit` | act prior L vs R | none |
 
 Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. Sticky uses these same windows and strata. The Figure 4 f1/f2 prior splits stay on the shuffle catalog only.
+
+## 2026-10-19 — pseudo-session θ fit
+
+The sticky ActionKernel θ fit was on the masked, true-0.5-dropped analysis table. That is not the Findling fit. It is now the full session-loader table, and the pickle directory is `{eid8}_fullsess`. Existing `_pseudo_strat_sticky` files were simulated from the masked-table θ and have to be rerun. Harris uses the α=0.2 full-session kernel, not this θ fit.
+
+## 2026-10-16 — alternative figures
+
+The 28 finished splits (everything except `act_block_only`) are enough for Figure 2 and Figure 4. The figures are the `res_standard` versions in openalyx `manifold/paper_figs/fig2/res_standard` and `paper_figs/fig4/res_standard`. The 80 ms stim×choice denominator and `prior_80ms` are prefixes of the 150 ms curves. Details in [paper main figures](paper_main_figures.md) (2026-10-16).

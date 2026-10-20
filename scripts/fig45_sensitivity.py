@@ -4,7 +4,8 @@ strata of the other factors.
 
 Labels: stim side (contrastLeft/Right not NaN), choice (+-1), act-kernel block
 (alpha 0.2 over the full choice sequence, binarised 0.8 / 0.2, as in
-fig45_block_peths). Trials: BWM base mask + the six Fig 4.5 saturation keys.
+fig45_block_peths). Trials: that kernel, then the BWM bad-trial mask and one
+saturation key for the alignment, then a drop of true probabilityLeft == 0.5.
 
 Analyses (window = (pre, post) s around the align event; same overlapping
 12.5 ms / 2 ms bins as the regional pipeline):
@@ -170,7 +171,7 @@ def cell_pool(stage, name):
 
 
 def compute_insertion(loaded, cell_types, stage, nrand, rng, br):
-    src, eid, trials, mask, prior_l, spikes, clusters, in_any, uu_in = loaded
+    src, eid, trials, masks, prior_l, spikes, clusters, in_any, uu_in = loaded
     trials = trials.copy()
     if prior_l is not None:
         trials['probabilityLeft'] = prior_l
@@ -190,10 +191,11 @@ def compute_insertion(loaded, cell_types, stage, nrand, rng, br):
         stat = np.zeros(len(uu_in))
         null = np.zeros((nrand, len(uu_in)), dtype=np.float32) if pool else None
         n_ok = 0
+        align_mask = masks[spec['align']]
         for a, b, _ in pairs_of(spec):
             key = pair_key(a, b)
-            ma = cond_mask(fm, mask, spec['align'], a)
-            mb = cond_mask(fm, mask, spec['align'], b)
+            ma = cond_mask(fm, align_mask, spec['align'], a)
+            mb = cond_mask(fm, align_mask, spec['align'], b)
             ntr[key] = (int(ma.sum()), int(mb.sum()))
             if min(ntr[key]) < MIN_TRIALS:
                 continue

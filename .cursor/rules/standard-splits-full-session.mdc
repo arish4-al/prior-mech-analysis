@@ -1,0 +1,22 @@
+---
+description: Standard splits — subjective priors on the full session; check the split before a job
+alwaysApply: true
+---
+
+# Standard splits — full-session subjective priors
+
+`journals/standard_splits.md` exists because earlier agents shipped the same splits with different trial tables, unbiased-block drops, strata, and nulls. Read it before editing the standard catalog, a sticky pseudo-session, or a Harris transplant.
+
+## Subjective priors see the full session
+
+Estimate the prior on the full session. Apply the analysis mask and the true `probabilityLeft==0.5` drop afterward. This includes:
+
+- α=0.2 labels (`_standard_act_pack` / `apply_standard_act_prior`), observed and Harris.
+- ActionKernel θ for sticky pseudos: `get_actkernel_choice_fit(..., full_session=True)`, pickle `{eid8}_fullsess`. A masked-table pickle is the wrong session.
+- Harris `act_binary` in `choice_donors_standard.npy`: kernel on the donor’s full session, then that split’s mask, then the true-0.5 drop. Not a kernel on the kept choices. Not `choice_donors.npy`.
+
+The α=0.2 kernel leaves `truncate_to_pass` on, matching the observed labels. The sticky θ fit turns it off. Changing either table changes the estimate.
+
+## Before code or a submit command
+
+Write down the splits, the contrast, the stratum, the window, and which rows the prior estimate sees. If that disagrees with the journal, stop. Do not submit. A finished `res_standard` file does not show that a new arm matches.

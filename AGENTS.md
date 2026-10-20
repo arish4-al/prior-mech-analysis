@@ -117,6 +117,16 @@ on the wrong arm. See [structured nulls](journals/structured_nulls_choice_lr.md)
 
 Cursor rule: `.cursor/rules/confirm-journal-options.mdc` (always applied).
 
+### Standard splits — subjective priors on the full session
+
+[journals/standard_splits.md](journals/standard_splits.md) is the catalog because earlier agents shipped mismatched trial tables, unbiased-block drops, strata, and nulls. Before changing a standard split, a sticky pseudo-session, or a Harris transplant, check the rows the prior estimate sees.
+
+Every subjective prior is estimated on the full session. The analysis mask and the true-0.5 drop come after that. This includes the α=0.2 labels, the ActionKernel θ fit for sticky pseudos (`{eid8}_fullsess`, `truncate_to_pass` off), and Harris donor `act_binary` (full-session kernel, then mask, then true-0.5 drop; `choice_donors_standard.npy`). The α=0.2 kernel leaves `truncate_to_pass` on. Do not change either table without being asked.
+
+Write down splits, contrast, stratum, window, and the prior’s trial rows before implementing or printing a submit command. If that disagrees with the journal, stop.
+
+Cursor rule: `.cursor/rules/standard-splits-full-session.mdc` (always applied).
+
 ### Submit commands must match the aim
 
 Before printing a `submit_*.sh` command, wiring an ablation, or

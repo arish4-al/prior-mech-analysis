@@ -1,0 +1,62 @@
+\documentclass[12pt]{article}
+
+\usepackage[letterpaper,margin=0.5in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage{microtype}
+\usepackage{graphicx}
+
+\pagestyle{empty}
+\setlength{\parindent}{1.15em}
+\setlength{\parskip}{0.35em}
+\setlength{\fboxsep}{8pt}
+\setlength{\fboxrule}{0.4pt}
+
+\begin{document}
+
+\begin{center}
+\large\bfseries How learned expectations shape brain-wide responses
+\end{center}
+
+\vspace{0.4em}
+\noindent\textbf{Summary}\par
+\vspace{0.15em}
+\noindent
+Prior knowledge changes how stimuli are processed and how decisions are made, but the loci, timing, and form of those effects --- a bias of ongoing activity, a change in gain, or both --- are not known at brain-wide scale. Recordings across the mouse brain during a two-alternative sensory decision task (International Brain Laboratory) let us follow a stimulus prior that is maintained over the inter-trial interval, from sensation through choice to action. Because stimulus, choice, and prior are strongly correlated, regions were first assigned as sensory processors, choice integrators, or movement generators. Prior modulation was reliable in integrators and movement generators and was not significant in purely sensory regions. In the modulated populations it took both forms: an initial activity bias and a gain change, during integration and again around movement. A few-parameter circuit, in which a slow prior variable biases and scales integrator and movement units, reproduces the population trajectories of stimulus responses, integration, and action initiation, together with their prior dependence, after fitting to physiology alone. With no further free parameters, the same circuit predicts psychometric and chronometric behavior. Bias and gain effects are larger for movement generators than for integrators in both the data and the model; the model shows that this difference is inherited by amplifying integrator output, not by a separate expectation mechanism at movement onset. These results give a brain-wide account of where learned expectations enter perceptual decisions, and show that a small set of shared operations is sufficient to organize that computation from sensation to action.
+
+\vspace{0.55em}
+\noindent\textbf{Additional detail}\par
+\vspace{0.15em}
+\noindent
+Additional detail
+
+Problem. Learned priors bias perceptual decisions. It is still unresolved where they enter the computation (sensory, integration/choice, or motor stages), when, and how (initial-state bias or input gain). The main obstacle is confounding. In expert animals the prior, the stimulus and the choice are strongly correlated, so a population that encodes one of them appears to encode all three. We address this with brain-wide Neuropixels recordings from 139 mice (208 regions; [N] neurons) performing the IBL task. In this task the stimulus appears on the high-probability side on 80% of trials, in blocks that switch without a cue [1].
+
+Decorrelated encoding. For each population we compute trial-averaged trajectories for all 8 stimulus × choice × prior conditions. Sensitivity to one variable is the summed Euclidean distance between left and right trajectories within each fixed combination of the other two variables. We test significance against 2,000 within-condition label shuffles, with FDR correction. Two measures sort regions into functions: relative stimulus vs. choice sensitivity, and whether choice signals keep ramping up to movement onset. This gives stimulus processors (S; 1/208 strict, 23/208 lenient, e.g. VISp, LGd), integration/choice regions (C; 60/208) and movement-initiation regions (M; 23/208) (Fig. 1B). We use a subjective action-kernel estimate of the prior [2]. Using the true block side gives consistent but sparser results.
+
+Bias vs. gain. A prior-induced bias separates the left- and right-prior trajectories from the start of the trial. A gain change separates them gradually as input accumulates (Fig. 1A). We therefore test for bias in the first ~10 ms after stimulus onset, and for gain on the bias-subtracted distance curve after that.
+
+The prior modulates decision and movement stages, not sensory coding. Within trials, 49/208 regions are prior-sensitive. No stimulus-processing region shows prior modulation of its early stimulus response, and the pooled sensory population shows no gain effect (p = 1.0). Prior-modulated C regions show bias (9/24) and gain (15/24) effects. So do M regions (14/23 modulated; 8 bias, 10 gain). Pooled C and M populations show both effects (p ≤ 0.006; Fig. 1C), and the effects are larger in M than in C (Fig. 1D). The results hold at the cellular level, independent of anatomical boundaries. In functional groups defined by Rastermap sorting [3] (~60K cells), C and M cells show significant bias and gain (p ≤ 0.0025). A separately identified group of purely stimulus-responsive cells shows neither (p > 0.39).
+
+A few-parameter circuit model captures brain-wide dynamics. We built an 8-unit bilateral circuit with left/right pairs of stimulus, integrator/choice, movement and prior units. Units excite their own side and inhibit the opposite side. Prior units can bias each stage and scale its inputs (Fig. 1E). The model is fit only to region-aggregated neural responses. It captures the S, C, M and prior-distance curves (R² = 0.87, 0.98, 0.94, 0.98). The fitted recurrent weights imply effective time constants that were never fit directly: ≈40 ms for sensory, ≈270 ms for integration, ≈90 ms for movement and ≈5 s for the prior. The prior value matches the ~10-trial behavioral prior kernel [2].
+
+The model separates direct from inherited modulation. Fitted prior effects are large in C (≈20% input gain, ≈11% bias) but negligible in M (<0.1%). The larger effects seen in M neural data come from M amplifying its already-modulated C input. A model with no M modulation fits equally well (R² = 0.98, 0.94, 0.98). Removing the bias hurts the prior-curve fit most (R²_prior 0.98 → 0.63), more than removing the gain (→ 0.95).
+
+Behavior predicted from physiology alone. With no parameters fit to behavior, the model predicts psychometric curves on concordant and discordant trials (R² = 0.90, 0.85). This includes the prior-driven gap at zero contrast (Fig. 1F). Adding M modulation does not improve these predictions. A variant in which the bias directly shifts activity gives the same conclusions.
+
+Significance. Earlier decoding work found prior information in early visual areas [2]. Once stimulus and choice are controlled for, we find no prior modulation of sensory coding. This suggests that decodability sets an upper bound on modulation but does not establish it. Prior knowledge enters at the integration/choice stage, through both bias and gain. This fits hierarchical-inference accounts better than accounts in which priors reshape early sensory codes. Movement circuits are not directly biased, plausibly because in this task the prior does not determine the action. That predicts direct motor modulation in tasks where it does. More broadly, a small, interpretable circuit fit to brain-wide physiology predicts behavior. This links large-scale recordings to mechanism and identifies specific loci for perturbation tests.
+
+Figure 1. (A) Left: IBL task with uncued 80/20 blocks; mice rely on the prior for low-contrast stimuli. Right: six hypotheses, in which the prior acts through bias or gain at the S, C or M stage. A bias separates trajectories at onset; a gain change separates them gradually. (B) Functional classification of regions into S (blue), C (yellow) and M (red), and prior-sensitive regions (purple), aligned to stimulus and movement onset. (C) Prior-distance curves pooled over S, C and M regions, with the shuffle mean subtracted; gray shows the 99th percentile of shuffles. Checks mark significant bias and gain effects. (D) C and M prior effects overlaid; M effects are larger. (E) Circuit model and its fits to the prior-distance curves (dashed: model; solid: data). (F) Model psychometric predictions (dashed) vs. mouse behavior (solid), with no fitting to behavior.
+
+References. [1] IBL, Nature 645:177 (2025). [2] Findling et al., Nature 645:192 (2025). [3] Schartner et al., bioRxiv (2025).
+
+% \clearpage
+% \noindent
+% \fbox{%
+% \begin{minipage}[c][\dimexpr\textheight-2\fboxsep-2\fboxrule\relax][c]{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}
+% \centering
+% Figure\\[0.6em]
+% {\itshape Replace this box with the figure and a 10\,pt caption.}
+% \end{minipage}}
+
+\end{document}

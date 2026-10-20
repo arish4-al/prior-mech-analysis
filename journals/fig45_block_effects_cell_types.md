@@ -345,7 +345,9 @@ passed explicitly as `PRIOR=act` in `run_fig45_peths_slurm.sh`. The
 permutes those labels within a pair. On cached pid `c893c0a3…`, the AK
 label differs from the true block on 39% of kept trials, and the per-type
 trial counts change to match (for example `stimLbRcL` 37 vs 18). Unbiased
-trials (true pL = 0.5) are still dropped by the base BWM mask.
+trials (true pL = 0.5) were not dropped. `exclude_unbiased` is off, so a
+true-0.5 trial that passed the base mask stayed in and took an act label.
+Corrected 2026-10-19.
 
 ### S — open (suggestions in chat, not implemented)
 
@@ -539,3 +541,13 @@ Each distance panel has the shuffle cloud, a dashed raw curve, a solid offset-re
 python scripts/fig45_sensitivity.py fig45 \
     --out ~/Downloads/ONE/openalyx.internationalbrainlab.org/manifold/res/fig45/cvTrue/sensitivity
 ```
+
+## 2026-10-19 — trial table matches the standard splits
+
+The loader in `fig45_block_peths.py` (shared with `fig45_sensitivity.py`) now follows the standard order.
+
+1. α=0.2 kernel on the full choice sequence. Bad trials and true `probabilityLeft == 0.5` stay in the EMA. On the cache path that sequence is `trials.pqt`; on a ONE miss it is the `load_trials_and_mask` table with `truncate_to_pass` left on.
+2. Bad-trial mask, then one saturation key for the alignment. stimOn uses `saturation_stim_plus04`. firstMovement uses `saturation_move_minus02`. The other four Figure 4.5 keys are not applied.
+3. Drop trials whose true `probabilityLeft` is 0.5, using the saved true block. The act label is written on after that, so the drop is not a filter on the overwritten column.
+
+Finished `dmn/res/fig45` and `manifold/res/fig45` files were built with all six saturation keys and with true-0.5 trials left in the pools. They are not this trial table.

@@ -704,24 +704,53 @@ def _actkernel_model_dir():
     return d
 
 
-def get_actkernel_choice_fit(eid, trials, nb_steps=None):
+def _actkernel_fit_tag(eid, nb_steps=None, full_session=False):
+    '''Pickle directory name. Full-session fits do not reuse masked-table fits.'''
+    tag = str(eid).replace('-', '')[:8]
+    if full_session:
+        tag = f'{tag}_fullsess'
+    if nb_steps is not None:
+        tag = f'{tag}_nb{int(nb_steps)}'
+    return tag
+
+
+def _full_session_trials_for_ak_fit(eid):
+    '''Trial table for the ActionKernel θ fit under the standard pipeline.
+
+    The session-loader table, not the analysis table. Bad trials,
+    saturation-dropped trials, and the unbiased block stay in.
+    ``truncate_to_pass`` is off, so a failing tail is not cut. The bad-trial
+    mask is not applied.
+    '''
+    full, _mask = load_trials_and_mask(
+        one, str(eid), saturation_intervals=None, truncate_to_pass=False)
+    return full
+
+
+def get_actkernel_choice_fit(eid, trials, nb_steps=None, full_session=False):
     '''Fit ActionKernel once per eid (MCMC); cache under manifold/actkernel_fits/.
 
     ``nb_steps`` overrides package default. If unset, ``ACTKERNEL_NB_STEPS`` env
     is honored (for short smoke fits). Short-step fits use a separate pickle
     directory so they do not overwrite paper-length MCMC caches.
+
+    ``full_session`` fits the session-loader table (bad trials and the
+    unbiased block included) and writes ``{eid8}_fullsess``, so a pickle
+    fit on the masked analysis table is not reused.
     '''
     import os
     if nb_steps is None and os.environ.get('ACTKERNEL_NB_STEPS'):
         nb_steps = int(os.environ['ACTKERNEL_NB_STEPS'])
     key = str(eid)
-    cache_key = f'{key}:nb={nb_steps}' if nb_steps is not None else key
+    cache_key = f'{key}:fullsess={int(bool(full_session))}'
+    if nb_steps is not None:
+        cache_key = f'{cache_key}:nb={nb_steps}'
     if cache_key in _actkernel_choice_fit_cache:
         return _actkernel_choice_fit_cache[cache_key]
     syn = _syn()
-    tag = key.replace('-', '')[:8]
-    if nb_steps is not None:
-        tag = f'{tag}_nb{int(nb_steps)}'
+    tag = _actkernel_fit_tag(key, nb_steps=nb_steps, full_session=full_session)
+    print(f'actkernel fit [{tag}]: n_trials={len(trials)} '
+          f'full_session={bool(full_session)}')
     model, params = syn.fit_action_kernel(
         trials, eid=key, subject='bwm',
         model_dir=_actkernel_model_dir() / tag,
@@ -731,6 +760,8 @@ def get_actkernel_choice_fit(eid, trials, nb_steps=None):
         'params': np.asarray(params, dtype=float),
         'mode': 'mcmc',
         'nb_steps': nb_steps,
+        'full_session': bool(full_session),
+        'n_fit_trials': int(len(trials)),
         'model': model,
         'sim_model': syn._sim_model(),
     }
@@ -758,8 +789,12 @@ def _null_choice_model(split):
     return 'bayes' if _split_uses_bayes_prior(split) else 'actkernel'
 
 
-def _null_choice_fit(split, eid, trials):
-    '''AK MCMC pickle, or fixed OptimalBayesian [ζ, lapse] (no AK).'''
+def _null_choice_fit(split, eid, trials, standard_act_prior=False):
+    '''AK MCMC pickle, or fixed OptimalBayesian [ζ, lapse] (no AK).
+
+    ``standard_act_prior`` fits θ on the full session-loader table. The
+    ``trials`` argument is the masked analysis table and is not the fit rows.
+    '''
     if _null_choice_model(split) == 'bayes':
         syn = _syn()
         return {
@@ -770,7 +805,10 @@ def _null_choice_fit(split, eid, trials):
             'choice_model': 'bayes',
             'sim_model': None,
         }
-    fit = dict(get_actkernel_choice_fit(eid, trials))
+    if standard_act_prior:
+        trials = _full_session_trials_for_ak_fit(eid)
+    fit = dict(get_actkernel_choice_fit(
+        eid, trials, full_session=bool(standard_act_prior)))
     fit['choice_model'] = 'actkernel'
     return fit
 
@@ -2488,7 +2526,8 @@ def _compute_control_D_actkernel_choice(
 
     _append_perm(m0_true, m1_true, v0_true, v1_true, ys_true)
 
-    fit = _null_choice_fit(split, eid, trials)
+    fit = _null_choice_fit(
+        split, eid, trials, standard_act_prior=standard_act_prior)
     choice_model = fit.get('choice_model', 'actkernel')
     elig_idx = np.asarray(elig_idx, dtype=int)
     n_elig = len(elig_idx)
@@ -2680,7 +2719,9 @@ def _compute_control_D_actkernel_block(
     # True-block uses generate_pseudo_blocks; Bayes uses stim history only.
     need_choice_fit = not (
         mode == 'unconstrained' and not _split_uses_act_prior(split))
-    fit = _null_choice_fit(split, eid, trials) if need_choice_fit else None
+    fit = (_null_choice_fit(
+        split, eid, trials, standard_act_prior=standard_act_prior)
+        if need_choice_fit else None)
     choice_model = (fit.get('choice_model', 'actkernel') if fit is not None
                     else 'none')
     elig_idx = np.asarray(elig_idx, dtype=int)
