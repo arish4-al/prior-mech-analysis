@@ -21,3 +21,6 @@ output/
 
 # Research journals live only on develop
 journals/
+
+# Per-run fit work dirs (FIT_TARGETS_DIR)
+fit_workdirs/

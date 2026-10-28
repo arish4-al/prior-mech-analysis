@@ -12,13 +12,16 @@ similar cwd-relative loaders keep working. Fail closed if ``I``/``M``
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
 
 # scripts/_fit_data.py → repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
-FIT_TARGETS_DIR = REPO_ROOT / "fit_targets"
+# FIT_TARGETS_DIR env swaps in another target set (e.g. fit_targets_integ/<opt>,
+# 2026-10-28); relative paths are from the repo root.
+FIT_TARGETS_DIR = REPO_ROOT / os.environ.get("FIT_TARGETS_DIR", "fit_targets")
 
 FIT_MEAN_NAME = "mean_data_results.npy"
 FIT_PRIOR_NAMES = (
