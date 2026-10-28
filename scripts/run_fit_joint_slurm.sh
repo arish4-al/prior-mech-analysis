@@ -106,13 +106,27 @@ module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-# Ensure fit targets from repo fit_targets/ (Python drivers also refresh these).
-if [[ -d "$REPO_DIR/fit_targets" ]]; then
+# FIT_TARGETS_DIR (relative to the repo, e.g. fit_targets_integ/opt1_rawslope)
+# swaps the target set. The loss reads data_*.npy from cwd, so such a run gets
+# its own work dir instead of relinking the shared repo-root links.
+TARGETS="$REPO_DIR/fit_targets"
+if [[ -n "${FIT_TARGETS_DIR:-}" ]]; then
+  TARGETS="$REPO_DIR/$FIT_TARGETS_DIR"
+  [[ -f "$TARGETS/mean_data_results.npy" ]] || { echo "ERROR: no targets in $TARGETS" >&2; exit 1; }
+  WORK="$REPO_DIR/fit_workdirs/${OUT_TAG:-none}_${MTYPE}_s${SEED}"
+  mkdir -p "$WORK"
+  cd "$WORK"
+  export PYTHONPATH="$REPO_DIR:$REPO_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}"
+  echo "FIT_TARGETS_DIR=$TARGETS  cwd=$WORK"
+fi
+
+# Ensure fit targets in cwd (Python drivers also refresh these).
+if [[ -d "$TARGETS" ]]; then
   for name in avg_mean_R.npy mean_data_results.npy \
               data_act_block_duringstim.npy data_act_block_duringchoice.npy \
               data_act_block_duringstim_s_unsplit80.npy; do
-    if [[ -f "$REPO_DIR/fit_targets/$name" ]]; then
-      ln -sfn "$REPO_DIR/fit_targets/$name" "$name"
+    if [[ -f "$TARGETS/$name" ]]; then
+      ln -sfn "$TARGETS/$name" "$name"
     fi
   done
 fi
@@ -175,5 +189,5 @@ ARGS+=(--choice-i-late-weight "$CHOICE_I_LATE_WEIGHT")
 ARGS+=(--choice-i-late-ms "$CHOICE_I_LATE_MS")
 [[ -n "$SET_D_I" ]] && ARGS+=(--set-d-i "$SET_D_I")
 
-python3 -u scripts/run_fit_joint.py "${ARGS[@]}"
+python3 -u "$REPO_DIR/scripts/run_fit_joint.py" "${ARGS[@]}"
 echo "Joint fit done: $(date)"

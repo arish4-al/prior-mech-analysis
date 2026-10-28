@@ -18,3 +18,4 @@ env/
 
 # Local simulation outputs (canonical location: <ONE cache>/manifold_sim)
 output/
+fit_workdirs/

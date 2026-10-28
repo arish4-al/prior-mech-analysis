@@ -334,6 +334,53 @@ full arms also [g_s/d_s with I/M](fit_gs_ds_with_im.md). Fit at
 
 
 
+## 2026-10-28 — integrator rule, option 1 vs option 2 (set up, not submitted)
+
+Topic: [paper main figures](paper_main_figures.md) 2026-10-28. Arm: `full` mpre3 (`ARMS=full`, `m_pre_weight` 3, no freeze, I/M window unset = 80 ms, stim×choice stratum, unsplit-80 S prior on, seeds `7 12 34 45 89 101 303 333`, hybrid s89 warm start). Only the targets differ.
+
+| Tag | I (regions) | M | S RMS (`avg_mean_R`) | S prior |
+|---|---:|---:|---|---|
+| `stageB_hold_s89_full_mpre3_meancell_integ_opt1_rawslope` | 84 (choice significant & slope > 0) | 31 | the 10 sensory regions | VISal VISam LP PO ZI |
+| `stageB_hold_s89_full_mpre3_meancell_integ_opt2_shuffleslope` | 57 (& whole-curve slope beats shuffles, FDR ≤ 0.01) | 31 | same | same |
+
+**Targets** live in `fit_targets_integ/<opt>/`; `regions.json` lists I, M, S, S prior and P. The fitter takes them through `FIT_TARGETS_DIR`.
+- **Prior curves:** built on the laptop by `scripts/build_fit_targets_integ.py` from the res-standard staging (act-kernel prior). They use the old recipes: `load_group(alpha=1, simple)` for I/M, and the unsplit-80 recipe for S. On the old 81/26 lists this source reproduces the old I prior target (mean 0.0635 vs 0.0632, r = 0.85 stim / 0.56 choice).
+- **I/M traj and S RMS:** built on ORCD by `scripts/build_fit_traj_targets_from_cache.py`, a single pass over `insertion_cache`. It uses the notebook keys, stim 0–200 ms, move −150–0 ms, and the standard α=0.2 act prior with true 0.5 dropped. It also rebuilds the old lists (`legacy`) and checks them against `fit_targets` in `traj_targets_check.json`.
+- **P:** copied from `fit_targets`.
+
+**How the new targets differ from production.** All targets are new, so tot is not comparable to production rows; compare opt1 and opt2 with each other.
+- The new S prior (5 regions) sits at about 0.02–0.03 and rises over 0–80 ms. The old one (13 regions) was flat at about 0.045.
+- The M prior is lower than the old target (`manifold/paper_figs/fit_targets_integ/prior_targets.png`).
+
+**Run isolation.** A `FIT_TARGETS_DIR` job runs in `fit_workdirs/<OUT_TAG>_<mtype>_s<seed>/` with its own target links. Before this, every job linked targets into the repo root, and the loss re-reads `data_*.npy` from cwd on each evaluation. Two target sets at once would have read each other's files.
+
+Submit: `STEP=targets`, check the legacy match, then `STEP=fits` (`scripts/submit_fit_targets_integ.sh`).
+
+**Review (same day).**
+- **Loss eval.** One eval of `full_mpre3_meancell` s89 (shared stim 12345, bps 20) runs on the new target files without errors. Prior terms with the old weights, old → new targets:
+
+  | prior term | old targets | new targets |
+  |---|---:|---:|
+  | I stim | 0.020 | 0.119 |
+  | M stim | 0.131 | 0.507 |
+  | S | 0.023 | 0.801 |
+
+  The S jump comes from the regions, not the source: the old 13 regions from the res-standard staging give 0.041 (old target 0.044), while the 5 current regions give 0.025.
+- **Not yet checkable.** Traj and S RMS can only be judged after the ORCD build; 3–7 laptop insertions are noise.
+- **Warm start (superseded below).** Both arms started from the s89 hybrid. Its Stage-A retinal parameters were fit to the old `avg_mean_R`, and Stage-1 DE holds them. The S fit therefore starts mismatched in both arms. That is fair between the arms, but a Stage-A refit on the new S RMS may be needed for good absolute S.
+- **Shared cells.** As in Figure 4 i, I shares LGd, LP, PF, PO and VISp with S, and M shares ZI. Those cells enter both data targets. The old lists shared FRP and NOT between I and `stim_regs`.
+- **Fail closed.** The traj builder now writes nothing if more than 5% of insertions fail, or if any I/M key or S contrast has no cells.
+
+**Stage A first (same day).** The retinal stage is now refit on the new S RMS curves before the two arms (`scripts/submit_fit_targets_integ.sh`, four steps).
+1. Laptop: region lists and prior targets (done).
+2. `STEP=targets`: traj and S RMS targets, one ORCD job.
+3. `STEP=retinal`: Stage A on the new `avg_mean_R`, production protocol (retinal, mask none, `de_cma_local`, seeds 56 34 78 89 202), tag `retinal_newS`. `avg_mean_R` must be identical in both target dirs, so one Stage A serves both arms.
+4. `STEP=fits RETINAL_JSON=<chosen final>`: builds the hybrid `stage_b_hybrid_WEIGHTS_REL_retinal_newS_s<seed>.json` (WEIGHTS_REL ∪ the new retinal) and runs both arms from it. The tags become `stageB_hold_newS<seed>_full_mpre3_meancell_integ_<opt>`, replacing the `stageB_hold_s89_…` tags in the table above.
+
+Pick the Stage A seed by shared-stim `L_S` (`plot_retinal_fit_s.py`, bps 20, seed 12345), not by recorded loss, as for s89. That ranking runs on a new `avg_mean_R`; on the old target it reproduces the s89 score of 0.559. Stage A jobs with `FIT_TARGETS_DIR` also run in their own `fit_workdirs/` folder.
+
+---
+
 ## 2026-09-17 — split window scored (150 post-stim / 80 pre-move)
 
 Topic: [revisions](modeling_details_revisions.md) 09-17. Fit at

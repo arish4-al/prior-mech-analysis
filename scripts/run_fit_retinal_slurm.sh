@@ -58,12 +58,25 @@ module load miniforge
 conda activate ~/conda_envs/ibl
 cd "$REPO_DIR"
 
-# Ensure fit targets from repo fit_targets/ (Python drivers also refresh these).
-if [[ -d "$REPO_DIR/fit_targets" ]]; then
+# FIT_TARGETS_DIR (relative to the repo) swaps the target set; such a run gets
+# its own work dir instead of relinking the shared repo-root links.
+TARGETS="$REPO_DIR/fit_targets"
+if [[ -n "${FIT_TARGETS_DIR:-}" ]]; then
+  TARGETS="$REPO_DIR/$FIT_TARGETS_DIR"
+  [[ -f "$TARGETS/avg_mean_R.npy" ]] || { echo "ERROR: no avg_mean_R in $TARGETS" >&2; exit 1; }
+  WORK="$REPO_DIR/fit_workdirs/retinal_${OUT_TAG:-none}_${MTYPE}_s${SEED}"
+  mkdir -p "$WORK"
+  cd "$WORK"
+  export PYTHONPATH="$REPO_DIR:$REPO_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}"
+  echo "FIT_TARGETS_DIR=$TARGETS  cwd=$WORK"
+fi
+
+# Ensure fit targets in cwd (Python drivers also refresh these).
+if [[ -d "$TARGETS" ]]; then
   for name in avg_mean_R.npy mean_data_results.npy \
               data_act_block_duringstim.npy data_act_block_duringchoice.npy; do
-    if [[ -f "$REPO_DIR/fit_targets/$name" ]]; then
-      ln -sfn "$REPO_DIR/fit_targets/$name" "$name"
+    if [[ -f "$TARGETS/$name" ]]; then
+      ln -sfn "$TARGETS/$name" "$name"
     fi
   done
 fi
@@ -90,5 +103,5 @@ ARGS=(--mtype "$MTYPE" --freeze "$FREEZE" --seed "$SEED"
 [[ -n "$RESUME_JSON" ]] && ARGS+=(--resume-json "$RESUME_JSON")
 [[ "$FORCE" == "1" ]] && ARGS+=(--force)
 
-python3 -u scripts/run_fit_retinal.py "${ARGS[@]}"
+python3 -u "$REPO_DIR/scripts/run_fit_retinal.py" "${ARGS[@]}"
 echo "Retinal fit done: $(date)"
