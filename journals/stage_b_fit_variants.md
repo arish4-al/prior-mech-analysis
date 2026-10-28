@@ -379,6 +379,13 @@ Submit: `STEP=targets`, check the legacy match, then `STEP=fits` (`scripts/submi
 
 Pick the Stage A seed by shared-stim `L_S` (`plot_retinal_fit_s.py`, bps 20, seed 12345), not by recorded loss, as for s89. That ranking runs on a new `avg_mean_R`; on the old target it reproduces the s89 score of 0.559. Stage A jobs with `FIT_TARGETS_DIR` also run in their own `fit_workdirs/` folder.
 
+**One submission (same day).** `STEP=all bash scripts/submit_fit_targets_integ.sh` queues the whole thing as a Slurm chain, all on `pi_fiete`:
+1. The targets job.
+2. Five Stage A jobs (`afterok` on the targets job).
+3. A selector job, `run_fit_integ_select_slurm.sh` (`afterany` on Stage A). It ranks the finished Stage A finals by shared-stim `L_S` on the new `avg_mean_R` and submits `STEP=fits` with the best one. It is not requeued, so Stage B cannot be submitted twice.
+
+Every dependent job uses `--kill-on-invalid-dep`. A dry run with a fake `sbatch` produced exactly this chain, and the fits step built the hybrid and 2 × 8 jobs with the right `FIT_TARGETS_DIR` and tags. The recipe check (`traj_targets_check.json`) does not stop the chain: read it when the targets job ends, and `scancel` if the legacy rebuild does not match `fit_targets`. A Stage A seed that times out is left out of the ranking.
+
 ---
 
 ## 2026-09-17 — split window scored (150 post-stim / 80 pre-move)
