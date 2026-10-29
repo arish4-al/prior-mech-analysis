@@ -461,19 +461,37 @@ def im_window_ms_of(mp, align):
     return prior_window_ms_of(mp)
 
 
+# One data point = one 12.5 ms bin, stepped by 12.5/6 ms (6 sub-offsets per bin).
+# Model step i is compared with data bin i; this value is only for reading
+# windows / model times in ms (2026-10-29).
+DATA_BIN_STEP_MS = 12.5 / 6
+
+
+def model_step_s():
+    """Seconds per model step for real-time model outputs (e.g. RT vs data RT)."""
+    return DATA_BIN_STEP_MS / 1000.0
+
+
+def window_bins(w_ms):
+    """Data-bin count for a window in ms (80 -> 40 production bins; else w / DATA_BIN_STEP_MS)."""
+    w_ms = float(w_ms)
+    if abs(w_ms - 80.0) <= 1e-6:
+        return 40
+    return max(1, int(round(w_ms / DATA_BIN_STEP_MS)))
+
+
 def resolve_im_window(mp, align, T=72, plot_window=80):
-    """T (steps), plot_window (ms), resample-to-data for one alignment."""
+    """T (model steps = data bins), plot_window (ms label), resample flag (always False).
+
+    Comparison is bin by bin: a window in ms is converted to a data-bin count
+    with DATA_BIN_STEP_MS (150 ms -> 72 bins, the full BWM window). The 80 ms
+    production window keeps its 40 bins. Before 2026-10-29 non-80 windows used
+    round(w / dt) model steps linearly resampled onto the data bins.
+    """
     w = im_window_ms_of(mp, align)
     if w is None:
         return int(T), float(plot_window), False
-    dt = float((mp or {}).get("dt", _DEFAULT_DT))
-    if not np.isfinite(dt) or dt <= 0.0:
-        dt = _DEFAULT_DT
-    t_use = max(1, int(round(w / dt)))
-    # 80 ms matches production scoring (40 bins @ 2 ms, no resample).
-    # Longer windows (150) remap onto the data bin count.
-    resample = abs(w - 80.0) > 1e-6
-    return t_use, float(w), resample
+    return window_bins(w), float(w), False
 
 
 def resolve_prior_distance_window(mp, T=72, plot_window=80):
@@ -3031,12 +3049,13 @@ def plot_S_diff_by_contrast_side(avg_dict, dt=2):
 
 
 def plot_S_diff_by_contrast_side_with_data(avg_dict, avg_data_L, avg_data_R, baseline=0, dt=2, 
-                                           save_dir=save_dir, ylim=None, yticks=None):
+                                           save_dir=save_dir, ylim=None, yticks=None, r2=None):
     """
     avg_dict: output of mean_S_by_contrast_and_side_varlen_vec2
               { (side, contrast): array (2, T_eff) }
     avg_data_L: dict { contrast: array (2, T) } to overlay on side = -1
     avg_data_R: dict { contrast: array (2, T) } to overlay on side = +1
+    r2: overall R² (e.g. compute_sse_stim_right 'total_gof_r2'), printed on the axes.
 
     Model and ref curves share the same color per contrast.
     """
@@ -3084,6 +3103,9 @@ def plot_S_diff_by_contrast_side_with_data(avg_dict, avg_data_L, avg_data_R, bas
         plt.xlabel(f"time ({'ms' if dt!=1.0 else 'steps'})")
         # plt.ylabel("S[0] − S[1]") if side == -1 else plt.ylabel("S[1] − S[0]")
         plt.title(f"S difference by contrast (trial side {title_side})")
+        if r2 is not None and np.isfinite(r2):
+            plt.text(0.98, 0.98, f"R$^2$: {r2:.3g}", transform=plt.gca().transAxes,
+                     ha='right', va='top', fontsize=11)
         # plt.legend(fontsize=8, frameon=False)
         plt.tight_layout()
         if save_dir is not None:
@@ -3095,13 +3117,18 @@ def plot_S_diff_by_contrast_side_with_data(avg_dict, avg_data_L, avg_data_R, bas
 
 
 def compute_sse_stim_right(avg_dict, avg_data_R, baseline_R=0,
-                           snr_weight=1.0, snr_window=11, snr_poly=3, snr_mode='db'):
+                           snr_weight=1.0, snr_window=11, snr_poly=3, snr_mode='db',
+                           max_steps=50, drop_zero_contrast=True):
     """
     SSE+SNR loss between model (+1 trial side) and data (avg_data_R) per contrast.
     - Normalizes SSE by data energy to make it amplitude-invariant.
     - Normalizes SNR difference by data SNR magnitude for balance.
-    - For contrast == 1.0, only first 45 steps are used (else first 60).
-    Also computes goodness-of-fit R² per contrast and overall.
+    - Every contrast uses the first `max_steps` steps (50 = 100 ms at 2 ms; the
+      early bump, not the late rise). max_steps=None restores the legacy window
+      (45 steps at contrast 1.0, else 60), used before 2026-10-29.
+    - drop_zero_contrast: skip c=0 (mostly noise; its SSE weight is 0 anyway, but
+      its SNR term was not). False restores the legacy behaviour.
+    Also computes goodness-of-fit R² per contrast and overall (same window/contrasts).
 
     Returns
     -------
@@ -3191,6 +3218,8 @@ def compute_sse_stim_right(avg_dict, avg_data_R, baseline_R=0,
         }
 
     contrasts = sorted({c for (side, c) in avg_dict.keys() if side == 1})
+    if drop_zero_contrast:
+        contrasts = [c for c in contrasts if abs(float(c)) > 1e-9]
     per = {}
     total_sse, total_snr_loss, total_loss, total_T = 0.0, 0.0, 0.0, 0
     total_sse_raw, total_sst = 0.0, 0.0
@@ -3208,7 +3237,10 @@ def compute_sse_stim_right(avg_dict, avg_data_R, baseline_R=0,
         T = min(m.size, d.size)
         if T <= 0:
             continue
-        T = min(T, 45 if abs(float(c) - 1.0) < 1e-9 else 60)
+        if max_steps is None:
+            T = min(T, 45 if abs(float(c) - 1.0) < 1e-9 else 60)
+        else:
+            T = min(T, int(max_steps))
 
         m_seg = m[:T]
         d_seg = d[:T]
@@ -4784,7 +4816,8 @@ def loss_prior_effect(
                 else int(round(plot_window / 2))
             )
         else:
-            data_length = int(round(plot_window / 2))
+            # Bin by bin: the window's data-bin count (80 ms -> 40, 150 ms -> 72).
+            data_length = window_bins(plot_window)
         times_full = time_axis_for(timeframe, time_window=data_length, duration_ms=plot_window)
         # print(len(times_full))
 
