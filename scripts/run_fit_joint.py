@@ -321,6 +321,10 @@ def build_args(argv=None):
     ap.add_argument("--set-d-i", type=float, default=None,
                     help="Overwrite d_i in the external warm-start vector "
                          "(native).")
+    ap.add_argument("--zero-g-m-d-m", action="store_true", default=False,
+                    help="Set g_m and d_m to LOG_ZERO (≈0) in the external "
+                         "warm-start vector. Freeze them (mask 7|9) so "
+                         "--freeze-hold keeps them at 0.")
     ap.add_argument("--choice-i-late-weight", type=float, default=0.0,
                     help="Add this × late during-choice I undershoot hinge "
                          "nSSE. 0 = off (default).")
@@ -398,7 +402,7 @@ def main(argv=None):
     print(f"[fit-data] mean_data_results={mean_path}")
     avg_path, avg_data_R = load_avg_mean_r()
     print(f"[fit-data] avg_mean_R={avg_path}")
-    behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
+    behavior = None  # held out of the fit loss on purpose
     stim_regs = ["VISpm", "FRP", "VISal"]
     stim_curve_path = None
     if include_stim:
@@ -477,6 +481,11 @@ def main(argv=None):
         if args.set_d_i is not None:
             resume_theta = overwrite_d_i_in_theta(resume_theta, args.set_d_i)
             print(f"[di] set d_i={args.set_d_i:g}")
+        if args.zero_g_m_d_m:
+            resume_theta = np.asarray(resume_theta, float).copy()
+            for name in ("g_m", "d_m"):
+                resume_theta[PARAM_NAMES.index(name)] = fj.LOG_ZERO
+            print("[gm0] set g_m=d_m=0 (LOG_ZERO)")
         if args.tied_thresholds:
             resume_theta, t0 = tie_thresholds_in_theta(resume_theta, how="mean")
             print(f"[test4] tied theta_c=theta_d={t0:.4f} (mean of resume)")
@@ -486,6 +495,8 @@ def main(argv=None):
         print("[mleak] --set-w-mm skipped (not an external warm start)")
     elif args.set_d_i is not None:
         print("[di] --set-d-i skipped (not an external warm start)")
+    elif args.zero_g_m_d_m:
+        print("[gm0] --zero-g-m-d-m skipped (not an external warm start)")
 
     for k, v in (resume_meta_mp or {}).items():
         if k in ("p_offset_always_on", "iti_penalty", "tied_thresholds",
@@ -529,6 +540,8 @@ def main(argv=None):
             raise SystemExit(f"--freeze index {i} out of range 0..{D_JOINT-1}")
         train_mask[i] = False
     frozen = [PARAM_NAMES[i] for i in freeze_idx]
+    if args.zero_g_m_d_m and not {"g_m", "d_m"} <= set(frozen):
+        raise SystemExit("--zero-g-m-d-m needs g_m and d_m frozen (--freeze 7|9)")
     train_mask_stage1 = None
     if args.stage1_hold_retinal:
         train_mask_stage1 = train_mask.copy()
@@ -737,6 +750,7 @@ def main(argv=None):
         "choice_i_late_weight": float(args.choice_i_late_weight),
         "choice_i_late_ms": float(args.choice_i_late_ms),
         "set_d_i": (None if args.set_d_i is None else float(args.set_d_i)),
+        "zero_g_m_d_m": bool(args.zero_g_m_d_m),
         "g_i_bounds": list(NATIVE_BOUNDS["g_i"]),
         "w_pp_bounds": list(NATIVE_BOUNDS["W_pp"]),
         "set_w_pp": (None if args.set_w_pp is None else float(args.set_w_pp)),

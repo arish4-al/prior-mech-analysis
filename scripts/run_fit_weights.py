@@ -302,7 +302,7 @@ def main(argv=None):
     # --- data / regions ---
     mean_path, mean_data_results = load_validated_mean_data()
     print(f"[fit-data] mean_data_results={mean_path}")
-    behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
+    behavior = None  # held out of the fit loss on purpose
     prior_regions = {
         "int_regs_choice": int_regs, "int_regs_stim": int_regs,
         "move_regs_choice": move_regs, "move_regs_stim": move_regs,

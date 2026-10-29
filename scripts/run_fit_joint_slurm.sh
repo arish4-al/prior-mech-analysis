@@ -33,6 +33,7 @@
 #        M_STIM_OVERSHOOT_FROM_MS → extra prior-shape terms (default 0).
 #      CHOICE_I_LATE_WEIGHT / CHOICE_I_LATE_MS → late choice-I undershoot.
 #      SET_D_I → --set-d-i on external warm start.
+#      ZERO_G_M_D_M=1 → --zero-g-m-d-m (g_m=d_m=0 on external warm start; freeze 7|9).
 
 set -euo pipefail
 
@@ -101,6 +102,7 @@ M_STIM_OVERSHOOT_FROM_MS="${M_STIM_OVERSHOOT_FROM_MS:-40}"
 CHOICE_I_LATE_WEIGHT="${CHOICE_I_LATE_WEIGHT:-0}"
 CHOICE_I_LATE_MS="${CHOICE_I_LATE_MS:-40}"
 SET_D_I="${SET_D_I:-}"
+ZERO_G_M_D_M="${ZERO_G_M_D_M:-0}"
 
 module load miniforge
 conda activate ~/conda_envs/ibl
@@ -188,6 +190,7 @@ ARGS+=(--m-stim-overshoot-from-ms "$M_STIM_OVERSHOOT_FROM_MS")
 ARGS+=(--choice-i-late-weight "$CHOICE_I_LATE_WEIGHT")
 ARGS+=(--choice-i-late-ms "$CHOICE_I_LATE_MS")
 [[ -n "$SET_D_I" ]] && ARGS+=(--set-d-i "$SET_D_I")
+[[ "$ZERO_G_M_D_M" == "1" ]] && ARGS+=(--zero-g-m-d-m)
 
 python3 -u "$REPO_DIR/scripts/run_fit_joint.py" "${ARGS[@]}"
 echo "Joint fit done: $(date)"

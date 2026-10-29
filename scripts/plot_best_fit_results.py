@@ -264,7 +264,7 @@ def plot_iti_mean_trajectories(results, steps_before_obs, model_params, save_dir
 
 
 def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Path,
-             avg_mean_R=None, include_stim=False):
+             avg_mean_R=None, include_stim=False, prior_plot_window=None):
     mp, meta = load_plot_model(json_path)
     (
         stimuli,
@@ -305,7 +305,8 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
     T_prior, plot_win, custom_prior_win = mf.resolve_prior_distance_window(
         mp, T=72, plot_window=80)
     if include_stim and not custom_prior_win:
-        plot_win = 150
+        # prior_plot_window=80 draws only the scored window (2026-10-28).
+        plot_win = prior_plot_window or 150
     loss_prior = loss_prior_effect(
         regions=prior_regions,
         results=results,

@@ -110,7 +110,7 @@ def main():
           f"n_stim={args.n_stim_seeds}")
 
     mean_data = np.load("mean_data_results.npy", allow_pickle=True).flat[0]
-    behavior = np.load(Path(pth_res, "behavior.npy"), allow_pickle=True).flat[0]
+    behavior = None  # held out of the fit loss on purpose
     prior_regions = {
         "int_regs_choice": int_regs,
         "int_regs_stim": int_regs,

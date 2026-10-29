@@ -386,6 +386,100 @@ Pick the Stage A seed by shared-stim `L_S` (`plot_retinal_fit_s.py`, bps 20, see
 
 Every dependent job uses `--kill-on-invalid-dep`. A dry run with a fake `sbatch` produced exactly this chain, and the fits step built the hybrid and 2 × 8 jobs with the right `FIT_TARGETS_DIR` and tags. The recipe check (`traj_targets_check.json`) does not stop the chain: read it when the targets job ends, and `scancel` if the legacy rebuild does not match `fit_targets`. A Stage A seed that times out is left out of the ranking.
 
+**Results (same day, scored).**
+- **Targets check.** The I/M legacy rebuild matches `fit_targets`: r 0.97–1.00, scale 1.00–1.04. Coverage: 683/696 insertions, none skipped. S matches less well at low contrast: r 0.79 at c=0 and 0.90 at c=0.0625, scale 1.31–1.43 at c=0.0625–0.125. The new 10-region S curve at c=1 peaks at about 0.52 near 50 ms; the old one peaked at about 0.70–0.82.
+- **Stage A.** The selector picked s34, with shared `L_S` 0.459 and R² 0.53. The other seeds scored s56 0.483, s78 0.502, s89 0.564 and s202 0.833. s202 had the best recorded loss (0.368), so recorded loss would have picked the worst seed.
+- **Eval method.** Script: `scripts/_tmp_integ_opt_eval_plots.py`, one process per arm. Each process sets `FIT_TARGETS_DIR` to its arm and runs in its own `fit_workdirs/eval_<opt>` folder. Shared stim: bps 20, seed 12345, from regular s101. Ranking uses fair (traj + prior + `L_S`) at `m_pre_weight` 1. As a reference, the production `stageB_hold_s89_full_mpre3_meancell` seeds are scored on the same targets.
+- **Output files.**
+  - Eval: `alyx/models/stageB_hold_newS34_integ_<opt>_eval.json`.
+  - Plots, in each `weights_run_fj_stageB_hold_newS34_full_mpre3_meancell_integ_<opt>_full_masknone_s*/`: IM_pre/post, P_fit, S_fit, prior_effects, S/I/M_iti and `psychometric_model_vs_data_actprior/`. `prior_effects` is drawn on the scored windows only: 0–80 ms after stim and −80–0 ms before the move. `plot_one(prior_plot_window=80)`; full arms otherwise default to drawing 150 ms. The SSE in each panel title equals the eval prior term.
+  - Plot summary: `…_<opt>_plot_summary.json`.
+
+| targets | run | best fair (seed) | median fair | traj | I/M prior | S prior | `L_S` |
+|---|---|---|---:|---:|---:|---:|---:|
+| opt1 | opt1 refit | 1.314 (s45) | 1.682 | 0.398 | 0.237 | 0.424 | 0.656 |
+| opt1 | production s89 | 1.818 (s7) | 2.400 | 0.319 | 0.613 | 0.451 | 0.861 |
+| opt2 | opt2 refit | 1.476 (s12) | 1.795 | 0.375 | 0.258 | 0.499 | 0.670 |
+| opt2 | production s89 | 1.858 (s7) | 2.329 | 0.299 | 0.635 | 0.451 | 0.861 |
+
+The traj through `L_S` columns are medians over seeds.
+
+- **What the refit changes.** On both target sets the refit beats production mainly on the I/M prior (about 0.24 vs 0.62) and on `L_S` (0.66 vs 0.86). Traj gets slightly worse (0.38–0.40 vs 0.30–0.32).
+- **`L_S` in Stage B: not drift (corrected below).** The Stage B `L_S` of 0.49–0.68 sits above Stage A's 0.459, but that difference is stimulus-draw noise. See "S fit noise".
+- **The two prior targets are almost the same.** The 84-region and 57-region I lists give nearly the same I prior curve: during stim, `r_int` ends at 0.073 vs 0.079; during choice, 0.078 vs 0.086. Most of the opt1/opt2 difference comes from the I traj target and from optimizer variance.
+- **Integrator gain.** opt1 turns off the I prior in 3/8 seeds (g_i about 0: s7, s12, s333). opt2 does so in 2/8 (s333, plus s45 at g_i ≈ 2). The best opt1 seed, s45 (g_i 42), gives a model I prior that is flat to falling: 0.036 at 0 ms, 0.032 at 80 ms, and falling before the move. The data I prior rises. Its lower loss comes with the wrong shape.
+- **opt2 shape and behaviour.** The best opt2 seed, s12 (g_i 171, d_i 7.1), has a rising I prior in both windows. Its behaviour is poor: perf R² 0.48, RT split −3.2, with incongruent trials too wrong and too slow.
+- **Production behaviour reference.** For production full80, perf R² is 0.75–0.91 and RT split ranges from −1.37 to 0.48.
+
+| arm, seed | fair | I prior 0→80 ms | perf R² | RT R² | RT split |
+|---|---:|---|---:|---:|---:|
+| opt1 s45 (best fair) | 1.314 | 0.036→0.032 | 0.847 | 0.269 | −0.03 |
+| opt1 s7 | 1.368 | 0.039→0.041 | 0.929 | 0.545 | 0.41 |
+| opt2 s12 (best fair) | 1.476 | 0.044→0.059 | 0.481 | 0.303 | −3.22 |
+| opt2 s101 | 1.602 | 0.037→0.043 | 0.884 | 0.008 | −0.30 |
+| opt2 s303 | 1.732 | 0.037→0.050 | 0.974 | 0.775 | 0.67 |
+
+**Per-term breakdown, four seeds.** Same shared stim, `m_pre_weight` 1, each arm scored on its own targets. C = integrator (I). Rows sum to the totals above: traj = C + M + P penalties; prior = S + C + M. g ≈ 0 means below 1e-4, and its d is then irrelevant.
+
+| | opt1 s45 | opt1 s7 | opt2 s12 | opt2 s303 |
+|---|---:|---:|---:|---:|
+| `L_S` (S RMS) | 0.527 | 0.526 | 0.606 | 0.652 |
+| traj C | 0.125 | 0.101 | 0.165 | 0.111 |
+| traj M | 0.255 | 0.224 | 0.132 | 0.234 |
+| traj P penalties | 0.026 | 0.010 | 0.000 | 0.020 |
+| prior S (0–80 ms) | 0.062 | 0.146 | 0.213 | 0.460 |
+| prior C stim / move | 0.027 / 0.183 | 0.014 / 0.136 | 0.033 / 0.068 | 0.027 / 0.048 |
+| prior M stim / move | 0.085 / 0.022 | 0.116 / 0.094 | 0.149 / 0.110 | 0.096 / 0.083 |
+| fair | 1.314 | 1.368 | 1.476 | 1.732 |
+| g_s / d_s | ≈0 / 45.2 | ≈0 / 43.8 | 0.34 / 6.2 | ≈0 / 3.9 |
+| g_i / d_i | 41.8 / 11.0 | 0.009 / 14.3 | 171 / 7.1 | 195 / 22.0 |
+| g_m / d_m | ≈0 / ≈0 | ≈0 / ≈0 | 3.3 / ≈0 | ≈0 / ≈0 |
+| psychometric R² | 0.847 | 0.929 | 0.481 | 0.974 |
+| RT R² | 0.269 | 0.545 | 0.303 | 0.775 |
+| RT split R² (con / inc) | −0.03 (0.45 / −0.55) | 0.41 (0.65 / 0.16) | −3.22 (0.86 / −7.59) | 0.67 (0.83 / 0.51) |
+
+- **Move-aligned C prior.** opt1 misses it (0.14–0.18); opt2 fits it about 3× better (0.05–0.07).
+- **opt1 s45.** It wins fair through a low S prior and a low move-aligned M prior, with g_s and g_m off.
+- **opt1 s7.** Fits with the C prior off.
+- **g_m.** About 0 in all four seeds except opt2 s12 (3.3).
+
+**S fit noise (same day).** The question was whether the S fit is worse than before.
+
+1. **S depends only on the retinal parameters.** opt1 s101 has the same retinal values as Stage A s34. Their S curves, and so their `L_S`, are identical whether run with the Stage A network and thresholds or the Stage B ones (0.669 vs 0.669). Swapping only the thresholds changes nothing either. Stage B barely moves the retinal parameters: 14/16 seeds stay within about 1% of s34. The exceptions are opt1 s7 (τ_a 400) and opt2 s303 (τ_a 219).
+2. **One 20-block draw is very noisy.** For identical parameters, `L_S` was 0.459 on the selector's stim draw and 0.669 on the eval draw.
+3. **Mean over 8 stim draws** (bps 20, `make_shared_stimuli`, seeds 1–8):
+
+| Stage A | target | `L_S` mean ± sd (range) | c=1 R² |
+|---|---|---|---:|
+| new s34 | new S (10 regions) | **0.582 ± 0.161** (0.35–0.81) | 0.83 |
+| new s56 | new | 0.644 ± 0.164 | 0.78 |
+| new s78 | new | 0.654 ± 0.165 | 0.78 |
+| new s89 | new | 0.700 ± 0.176 | 0.85 |
+| new s202 | new | 0.746 ± 0.205 | 0.83 |
+| old s89 (production) | old S (`fit_targets`) | 0.676 ± 0.158 | 0.87 |
+
+- **The new S fit is not worse.** s34 on the new target scores 0.58, against 0.68 for production s89 on the old target. The c=1 R² is about the same.
+- **s34 stays the right Stage A pick on the mean.** The single-draw `L_S` and Stage B `L_S` values above are inside the ±0.16 noise. They cannot rank seeds or arms.
+- **Shape mismatch that remains at c=1.** The new data rises gradually from about 20 ms, peaks at about 0.52, then ramps after 80 ms. The model stays flat until about 30 ms, steps up and overshoots to about 0.67. The pooled 10-region curve probably mixes early (LGd/LP/VIS) and later (PO/ZI/PF) latencies, and one retinal latency cannot smear its onset like that. The old 8-region curve had a sharper onset. Even so, the c=1 R² averaged over draws is only slightly lower on the new target (0.83 vs 0.87).
+
+**Open.**
+- Neither arm has a seed that is best on fair, has a rising I prior and has good behaviour at once.
+- opt2 s303 is the best balanced seed: third on fair, rising I and the best behaviour of all 16 fits.
+- The comparison is 8 seeds per arm; the seed-to-seed spread (fair 1.3–2.1) is larger than the arm difference.
+
+**Code changes (same day).**
+- **g_i floor back to 0.1.** Set in `fit_joint.NATIVE_BOUNDS` and in `fit_weights._log_bounds_weights_v2`. It had sat at 1e-12 since commit 6bfa9bc, although the revisions journal said twice to restore it. Every integ fit above ran with 1e-12; opt1 s7, s12 and s333 collapsed g_i.
+- **Behaviour stays out of the loss on purpose.** The commented-out `loss_perf_with_data` block in `fit_weights.loss_weights_core_v2` is deleted. Behaviour is a held-out check only. The fit drivers no longer load `behavior.npy`: `run_fit_joint.py`, `run_fit_weights.py`, the `fit_weights.py` main and the `bench_fit_*` scripts now pass `behavior = None`, so the fitter never sees behaviour data.
+- **`--zero-g-m-d-m` added to `run_fit_joint.py`.** It sets g_m = d_m = LOG_ZERO in an external warm start, and requires 7|9 to be frozen, so `--freeze-hold` keeps them at 0. The env var is `ZERO_G_M_D_M=1`.
+
+**Warm fine-tune, set up (same day).** Script: `scripts/submit_fit_integ_finetune.sh`.
+- **Starts:** opt1 s45, opt1 s7, opt2 s12 and opt2 s303, each on its own arm's targets.
+- **Method:** `cma_only`, restart seeds `89 7 12 45`, 4 × 4 = 16 jobs on `pi_fiete`.
+- **Free:** W_mm, W_mi, g_i, d_i, g_s, d_s; the local polish uses the same set (2,5,6,8,12,13).
+- **Fixed:** g_m and d_m at 0. All other parameters are held at the source fit, including W_ii, W_pp, W_is, W_pi, both thresholds and the retinal parameters.
+- **Loss and window:** window unset (~80 ms), stim×choice, S prior on, `m_pre_weight` 3 as fitted, no extra terms. Rank later at `m_pre_weight` 1.
+- **Tags:** `stageB_hold_newS34_integ_<opt>_ft<src>_gm0`. A dry run with a fake `sbatch` gave 16 jobs with the right targets, freeze mask and resume JSONs.
+
 ---
 
 ## 2026-09-17 — split window scored (150 post-stim / 80 pre-move)
