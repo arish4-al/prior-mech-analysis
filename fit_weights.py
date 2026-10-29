@@ -621,10 +621,10 @@ def _log_bounds_weights_v2():
     bW_pi = (1e-7, 1e-1)
     bW_mi = (1e-3, 10)
 
-    # gains: same floor as g_m (may be negligible; paper / ckpt g_m ≈ 0)
-    bG_i = (1e-12, 2e2)
+    # gains: g_i kept away from zero (floor 0.1); g_m may be negligible
+    bG_i = (1e-1, 2e2)
     bG_m = (1e-12, 2e2)
-    # offsets: same 1e-12 floor as g_i / g_m / d_m (d_i was 1e-5)
+    # offsets: same 1e-12 floor as g_m / d_m (d_i was 1e-5)
     bD_i = (1e-12, 1e2)
     bD_m = (1e-12, 1e2)
 
@@ -713,7 +713,8 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                          im_window_stim_ms=None, im_window_choice_ms=None):
     """
     Core loss in log-space for the v2 (12-param, taus fixed in model_params) model.
-    Combines trajectory, prior-effect, and behavioral losses.
+    Combines trajectory and prior-effect losses. Behavior is held out of
+    the loss on purpose (validation only).
     Debug version: prints exact failure sites when returning 1e12.
     
     Args:
@@ -836,16 +837,6 @@ def loss_weights_core_v2(theta_log, mean_data_results, prior_regions, behavior,
                 print("EXC@loss_prior(weights_v2):", traceback.format_exc().splitlines()[-1])
             return 1e12
 
-        # try:
-        #     loss_beh = loss_perf_with_data(
-        #         results, behavior,
-        #         metric="correct", dt=1.0, do_plot=plot)
-        # except Exception:
-        #     if debug:
-        #         import traceback
-        #         print("EXC@loss_beh(weights_v2):", traceback.format_exc().splitlines()[-1])
-        #     return 1e12
-
         total = float(loss_traj['total'] + loss_prior['total'])
         if not np.isfinite(total) or total >= 1e11:
             if debug:
@@ -958,7 +949,7 @@ def _loss_active_de_worker(x_act):
         th_full[~train_mask] = LOG_ZERO
 
     # Clamp FREE dims only. Clamping frozen dims would pull LOG_ZERO up to the
-    # lower bound (e.g. g_i → 1e-12 instead of ~0), breaking --freeze semantics.
+    # lower bound (e.g. g_i → 0.1 instead of ~0), breaking --freeze semantics.
     Lb_full = np.array([L for (L, U) in full_bounds], float)
     Ub_full = np.array([U for (L, U) in full_bounds], float)
     th_full[train_mask] = np.minimum(
@@ -3432,7 +3423,7 @@ if __name__ == '__main__':
     ensure_fit_data_links(pth_res=pth_res, require_avg_mean_r=False)
     _mean_path, mean_data_results = load_validated_mean_data()
     print(f"[fit-data] mean_data_results={_mean_path}")
-    behavior = np.load(Path(pth_res, 'behavior.npy'), allow_pickle=True).flat[0]
+    behavior = None  # held out of the fit loss on purpose
     prior_regions = {'int_regs_choice': int_regs, 'int_regs_stim': int_regs,
             'move_regs_choice': move_regs, 'move_regs_stim': move_regs}
     prior_regions['stim_regs'] = ['VISpm', 'FRP', 'VISal']

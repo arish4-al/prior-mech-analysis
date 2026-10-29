@@ -257,8 +257,6 @@ def main():
         from scripts._fit_data import ensure_fit_data_links, load_validated_mean_data
     ensure_fit_data_links(require_avg_mean_r=False, mean_and_prior=True)
     mean_path, mean_data = load_validated_mean_data()
-    behavior_path = Path(pth_res) / "behavior.npy"
-    _ = np.load(behavior_path, allow_pickle=True).flat[0]  # ensure present
     prior_regions = {
         "int_regs_choice": int_regs,
         "int_regs_stim": int_regs,
