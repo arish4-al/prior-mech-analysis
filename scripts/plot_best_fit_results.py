@@ -352,7 +352,7 @@ def plot_one(json_path: Path, stim_bundle, mean_data, prior_regions, out_dir: Pa
         S_r2 = float(sr) if sr is not None and np.isfinite(sr) else None
         plot_S_diff_by_contrast_side_with_data(
             S_avg, {}, avg_mean_R, baseline=0,
-            save_dir=str(out_dir), ylim=[-0.14, 0.75], yticks=None,
+            save_dir=str(out_dir), ylim=[-0.14, 0.75], yticks=None, r2=S_r2,
         )
         for n in list(plt.get_fignums()):
             fig = plt.figure(n)

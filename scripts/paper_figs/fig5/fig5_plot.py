@@ -503,7 +503,7 @@ def compute(mp):
     )
     perf_figs = _new_figs(before)
     before = set(plt.get_fignums())
-    dt_s = float(mp['dt']) / 1000.0
+    dt_s = mf.model_step_s()  # one model step = one data bin (12.5/6 ms)
     sse_rt = loss_perf_with_data(
         psych, beh, mp, metric='rt', dt=dt_s, do_plot=True,
         save_dir=None, log_xaxis=True, rt_mode='combined_all',

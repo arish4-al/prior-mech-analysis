@@ -16,6 +16,7 @@
 # shared-stim L_S on the new avg_mean_R (plot_retinal_fit_s.py, bps 20,
 # seed 12345), as for production s89, and submits STEP=fits with the best.
 # Not requeued: a second run would submit the Stage B arms twice.
+# SUBMIT_FITS=0 stops after the ranking (summary.json in RANK_DIR).
 
 set -euo pipefail
 
@@ -62,6 +63,10 @@ python3 -u scripts/plot_retinal_fit_s.py \
 BEST=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['rows'][0]['json'])" \
   "$RANK_DIR/summary.json")
 echo "Best Stage A (shared L_S): $BEST"
+if [[ "${SUBMIT_FITS:-1}" == "0" ]]; then
+  echo "SUBMIT_FITS=0: ranking only, Stage B not submitted. Done: $(date)"
+  exit 0
+fi
 
 STEP=fits RETINAL_JSON="$BEST" RETINAL_TAG="$RETINAL_TAG" OPTS="$OPTS" \
   ONE_MODELS="$ONE_MODELS" bash scripts/submit_fit_targets_integ.sh

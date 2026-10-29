@@ -238,8 +238,10 @@ def gof(sse, *keys):
 
 def plot_one_json(label: str, jp: Path, run: Path, behavior) -> dict:
     mp, meta = load_plot_model(jp)
-    dt_ms = float(mp["dt"])
-    dt_s = dt_ms / 1000.0
+    # RT in s: one model step = one data bin (12.5/6 ms), not mp["dt"] (2026-10-29).
+    from model_functions import model_step_s
+    dt_s = model_step_s()
+    dt_ms = dt_s * 1000.0
     out_dir = run / OUT_SUBDIR
     out_dir.mkdir(parents=True, exist_ok=True)
 

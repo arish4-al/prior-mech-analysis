@@ -55,6 +55,16 @@
 #   → hybrid  <models>/stage_b_hybrid_WEIGHTS_REL_retinal_newS_s<seed>.json
 #   → OUT_TAG stageB_hold_newS<seed>_full_mpre3_meancell_integ_{opt1_rawslope,opt2_shuffleslope}
 #
+# S loss rebuild (2026-10-29, journals/integ_opt2_prior_sensory_fit.md):
+# L_S now scores 0–100 ms (50 bins, bin by bin) for every contrast and drops
+# c=0. Stage A fits on the old loss are not comparable; refit under a new tag:
+#   STEP=retinal RETINAL_TAG=retinal_newSbin SELECT=1 SUBMIT_FITS=0 \
+#     bash scripts/submit_fit_targets_integ.sh
+#   → 5 Stage A jobs + selector (afterany) that ranks them by shared-stim L_S
+#     and stops (SUBMIT_FITS=0); SUBMIT_FITS=1 also submits Stage B.
+# Hybrid / Stage B names follow RETINAL_TAG (retinal_<X> → stageB_hold_<X><seed>),
+# so retinal_newS keeps the old names and a new tag cannot overwrite them.
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -67,6 +77,7 @@ OPTS="${OPTS:-opt1_rawslope opt2_shuffleslope}"
 RETINAL_TAG="${RETINAL_TAG:-retinal_newS}"
 ONE_MODELS="${ONE_MODELS:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx/models}"
 export PARTITION="${PARTITION:-pi_fiete}"
+STAGEB_TAG="${RETINAL_TAG#retinal_}"
 export REPO_DIR OPTS RETINAL_TAG ONE_MODELS
 
 _need_targets() {
@@ -130,7 +141,19 @@ case "$STEP" in
         echo "ERROR: avg_mean_R differs between ${O[0]} and $o; one Stage A cannot serve both" >&2
         exit 1; }
     done
-    _submit_retinal
+    ROUT=$(_submit_retinal)
+    echo "$ROUT"
+    if [[ "${SELECT:-0}" == "1" ]]; then
+      RJIDS=$(grep -o -- '-> [0-9]*' <<< "$ROUT" | awk '{print $2}' | paste -sd: -)
+      [[ -n "$RJIDS" ]] || { echo "ERROR: no Stage A job ids" >&2; exit 1; }
+      export SUBMIT_FITS="${SUBMIT_FITS:-0}"
+      SJID=$(sbatch --parsable --partition="$PARTITION" \
+        --dependency="afterany:$RJIDS" --kill-on-invalid-dep=yes \
+        --export=ALL scripts/run_fit_integ_select_slurm.sh)
+      echo "selector job (after $RJIDS) -> $SJID  SUBMIT_FITS=$SUBMIT_FITS"
+      echo "  tail -f integ_select_${SJID}.out"
+      echo "Cancel the chain: scancel ${RJIDS//:/ } $SJID"
+    fi
     ;;
   fits)
     _need_targets
@@ -141,10 +164,10 @@ case "$STEP" in
     rseed="$(basename "$(dirname "$RETINAL_JSON")")"
     rseed="${rseed##*_s}"
     export RETINAL_JSON
-    export HYBRID_JSON="$ONE_MODELS/stage_b_hybrid_WEIGHTS_REL_retinal_newS_s${rseed}.json"
+    export HYBRID_JSON="$ONE_MODELS/stage_b_hybrid_WEIGHTS_REL_${RETINAL_TAG}_s${rseed}.json"
     for o in $OPTS; do
       FIT_TARGETS_DIR="fit_targets_integ/$o" ARMS=full M_PRE_WEIGHT=3 \
-        OUT_TAG_FULL="stageB_hold_newS${rseed}_full_mpre3_meancell_integ_$o" \
+        OUT_TAG_FULL="stageB_hold_${STAGEB_TAG}${rseed}_full_mpre3_meancell_integ_$o" \
         bash scripts/submit_fit_stage_b_mpre.sh
     done
     ;;

@@ -20,6 +20,7 @@ Dated entries are preserved inside each topic file (with their original date tag
 | [Prior-curve dips and discordant RT](modeling_details_prior_rt_gaps.md) | Remaining shape gaps after tests 1–6: **M** stim-aligned ramps through the S-peak pause; incongruent RT still the wrong shape. 09-14 act-prior RT (s101); 10-04/10-05 s89ft → [s89ft imshape](s89ft_imshape.md) |
 | [s89ft I/M shape fine-tune](s89ft_imshape.md) | Warm CMA from 80 ms `full_mpre3_meancell` s89. `wii` s7 tot **1.014**. 10-09 `di`/`wiigi`: best `di` s89 **1.033**, commit I still ~0.043; `wiigi` worse. |
 | [Stage B fit variants (catalog)](stage_b_fit_variants.md) | Index of every scored Stage B / joint tag. 09-16b/09-17 fair 80 vs 150; 09-18 stim150/choice80 rank; 10-05 s89ft (`wii` s7 **1.014**); 10-09 `di` s89 1.033 |
+| [Integrator-rule opt2: prior and sensory fits](integ_opt2_prior_sensory_fit.md) | 10-29: plan to improve opt2 S trajectory (early-bump amplitude at high contrast; c=0 SNR and >100 ms in the loss), S prior (d_s offset basin, not g_s), and M/C prior shape; 8-draw eval for ranking; overall R² on S trajectory plots |
 | [BWM classification recovery](bwm_classification_recovery.md) | The `--full-analysis` Σ classifier on simulated experiments; decorrelation-window and plotting fixes |
 
 ## Real data (`block_analysis_allsplits.py`, BWM)
