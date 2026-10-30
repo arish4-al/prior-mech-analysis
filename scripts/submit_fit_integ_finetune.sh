@@ -15,6 +15,12 @@
 #   STARTS="opt1_rawslope:45 opt1_rawslope:7 opt2_shuffleslope:12 opt2_shuffleslope:303" \
 #     bash scripts/submit_fit_integ_finetune.sh
 #
+# SRC_TAG picks the Stage B source family (default newS34). 2026-10-30, same
+# scheme from the Stage A newSbin s56 fits (journals/integ_opt2_prior_sensory_fit.md):
+#   SRC_TAG=newSbin56 STARTS="opt1_rawslope:12 opt2_shuffleslope:45 opt2_shuffleslope:303" \
+#     bash scripts/submit_fit_integ_finetune.sh
+#   → OUT_TAG stageB_hold_newSbin56_integ_<opt>_ft<src>_gm0
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -24,6 +30,7 @@ cd "$REPO_DIR"
 
 export PARTITION="${PARTITION:-pi_fiete}"
 ONE_MODELS="${ONE_MODELS:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx/models}"
+SRC_TAG="${SRC_TAG:-newS34}"
 STARTS="${STARTS:-opt1_rawslope:45 opt1_rawslope:7 opt2_shuffleslope:12 opt2_shuffleslope:303}"
 
 export SEEDS="${SEEDS:-89 7 12 45}"
@@ -47,13 +54,13 @@ for start in $STARTS; do
   src="${start##*:}"
   [[ -f "fit_targets_integ/$opt/mean_data_results.npy" ]] || {
     echo "ERROR: fit_targets_integ/$opt targets missing" >&2; exit 1; }
-  run="$ONE_MODELS/weights_run_fj_stageB_hold_newS34_full_mpre3_meancell_integ_${opt}_full_masknone_s${src}"
+  run="$ONE_MODELS/weights_run_fj_stageB_hold_${SRC_TAG}_full_mpre3_meancell_integ_${opt}_full_masknone_s${src}"
   RESUME_JSON="$(ls -1t "$run"/weights_final_*.json 2>/dev/null | head -1 || true)"
   [[ -n "$RESUME_JSON" ]] || { echo "ERROR: no weights_final in $run" >&2; exit 1; }
   export RESUME_JSON
   export FIT_TARGETS_DIR="fit_targets_integ/$opt"
-  export OUT_TAG="stageB_hold_newS34_integ_${opt}_ft${src}_gm0"
-  echo "=== fine-tune $opt s$src  OUT_TAG=$OUT_TAG  CMA seeds=$SEEDS ==="
+  export OUT_TAG="stageB_hold_${SRC_TAG}_integ_${opt}_ft${src}_gm0"
+  echo "=== fine-tune $SRC_TAG $opt s$src  OUT_TAG=$OUT_TAG  CMA seeds=$SEEDS ==="
   echo "  free W_mm W_mi g_i d_i g_s d_s; g_m=d_m=0; rest held at source"
   echo "  window unset (~80 ms), stim×choice, S prior on, m_pre=$M_PRE_WEIGHT"
   echo "  RESUME_JSON=$RESUME_JSON  FIT_TARGETS_DIR=$FIT_TARGETS_DIR  PARTITION=$PARTITION"

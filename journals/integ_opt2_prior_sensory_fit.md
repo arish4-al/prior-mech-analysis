@@ -591,3 +591,203 @@ source. The command was printed for ORCD, not submitted:
 `STEP=fits RETINAL_TAG=retinal_newSbin RETINAL_JSON=<models>/retinal_run_fr_retinal_newSbin_retinal_masknone_s56/retinal_final_loss0p3673_20261029-163804.json bash scripts/submit_fit_targets_integ.sh`
 → hybrid `stage_b_hybrid_WEIGHTS_REL_retinal_newSbin_s56.json`, OUT_TAG
 `stageB_hold_newSbin56_full_mpre3_meancell_integ_{opt1_rawslope,opt2_shuffleslope}`.
+
+## 2026-10-30 — Stage B on Stage A newSbin s56: results
+
+**Runs.** `stageB_hold_newSbin56_full_mpre3_meancell_integ_{opt1_rawslope,opt2_shuffleslope}`,
+with 8 seeds per arm, all `FIT_DONE`. The setup is the `full` mpre3 arm: no
+freeze, window unset (about 80 ms), stim×choice, S prior on, warm start
+WEIGHTS_REL ∪ newSbin s56. These are the first Stage B fits under the new
+`L_S` (0–100 ms, c>0).
+
+**Eval** (`scripts/_tmp_integ_newSbin56_eval_plots.py`). It uses the
+per-term breakdown of the gm0 report at move-period weight 1, with shared
+stimuli (bps 20, built from regular s101). It is averaged over 4 draws
+(12345, 1, 2, 3) and reports mean ± sd. For reference, the 8 newS34 full
+seeds and the two gm0 fine-tunes per arm were rescored the same way.
+Outputs:
+- `stageB_hold_newSbin56_integ_<arm>_eval.json`
+- `stageB_hold_newSbin56_integ_<arm>_plot_summary.json`
+- Overlays and act-prior behaviour in every newSbin56 run dir (draw 12345)
+
+| arm | fit | overall | traj (C / M) | prior (S) | `L_S` | S R² | psych / RT R² | g_i / d_i | g_s / d_s | g_m |
+|---|---|---|---|---|---|---|---|---|---|---|
+| opt1 | **newSbin56 s45** | **1.239 ± 0.105** | 0.378 (0.099 / 0.169) | 0.413 (0.217) | 0.448 | 0.60 | 0.88 / −0.35 | 200 / 10.8 | ≈0 / 27.4 | 0.03 |
+| opt1 | newSbin56 s12 | 1.438 ± 0.060 | 0.525 (0.146 / 0.244) | 0.493 (**0.122**) | 0.421 | 0.63 | 0.73 / 0.72 | 200 / 3.7 | ≈0 / 17.0 | ≈0 |
+| opt1 | gm0 ft s45→s45 | 1.428 ± 0.157 | 0.513 | 0.483 (0.148) | 0.432 | 0.63 | (report) | 77 / 9.4 | ≈0 / 48.6 | 0 |
+| opt1 | best newS34 full (s12) | 1.461 ± 0.158 | 0.661 | 0.377 (0.177) | 0.423 | 0.65 | — | ≈0 / 0.2 | 15 / 41.1 | ≈0 |
+| opt2 | newSbin56 s45 | 1.425 ± 0.058 | 0.381 (0.130 / 0.153) | 0.545 (0.263) | 0.500 | 0.53 | 0.77 / −1.03 | 114 / 13.1 | ≈0 / 30.0 | ≈0 |
+| opt2 | newSbin56 s303 | 1.547 ± 0.104 | 0.405 | 0.652 (0.401) | 0.490 | 0.55 | 0.14 / −0.55 | 191 / 8.8 | ≈0 / 3.6 | ≈0 |
+| opt2 | **gm0 ft s12→s7** | **1.233 ± 0.069** | 0.426 (0.160 / 0.157) | 0.361 (0.197) | 0.446 | 0.62 | (report) | 200 / 3.4 | 3.2 / 11.3 | 0 |
+| opt2 | best newS34 full (s12) | 1.452 ± 0.027 | 0.366 | 0.596 (0.338) | 0.491 | 0.56 | — | 171 / 7.1 | 0.34 / 6.2 | 3.3 |
+
+Medians over the 8 seeds:
+
+| arm | Stage A source | overall | S prior | `L_S` |
+|---|---|---|---|---|
+| opt1 | newSbin56 | 1.74 | 0.46 | 0.52 |
+| opt1 | newS34 | 1.66 | 0.49 | 0.53 |
+| opt2 | newSbin56 | 1.80 | 0.47 | 0.51 |
+| opt2 | newS34 | 1.79 | 0.53 | 0.55 |
+
+The seed spread is large, and the medians barely move.
+
+**Findings.**
+- **opt1 s45 is the best opt1 fit so far:** 1.24 against 1.43 for the
+  best fine-tune and 1.46 for the best old full seed. It wins on both
+  trajectory and prior, with C/M traj 0.10/0.17 and C choice prior 0.085.
+  - It uses the d_s offset basin (d_s ≈ 27, g_s ≈ 0) and leaves g_m at
+    about 0 on its own.
+  - It overshoots the M prior in the move-aligned window: the model peaks
+    at about 0.12 against 0.08–0.11 in the data.
+  - Its RT R² is −0.35. Behaviour is held out, so this is a check only.
+- **opt1 s12** has the lowest S prior of any fit (0.12, d_s 17). It also
+  has the best behaviour of the new set (psych 0.73, RT 0.72). Its trajectory
+  is worse (0.53).
+- **opt2: no new best.** newSbin56 s45 (1.43) ties the best old full seed
+  (1.45) and beats it on S prior (0.26 against 0.34), but the gm0 fine-tune
+  s12→s7 (1.23) is still the best opt2 fit.
+  - opt2 s45 also found the d_s basin (d_s 30) but pays in C choice prior
+    (0.187) and RT (−1.03).
+  - opt2 s303 has psychometric R² 0.14.
+- **The d_s basin now shows up in both arms** (opt1 s45/s12, opt2 s45).
+  In the newS34 full runs, only opt1 found it (s7/s12/s45, d_s 41–45).
+- **Stage B moves the retinal parameters away from s56.** There is no
+  freeze. Several seeds end at the bounds: α_w 2.6, τ_a 400, W_as 50
+  (opt1 s45/s89/s101, opt2 s45/s34). Others stay at s56 (opt1 s12, opt2
+  s101). Under the eval, S-trajectory R² falls from 0.68 (Stage A) to
+  0.19–0.63, and the worst seeds (opt1 s101, opt2 s34/s89, R² 0.2–0.3)
+  are the ones that drifted to the bounds.
+- **The eval protocol understates the S fit.** `make_shared_stimuli` builds
+  the stimuli with the reference model's α_w/β_w (regular s101:
+  2.21 / −0.01), not each fit's own. Fitting rebuilds stimuli under the
+  fit's own α_w/β_w (`stage2_restim`). Rescored on its own stimuli (4
+  draws), S R² is:
+
+  | fit | reference stimuli | own stimuli |
+  |---|---|---|
+  | opt1 s45 | 0.60 | 0.69 |
+  | opt1 s12 | 0.63 | 0.70 |
+  | opt2 s45 | 0.53 | 0.65 |
+  | opt2 s101 | 0.52 | 0.67 |
+  | opt2 s303 | 0.55 | 0.68 |
+
+  - With its own stimuli, a Stage B fit keeps about the Stage A S fit.
+  - Every report and catalog score so far uses the reference stimuli,
+    including the prior and trajectory terms (stimulus strength feeds
+    them all). Ranks may change under own-stimulus scoring. Not changed
+    here; this is the open question below.
+
+**Report.** `stageB_hold_newS34_integ_ft_gm0_report/report.pdf` now has a
+newSbin56 section (10 pages). It has a table of the top 2 per arm (opt1
+s45/s12, opt2 s45/s303) with the old best for comparison, plus a page of
+S / I/M / prior / psychometric / RT for each. Backups:
+`make_ft_report.py.bak_pre_newSbin56`, `report_pre_newSbin56.pdf`.
+
+**Open.**
+- Score fits on their own α_w/β_w stimuli (one draw set per fit; same
+  seeds), and rerank the report and catalog fits.
+- Decide whether Stage B should hold the retinal parameters, so that the
+  Stage A S fit survives.
+- opt1 s45 is a candidate source for a gm0-style fine-tune aimed at the
+  M choice overshoot.
+
+## 2026-10-30b — Re-scored on each fit's own α_w/β_w stimuli
+
+**Change (user ask).** `scripts/_tmp_integ_newSbin56_eval_plots.py`
+`OWN_STIM=1` builds each fit's stimuli under its own α_w/β_w (same 4 draw
+seeds, bps 20), as fitting does (`stage2_restim`). Everything else is as
+in 10-30.
+- It re-scored the 8 newSbin56 seeds, the 8 newS34 full seeds and the
+  two report gm0 fine-tunes per arm, into
+  `stageB_hold_newSbin56_integ_<arm>_eval_ownstim.json`.
+- It redrew the S / I/M / prior overlays (draw 12345, own stimuli) in all
+  36 run dirs. Index: `*_plot_summary_ownstim.json`.
+- Behaviour plots were not redrawn. `plot_one_json` already simulates
+  under each fit's own parameters.
+
+Overall score (mean over 4 draws; the reference-stimuli score is in
+brackets):
+
+| arm | fit | overall | S prior | `L_S` | S R² |
+|---|---|---|---|---|---|
+| opt1 | **newSbin56 s45** | **1.165 ± 0.073** (1.239) | 0.228 | 0.382 | 0.69 |
+| opt1 | newSbin56 s12 | 1.256 ± 0.155 (1.438) | 0.177 | 0.394 | 0.70 |
+| opt1 | best newS34 full (s12) | 1.392 ± 0.145 (1.461) | 0.183 | 0.350 | 0.74 |
+| opt1 | gm0 ft s45→s45 | 1.412 ± 0.146 (1.428) | 0.157 | 0.377 | 0.73 |
+| opt1 | gm0 ft s7→s7 | 1.513 ± 0.172 (1.492) | 0.204 | 0.367 | 0.73 |
+| opt2 | **gm0 ft s12→s7** | **1.190 ± 0.012** (1.233) | 0.208 | 0.365 | 0.73 |
+| opt2 | best newS34 full (s12) | 1.285 ± 0.111 (1.452) | 0.333 | 0.390 | 0.70 |
+| opt2 | newSbin56 s45 | 1.329 ± 0.056 (1.425) | 0.259 | 0.420 | 0.65 |
+| opt2 | gm0 ft s303→s7 | 1.347 ± 0.096 (1.425) | 0.277 | 0.392 | 0.70 |
+| opt2 | newSbin56 s303 | 1.524 ± 0.150 (1.547) | 0.441 | 0.413 | 0.68 |
+
+**Findings.**
+- **What changes.** `L_S` drops by 0.03–0.15 for every fit, and S R²
+  rises by 0.05–0.2. The prior and trajectory terms move by up to about
+  ±0.1 (S prior by ≤0.06), and not always in the same direction.
+- **opt1.** newSbin56 s45 is still the best fit, and s12 moves up to
+  second (1.26, ahead of every old fit and fine-tune).
+- **opt2.** The gm0 fine-tune s12→s7 is still the best fit. The old full
+  s12 (1.29) now beats newSbin56 s45 (1.33), which reverses the
+  reference-stimuli order.
+- **The Stage A refit does not carry into Stage B's S fit.**
+  - Median S R² over the 8 seeds:
+
+    | arm | newSbin56 | newS34 |
+    |---|---|---|
+    | opt1 | 0.66 | 0.67 |
+    | opt2 | 0.66 | 0.66 |
+
+  - The best newS34 Stage B fits reach 0.73–0.74, above Stage A s56
+    alone (0.68).
+  - The newSbin56 seeds that drifted to the retinal bounds stay worst
+    under their own stimuli too (S R² 0.37–0.51: opt1 s101/s89, opt2
+    s34/s89). Their drop is real, not a scoring artefact.
+- **The newSbin56 gain is in the best seeds' trajectory and prior fit, not
+  in S.** opt1 s45 has traj 0.366 and prior 0.416, against 0.665 / 0.377
+  for the best old fit (opt1 s12).
+
+**Report** (`stageB_hold_newS34_integ_ft_gm0_report/report.pdf`). It is
+rebuilt on the own-stimuli scores, with one scoring paragraph and two
+tables: the gm0 fine-tunes, and the top 2 newSbin56 seeds per arm
+(re-ranked; opt2 is now s45 and s303). Each page is drawn on draw 12345
+under the fit's own stimuli. The S caption gives both that draw's R² (the
+number printed in the panel) and the 4-draw mean. The "`L_S` as fitted
+(legacy)" column is gone. Backup of the 10-30 version:
+`report_pre_ownstim.pdf` and `.tex`. The 10-30 generator itself was not
+backed up; `make_ft_report.py.bak_pre_newSbin56` is the 10-29 one.
+
+## 2026-10-30c — gm0 fine-tunes from the newSbin56 fits (setup)
+
+**Ask.** Fine-tune opt1 newSbin56 s12 and opt2 newSbin56 s45 and s303.
+The user confirmed both opt2 seeds and the gm0 scheme.
+
+**Code.** `scripts/submit_fit_integ_finetune.sh` gains `SRC_TAG` (default
+`newS34`, so the 10-29 command is unchanged). It picks the source run
+family `stageB_hold_<SRC_TAG>_full_mpre3_meancell_integ_<opt>_full_masknone_s<src>`
+and names the output `stageB_hold_<SRC_TAG>_integ_<opt>_ft<src>_gm0`.
+
+**Setup (same as the report gm0 fine-tunes).**
+- **Aim:** lower the prior curves (S, C, M) from the newSbin56 sources
+  with g_m = d_m = 0.
+- **Pipeline:** `cma_only` warm restart, CMA seeds 89 7 12 45, 4 jobs
+  per source, 12 in all.
+- **Free:** W_mm W_mi g_i d_i g_s d_s. g_m and d_m are zeroed and frozen
+  (`--zero-g-m-d-m`); g_i keeps its 0.1 floor.
+- **Held at the source:** W_ii W_pp W_is W_pi θ_c θ_d and the retinal
+  parameters 14–20. That includes the drifted retinal values of opt2 s45
+  (α_w 2.6, τ_a 400, W_as 50).
+- **Loss:** window unset (about 80 ms), stim×choice, unsplit-80 S prior
+  on, m_pre_weight 3. It sees the I/M traj, I/M prior, S prior 0–80 ms
+  and `L_S` (0–100 ms, c>0). No behaviour.
+- **Rank** at m_pre_weight 1 on own α_w/β_w stimuli over 4 draws (the
+  10-30b eval).
+
+**Dry run** (local, stub `sbatch`): 12 jobs, the right `RESUME_JSON` per
+source (opt1 s12 `loss1p684`, opt2 s45 `loss1p452`, s303 `loss1p33`), and
+the OUT_TAGs above. Not submitted. Command for ORCD, once the script is
+on main:
+
+    SRC_TAG=newSbin56 STARTS="opt1_rawslope:12 opt2_shuffleslope:45 opt2_shuffleslope:303" \
+      bash scripts/submit_fit_integ_finetune.sh
