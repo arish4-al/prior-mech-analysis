@@ -65,6 +65,14 @@
 # Hybrid / Stage B names follow RETINAL_TAG (retinal_<X> → stageB_hold_<X><seed>),
 # so retinal_newS keeps the old names and a new tag cannot overwrite them.
 #
+# Regular arm (2026-10-30): STAGEB_ARMS=regular (default full; "full regular"
+# runs both). Same as full except mask 12|13 (g_s = d_s ≈ 0) and no S prior
+# term (include_stim off, as in production regular):
+#   STEP=fits STAGEB_ARMS=regular RETINAL_TAG=retinal_newSbin RETINAL_JSON=… \
+#     bash scripts/submit_fit_targets_integ.sh
+#   → OUT_TAG stageB_hold_newSbin56_mpre3_meancell_integ_<opt>
+#     (dirs …_regular_mask12-13_s<seed>)
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -78,6 +86,7 @@ RETINAL_TAG="${RETINAL_TAG:-retinal_newS}"
 ONE_MODELS="${ONE_MODELS:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx/models}"
 export PARTITION="${PARTITION:-pi_fiete}"
 STAGEB_TAG="${RETINAL_TAG#retinal_}"
+STAGEB_ARMS="${STAGEB_ARMS:-full}"
 export REPO_DIR OPTS RETINAL_TAG ONE_MODELS
 
 _need_targets() {
@@ -165,10 +174,25 @@ case "$STEP" in
     rseed="${rseed##*_s}"
     export RETINAL_JSON
     export HYBRID_JSON="$ONE_MODELS/stage_b_hybrid_WEIGHTS_REL_${RETINAL_TAG}_s${rseed}.json"
-    for o in $OPTS; do
-      FIT_TARGETS_DIR="fit_targets_integ/$o" ARMS=full M_PRE_WEIGHT=3 \
-        OUT_TAG_FULL="stageB_hold_${STAGEB_TAG}${rseed}_full_mpre3_meancell_integ_$o" \
-        bash scripts/submit_fit_stage_b_mpre.sh
+    for arm in $STAGEB_ARMS; do
+      for o in $OPTS; do
+        case "$arm" in
+          full)
+            FIT_TARGETS_DIR="fit_targets_integ/$o" ARMS=full M_PRE_WEIGHT=3 \
+              OUT_TAG_FULL="stageB_hold_${STAGEB_TAG}${rseed}_full_mpre3_meancell_integ_$o" \
+              bash scripts/submit_fit_stage_b_mpre.sh
+            ;;
+          regular)
+            # g_s/d_s frozen at the hybrid's ≈0; no S prior term (it cannot move).
+            FIT_TARGETS_DIR="fit_targets_integ/$o" M_PRE_WEIGHT=3 \
+              VARIANTS="regular:12|13" \
+              OUT_TAG="stageB_hold_${STAGEB_TAG}${rseed}_mpre3_meancell_integ_$o" \
+              bash scripts/submit_fit_stage_b_mpre.sh
+            ;;
+          *)
+            echo "ERROR: STAGEB_ARMS arm '$arm' (use full or regular)" >&2; exit 1 ;;
+        esac
+      done
     done
     ;;
   *)
