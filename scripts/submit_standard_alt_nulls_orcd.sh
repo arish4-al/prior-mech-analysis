@@ -19,6 +19,8 @@
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
 #   ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
+#   DEBIAS_EUC=1       noise-corrected d_euc; outputs and CLEAR_STREAM use
+#                      {suffix}_debias, so uncorrected files are kept
 #   N_SHARDS=  MEM_SHARD=  TIME_SHARD=  override that arm's defaults
 #     (ARM=all applies one override to every arm)
 #
@@ -36,6 +38,7 @@ NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 REBUILD_DONORS="${REBUILD_DONORS:-0}"
+DEBIAS_EUC="${DEBIAS_EUC:-0}"
 N_SHARDS_USER="${N_SHARDS:-}"
 MEM_SHARD_USER="${MEM_SHARD:-}"
 TIME_SHARD_USER="${TIME_SHARD:-}"
@@ -72,7 +75,7 @@ case "$ARM" in
 esac
 
 echo "Aim: standard act labels (full-session kernel, mask, drop true 0.5, min5)."
-echo "ARM=$ARM  nrand=$NRAND  CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS"
+echo "ARM=$ARM  nrand=$NRAND  CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS  DEBIAS_EUC=$DEBIAS_EUC"
 echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}{suffix}.npy"
 
@@ -110,6 +113,7 @@ submit_arm() {
     shuffle=1
     suffix=_harris_unique
   fi
+  if [[ "$DEBIAS_EUC" == "1" ]]; then suffix="${suffix}_debias"; fi
 
   list_splits "$preset"
   local RES_ROOT="$ONE_CACHE_DIR/manifold/res_standard"
@@ -120,16 +124,17 @@ submit_arm() {
     for sp in "${SPLITS[@]}"; do
       local base="${sp}${suffix}"
       rm -f "$ACC/${base}.npy" "$ACC/${base}.shard"*.npy 2>/dev/null || true
+      rm -f "$ACC/${base}.skipped.jsonl" "$ACC/${base}.shard"*.skipped.jsonl 2>/dev/null || true
       rm -f "$RES_ROOT/${base}.npy" "$RES_ROOT/${base}_regde.npy" \
         "$RES_ROOT/${base}_all.npy" "$RES_ROOT/${base}_all_regde.npy" \
-        2>/dev/null || true
+        "$RES_ROOT/${base}_skipped.json" 2>/dev/null || true
     done
   fi
 
   echo "PRESET=$preset  scheme=$scheme  suffix=$suffix  shards=$shards  mem=$mem  time=$tshard"
   printf '  %s\n' "${SPLITS[@]}"
 
-  local EXPORT="STANDARD_ACT_PRIOR=1,EXCLUDE_STICKY_TRIALS=0,SESSION_SHUFFLE_NULL=${shuffle},ACTKERNEL_CHOICE_NULL=${ak},ACTKERNEL_NULL_MODE=${mode},ACTKERNEL_LATE_STICKY=${sticky},ACTKERNEL_PSEUDO_LEN_FACTOR="
+  local EXPORT="STANDARD_ACT_PRIOR=1,EXCLUDE_STICKY_TRIALS=0,SESSION_SHUFFLE_NULL=${shuffle},ACTKERNEL_CHOICE_NULL=${ak},ACTKERNEL_NULL_MODE=${mode},ACTKERNEL_LATE_STICKY=${sticky},ACTKERNEL_PSEUDO_LEN_FACTOR=,DEBIAS_EUC=${DEBIAS_EUC}"
   local dep_flag=()
   if [[ -n "${DONOR_JID:-}" && "$scheme" == "harris" ]]; then
     dep_flag=(--dependency="afterok:${DONOR_JID}")

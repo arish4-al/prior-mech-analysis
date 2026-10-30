@@ -482,6 +482,11 @@ def main():
                         'the EMA), then the bad-trial mask, then drop true '
                         'pLeft==0.5. min_trials_per_side stays 5. Writes '
                         'manifold/res_standard')
+    p.add_argument('--debias-euc', action='store_true', default=False,
+                   help='Noise-corrected d_euc: subtract v0/(n0-1)+v1/(n1-1) '
+                        'per neuron and bin, so the null does not depend on '
+                        'class counts (journals/alternative_null_fixes.md). '
+                        'Appends _debias to output names. Env DEBIAS_EUC=1')
     p.add_argument('--exclude-sticky-trials', action='store_true', default=False,
                    help='Drop last 20%% of session and tails of perseveration '
                         'runs (≥10 same choice poorly explained by non-0 '
@@ -508,6 +513,12 @@ def main():
         args.actkernel_late_sticky = True
     if os.environ.get('STANDARD_ACT_PRIOR') == '1':
         args.standard_act_prior = True
+    if os.environ.get('DEBIAS_EUC') == '1':
+        args.debias_euc = True
+    # Before configure_null_file_suffix, which re-appends _debias while on.
+    ba.set_debias_euc(args.debias_euc)
+    # Pooling compares stacks against ba.nrand (aligned sum vs product draws).
+    ba.nrand = int(args.nrand)
 
     if (
         args.preset == 'goal3_c0_choice'
@@ -618,7 +629,8 @@ def main():
           'actkernel_pseudo_len_factor:', args.actkernel_pseudo_len_factor,
           'actkernel_late_sticky:', args.actkernel_late_sticky,
           'exclude_sticky_trials:', args.exclude_sticky_trials,
-          'standard_act_prior:', args.standard_act_prior)
+          'standard_act_prior:', args.standard_act_prior,
+          'debias_euc:', args.debias_euc)
 
     if args.standard_act_prior and args.exclude_sticky_trials:
         raise SystemExit(

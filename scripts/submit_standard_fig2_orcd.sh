@@ -31,6 +31,11 @@ PRESET="${PRESET:-standard}"
 NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
+# DEBIAS_EUC=1: noise-corrected d_euc, files {split}_debias*; CLEAR_STREAM then
+# clears only those, so the uncorrected shuffle catalog is kept.
+DEBIAS_EUC="${DEBIAS_EUC:-0}"
+SFX=""
+if [[ "$DEBIAS_EUC" == "1" ]]; then SFX="_debias"; fi
 MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"
@@ -72,18 +77,20 @@ fi
 RES_ROOT="$ONE_CACHE_DIR/manifold/res_standard"
 if [[ "$CLEAR_STREAM" == "1" ]]; then
   ACC="$RES_ROOT/_stream_acc"
-  echo "CLEAR_STREAM=1: removing prior plain {split} stream_acc + res under $RES_ROOT"
+  echo "CLEAR_STREAM=1: removing prior plain {split}${SFX} stream_acc + res under $RES_ROOT"
   for sp in "${SPLITS[@]}"; do
-    rm -f "$ACC/${sp}.npy" "$ACC/${sp}.shard"*.npy 2>/dev/null || true
-    rm -f "$RES_ROOT/${sp}.npy" "$RES_ROOT/${sp}_regde.npy" \
-      "$RES_ROOT/${sp}_all.npy" "$RES_ROOT/${sp}_all_regde.npy" \
-      2>/dev/null || true
+    base="${sp}${SFX}"
+    rm -f "$ACC/${base}.npy" "$ACC/${base}.shard"*.npy 2>/dev/null || true
+    rm -f "$ACC/${base}.skipped.jsonl" "$ACC/${base}.shard"*.skipped.jsonl 2>/dev/null || true
+    rm -f "$RES_ROOT/${base}.npy" "$RES_ROOT/${base}_regde.npy" \
+      "$RES_ROOT/${base}_all.npy" "$RES_ROOT/${base}_all_regde.npy" \
+      "$RES_ROOT/${base}_skipped.json" 2>/dev/null || true
   done
 fi
 
 n_shard_jobs=$(( ${#SPLITS[@]} * N_SHARDS ))
 echo "NULL_SCHEME=label_shuffle (plain); act_block_only=pseudo-blocks  PRESET=$PRESET  STANDARD_ACT_PRIOR=1"
-echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART"
+echo "CLEAR_STREAM=$CLEAR_STREAM  RESTART=$RESTART  DEBIAS_EUC=$DEBIAS_EUC"
 echo "N_SHARDS=$N_SHARDS  nrand=$NRAND  splits=${#SPLITS[@]}  shard_jobs=$n_shard_jobs"
 echo "If all shards run at once: about $(( ${#SPLITS[@]} * N_SHARDS )) x $MEM_SHARD"
 echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}  MEM_SHARD=$MEM_SHARD  TIME_SHARD=$TIME_SHARD"
@@ -96,7 +103,7 @@ job_tag() {
   echo "${s:0:40}"
 }
 
-EXPORT_COMMON="SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR=,STANDARD_ACT_PRIOR=1,EXCLUDE_STICKY_TRIALS=0"
+EXPORT_COMMON="SESSION_SHUFFLE_NULL=0,ACTKERNEL_CHOICE_NULL=0,ACTKERNEL_NULL_MODE=,ACTKERNEL_PSEUDO_LEN_FACTOR=,STANDARD_ACT_PRIOR=1,EXCLUDE_STICKY_TRIALS=0,DEBIAS_EUC=${DEBIAS_EUC}"
 
 for sp in "${SPLITS[@]}"; do
   TAG=$(job_tag "$sp")
