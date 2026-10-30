@@ -548,6 +548,31 @@ pth_stream_acc.mkdir(parents=True, exist_ok=True)
 # Logical split names used in analysis are unchanged.
 RES_FILE_SUFFIX = ''
 
+# Noise-corrected Euclidean distance (journals/alternative_null_fixes.md).
+# Per neuron and bin, (m0 − m1)² − s²·(1/n0 + 1/n1), with s² the variance of
+# all trials in the split (ddof=1). Its null expectation is 0 for any class
+# counts. Off by default; set_debias_euc() turns it on and tags files.
+DEBIAS_EUC = False
+DEBIAS_SUFFIX = '_debias'
+
+
+def set_debias_euc(on):
+    '''Turn the noise-corrected distance on/off and tag output filenames.'''
+    global DEBIAS_EUC, RES_FILE_SUFFIX
+    DEBIAS_EUC = bool(on)
+    if DEBIAS_EUC and not RES_FILE_SUFFIX.endswith(DEBIAS_SUFFIX):
+        RES_FILE_SUFFIX = f'{RES_FILE_SUFFIX}{DEBIAS_SUFFIX}'
+        print(f'noise-corrected d_euc: file suffix *{{split}}{RES_FILE_SUFFIX}*.npy')
+    return RES_FILE_SUFFIX
+
+
+def _euc_root(x):
+    '''Square root for pooled d_euc; signed when the corrected sum is negative.'''
+    x = np.asarray(x, dtype=float)
+    if DEBIAS_EUC:
+        return np.sign(x) * np.sqrt(np.abs(x))
+    return x ** 0.5
+
 
 # ActionKernel choice-null modes (journal 2026-07-23b options 1–2).
 ACTKERNEL_NULL_MODES = ('strat', 'fixedstim', 'unconstrained')
@@ -632,6 +657,8 @@ def configure_null_file_suffix(
         RES_FILE_SUFFIX = '_harris_unique'
     else:
         RES_FILE_SUFFIX = ''
+    if DEBIAS_EUC:
+        RES_FILE_SUFFIX = f'{RES_FILE_SUFFIX}{DEBIAS_SUFFIX}'
     if RES_FILE_SUFFIX:
         print(f'null-tagged file suffix: *{{split}}{RES_FILE_SUFFIX}*.npy '
               f'(stream_acc + res pooled)')
@@ -1288,6 +1315,43 @@ def _stream_acc_path(split, shard=None):
     return pth_stream_acc / f'{name}.shard{int(shard)}.npy'
 
 
+def _record_skip(split, eid_probe, reason, shard=None):
+    '''Append one skipped insertion (e.g. no Harris donor) to the split's skip log.'''
+    import json
+    name = output_split_name(split)
+    tag = '' if shard is None else f'.shard{int(shard)}'
+    path = pth_stream_acc / f'{name}{tag}.skipped.jsonl'
+    with open(path, 'a') as fh:
+        fh.write(json.dumps({'insertion': str(eid_probe), 'reason': str(reason)}) + '\n')
+
+
+def _write_skip_summary(split, pooled_keys=()):
+    '''Collapse the skip logs into ``{split}_skipped.json`` next to the results.
+
+    An insertion that was later pooled (a restart succeeded) is not listed.
+    '''
+    import json
+    name = output_split_name(split)
+    paths = [pth_stream_acc / f'{name}.skipped.jsonl']
+    paths += sorted(pth_stream_acc.glob(f'{name}.shard*.skipped.jsonl'))
+    skipped = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            if line.strip():
+                rec = json.loads(line)
+                skipped[rec['insertion']] = rec['reason']
+    pooled = set(map(str, pooled_keys))
+    skipped = {k: v for k, v in skipped.items() if k not in pooled}
+    out = Path(pth_res, f'{name}_skipped.json')
+    out.write_text(json.dumps(
+        {'n_pooled': len(pooled), 'n_skipped': len(skipped), 'skipped': skipped},
+        indent=1))
+    print(f'  skipped insertions: {len(skipped)} (pooled {len(pooled)}) -> {out.name}')
+    return skipped
+
+
 def _stream_acc_shard_paths(split):
     '''All existing shard checkpoint files for a split (sorted by shard index).'''
     name = output_split_name(split)
@@ -1527,6 +1591,17 @@ def _region_perm_metrics(m0, m1, v0, v1, b, half1, half2, ys, reg_mask):
     v1_r = v1[reg_mask]
     d_var = (((m0_r - m1_r) / ((v0_r + v1_r) ** 0.5)) ** 2)
     d_euc = (m0_r - m1_r) ** 2
+    if DEBIAS_EUC:
+        # m0/v0 are the ``ys`` class in every caller (shuffle bins[0] included).
+        # Pooled variance of all trials (within + between, ddof=1) is the same
+        # for every labeling, so a fixed-count shuffle only shifts by a constant.
+        # Per-class variances were too noisy with ~5-trial minority classes.
+        n0 = int(np.sum(ys))
+        n1 = int(len(ys) - n0)
+        n = max(n0 + n1, 2)
+        var_all = ((n0 * v0_r + n1 * v1_r) / n
+                   + (n0 * n1 / n ** 2) * (m0_r - m1_r) ** 2) * n / (n - 1)
+        d_euc = d_euc - var_all * (1.0 / max(n0, 1) + 1.0 / max(n1, 1))
 
     m1_h1 = b[half1 & ys][:, reg_mask, :].mean(axis=0)
     m0_h1 = b[half1 & ~ys][:, reg_mask, :].mean(axis=0)
@@ -1901,7 +1976,8 @@ def _donor_stratum_mask(rec, split):
         return None
     if len(mask) != len(ch):
         return None
-    return mask
+    # Donor labels are ``choice == 1``; keep ±1 so a no-choice is not a right.
+    return np.asarray(mask, dtype=bool) & np.isin(ch, (1.0, -1.0))
 
 
 def _harris_donor_candidates(n_elig, donor_bank, eid, split):
@@ -2945,6 +3021,9 @@ def _get_d_vars_session_shuffle(
     pleft_col = (pleft_col.to_numpy() if hasattr(pleft_col, 'to_numpy')
                  else np.asarray(pleft_col, dtype=float))
     elig = _stratum_mask_stim_pleft(stim_side, pleft_col, split)
+    # Choice L vs R uses ±1 only, as the shuffle path does. A no-choice (0)
+    # trial would otherwise land in the right-choice class (``ys = choice == 1``).
+    elig &= np.isin(trials['choice'].to_numpy(dtype=float), (1.0, -1.0))
     if _split_uses_act_prior(split):
         prior_tag = 'act-binary'
     elif _split_uses_bayes_prior(split):
@@ -4084,6 +4163,8 @@ class SplitPoolAccumulator:
             self.split, self.acs, self.acs1, self.ws,
             self.regdv0, self.regde0, self.min_reg, save=save,
         )
+        if save:
+            _write_skip_summary(self.split, self.pooled_keys)
         if save and cleanup_checkpoint:
             final = Path(pth_res, f'{output_split_name(self.split)}.npy')
             if final.exists():
@@ -4212,15 +4293,18 @@ def _euc_curve_summary(curves, split):
     }
 
 
-def _pool_insertion_curve_arrays(arrays, n_mc_null=None, rng_seed=0):
+def _pool_insertion_curve_arrays(arrays, n_mc_null=None, rng_seed=0, exact=True):
     '''Sum per-insertion (1+U_i, T) curve stacks into one (1+n_null, T) stack.
 
     Index-aligned ``nansum`` only when every insertion has the **full**
     ``nrand`` nulls (classic equal-length MC). If any insertion saturated its
-    unique-null pool (``U_i < nrand``) or lengths differ, each pooled null is
-    one draw from the product of per-insertion unique sets (uniform over each
-    insertion's unique curves). Default ``n_mc_null`` is ``min(U_i)`` so
-    p-value resolution stays honest to unique-set size. Observed = sum of obs.
+    unique-null pool (``U_i < nrand``) or lengths differ, the pooled null is
+    the product of per-insertion unique sets: each pooled null is the sum of
+    one null per insertion. ``n_mc_null`` (default ``nrand``) draws are taken
+    from that product. With ``exact`` and ∏U_i ≤ ``n_mc_null``, every
+    combination is listed instead, so the p-value is exact. The resolution
+    is set by the product, not by the smallest U_i (alternative_null_fixes
+    2026-10-30, problem 3). Observed = sum of obs.
     '''
     arrays = [np.asarray(a, dtype=float) for a in arrays if a is not None]
     if not arrays:
@@ -4236,8 +4320,21 @@ def _pool_insertion_curve_arrays(arrays, n_mc_null=None, rng_seed=0):
         stacked = np.nansum(arrays, axis=0)
         stacked[0] = obs
         return stacked
-    n_mc = int(n_mc_null if n_mc_null is not None else min(null_counts))
+    n_mc = int(n_mc_null if n_mc_null is not None else nrand)
     n_mc = max(n_mc, 1)
+    n_prod = 1
+    for c in null_counts:
+        n_prod *= c
+        if n_prod > n_mc:
+            break
+    if exact and n_prod <= n_mc:
+        import itertools
+        combos = list(itertools.product(*[range(1, c + 1) for c in null_counts]))
+        out = np.zeros((1 + len(combos), T), dtype=float)
+        out[0] = obs
+        for k, idx in enumerate(combos):
+            out[k + 1] = np.sum([a[i] for a, i in zip(arrays, idx)], axis=0)
+        return out
     out = np.zeros((1 + n_mc, T), dtype=float)
     out[0] = obs
     rng = np.random.default_rng(rng_seed)
@@ -4268,8 +4365,8 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
         for reg in regs
     }
     regde = {
-        reg: (_pool_insertion_curve_arrays(
-            regde0[reg], rng_seed=split_seed + 31) / regs[reg]) ** 0.5
+        reg: _euc_root(_pool_insertion_curve_arrays(
+            regde0[reg], rng_seed=split_seed + 31) / regs[reg])
         for reg in regs
     }
 
@@ -4278,6 +4375,11 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
         res = _euc_curve_summary(regde[reg], split)
         dat = ws_cat[:, acs_cat == reg, :]
         res['nclus'] = regs[reg]
+        # Unique nulls per insertion: the smallest one bounds how far a
+        # region dominated by that insertion can go (Harris, problem 3).
+        u = [max(np.asarray(a).shape[0] - 1, 0) for a in regde0[reg]]
+        res['n_insertions'] = len(u)
+        res['min_insertion_nulls'] = int(min(u)) if u else 0
         res['ws'] = dat[:2]
         r[reg] = res
 
@@ -4293,12 +4395,12 @@ def _finalize_pooled_split(split, acs, acs1, ws, regdv0, regde0, min_reg=min_reg
         per_reg_raw = []
         for reg, arrs in regde0.items():
             per_reg_raw.append(_pool_insertion_curve_arrays(
-                arrs, rng_seed=split_seed + 47))
+                arrs, rng_seed=split_seed + 47, exact=False))
         # Align null counts if product-MC lengths differ across regions
         # (should match when using the same n_mc); truncate to min.
         n_rows = min(a.shape[0] for a in per_reg_raw)
         all_raw = np.sum([a[:n_rows] for a in per_reg_raw], axis=0)
-        all_regde = np.sqrt(all_raw / all_nclus)
+        all_regde = _euc_root(all_raw / all_nclus)
         all_result = _euc_curve_summary(all_regde, split)
         all_result['nclus'] = all_nclus
         all_result['n_regions'] = len(regde0)
@@ -4708,6 +4810,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
             except InsufficientTrials as exc:
                 n_skip += 1
                 print('   split skip', split, pid, exc)
+                if stream_pool:
+                    _record_skip(split, eid_probe, exc, shard=shard_idx)
             except Exception as exc:
                 print('   split fail', split, pid, exc)
         del cache
