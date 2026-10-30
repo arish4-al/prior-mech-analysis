@@ -524,3 +524,70 @@ no overfull boxes).
   The psychometric is unchanged.
 - The RT numbers in the 10-29 catalog tables (stage_b_fit_variants) were
   at 2 ms per step.
+
+## 2026-10-29i — Stage A `retinal_newSbin` results (new S loss)
+
+**Runs.** Five Stage A seeds (`retinal_run_fr_retinal_newSbin_retinal_masknone_s{34,56,78,89,202}`),
+all `FIT_DONE`, run with the new loss: 0–100 ms, c>0. The selector rank is
+`retinal_s_fit_plots_retinal_newSbin_bps20_seed12345/summary.json`. It ranks
+on a single stimulus draw and puts s34 first (shared `L_S` 0.633).
+
+**Multi-seed re-eval** (`scripts/_tmp_stageA_newSbin_eval.py`). Each
+final was run on 5 stimulus seeds (bps 20) and scored with the current
+loss. The old `retinal_newS` finals were run on the same stimuli. The
+output is in `multiseed/` inside the rank folder (`multiseed.json`, and
+an S overlay at seed 12345 for each final).
+
+| run | recorded | `L_S` | SSE | SNR | R² |
+|---|---:|---|---|---|---|
+| newSbin s56 | 0.367 | 0.99 ± 0.76 | 0.331 ± 0.016 | 0.66 ± 0.77 | **0.680 ± 0.008** |
+| newSbin s202 | 0.331 | 1.12 ± 0.84 | 0.343 ± 0.022 | 0.78 ± 0.85 | 0.670 ± 0.024 |
+| newSbin s78 | 0.446 | 1.03 ± 0.79 | 0.349 ± 0.024 | 0.69 ± 0.80 | 0.653 ± 0.034 |
+| newSbin s34 | 0.396 | 0.69 ± 0.39 | 0.358 ± 0.055 | 0.33 ± 0.39 | 0.644 ± 0.053 |
+| newSbin s89 | 1.236 | 0.83 ± 0.55 | 0.371 ± 0.040 | 0.46 ± 0.55 | 0.618 ± 0.057 |
+| newS s34 (current Stage B source) | 0.909 | 0.65 ± 0.33 | 0.348 ± 0.051 | 0.30 ± 0.31 | 0.657 ± 0.052 |
+| newS s202 | 0.368 | 0.91 ± 0.65 | 0.362 ± 0.016 | 0.55 ± 0.66 | 0.650 ± 0.027 |
+| newS s78 | 0.445 | 0.69 ± 0.39 | 0.353 ± 0.049 | 0.34 ± 0.38 | 0.637 ± 0.052 |
+| newS s56 | 0.905 | 0.68 ± 0.36 | 0.363 ± 0.065 | 0.32 ± 0.35 | 0.628 ± 0.069 |
+| newS s89 | 0.570 | 0.70 ± 0.29 | 0.495 ± 0.131 | 0.20 ± 0.21 | 0.549 ± 0.101 |
+
+**Findings.**
+- **The SNR term is noise, and it decides the ranking.**
+  - Its standard deviation across stimulus draws is about equal to its
+    mean (±0.2–0.85).
+  - Almost all of it comes from c=0.0625. The data SNR there is 12.5 dB.
+    The model's SNR is 5–11 dB, and it moves ±4–7 dB from draw to draw
+    because the model's 6.25% curve is near flat and noisy at bps 20.
+    The other contrasts add ≤0.04 each.
+  - SSE and R² are stable (SD ≤0.06 for most runs). The single-draw
+    selector order (s34 > s89 > s56 > s78 > s202) is close to the
+    reverse of the R² order.
+- **newSbin vs newS: a small, real gain at the top.**
+  - Best R² is 0.680 ± 0.008 (newSbin s56) against 0.657 ± 0.052 (newS
+    s34). newSbin seeds are also more consistent from draw to draw.
+  - c=1 bump: data peak 0.517, newSbin s56 0.53, newS s34 0.57.
+  - c=0.25: newSbin matches the about 0.22 bump. newS overshoots it
+    (about 0.27).
+  - Onset is still late in every fit: the model's c=1 rise comes about 7 ms
+    after the data's.
+  - R² at c=0.0625 is negative in every fit (−0.5 to −0.75). The model
+    stays flat there while the data shows a small early rise.
+- **The s89 local refine kept a worse loss.** Powell after CMA went
+  0.513 → 1.236 and was accepted, so its recorded loss is the refine's.
+  It looks like a re-draw of the stimulus seeds rather than a real
+  regression, but `run_fit_retinal` should keep the better of the two.
+  Not fixed.
+- **Shared figures:** the selector's own S plots
+  (`plot_retinal_fit_s.py`) do not show R².
+
+**Open.**
+- Pick the Stage B source. By R², newSbin s56; by single-draw `L_S`,
+  s34.
+- Decide whether the selector should rank on a multi-seed mean, or on
+  SSE / R² without the c=0.0625 SNR term.
+
+**Decision (same day).** The user chose **newSbin s56** as the Stage B
+source. The command was printed for ORCD, not submitted:
+`STEP=fits RETINAL_TAG=retinal_newSbin RETINAL_JSON=<models>/retinal_run_fr_retinal_newSbin_retinal_masknone_s56/retinal_final_loss0p3673_20261029-163804.json bash scripts/submit_fit_targets_integ.sh`
+→ hybrid `stage_b_hybrid_WEIGHTS_REL_retinal_newSbin_s56.json`, OUT_TAG
+`stageB_hold_newSbin56_full_mpre3_meancell_integ_{opt1_rawslope,opt2_shuffleslope}`.
