@@ -9,10 +9,15 @@ integrator rule (journals/paper_main_figures.md 2026-10-28):
   opt2_shuffleslope  same, and the whole-curve (72-bin) least-squares slope
                      of the choice curve beats its 2000 shuffles at BH-FDR
                      ≤ 0.01 over all regions, on that row (C = 57, M = 31)
+  oldrule            the original get_sc_table rules on the same standard
+                     data, without apply_move_rule (2026-10-30): integrator
+                     = choice significant & rising, movement = end peak &
+                     late slope > 0.05 (fixed cut) & choice significant
+                     (C = 85, M = 30; panel_i_old_rules.py)
 
 Groups follow Figure 4 i: I = during-stim integrator ∪ move-aligned
 integrator, M = during-stim movement ∪ move-aligned movement (get_sc_table
-labels after apply_move_rule). S = the 10 sensory regions. S prior = S ∩
+labels after apply_move_rule; oldrule: before it). S = the 10 sensory regions. S prior = S ∩
 prior FDR ≤ 0.01 in 0–80 ms (VISal, VISam, LP, PO, ZI).
 
 Prior curves come from the res-standard staging (act-kernel prior, 2000
@@ -32,10 +37,12 @@ scripts/build_fit_traj_targets_from_cache.py. Plot goes to
 ``<oa>/manifold/paper_figs/fit_targets_integ/``.
 
   conda activate iblenv   # outside the sandbox
-  python scripts/build_fit_targets_integ.py
+  python scripts/build_fit_targets_integ.py                 # opt1 + opt2
+  python scripts/build_fit_targets_integ.py --opts oldrule  # that set only
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -50,6 +57,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'scripts'), str(ROOT / 'scripts/paper_figs
                 str(ROOT / 'scripts/paper_figs/fig4')]
 import build_standard_figs as b  # noqa: E402
 import fig4_common as fc  # noqa: E402
+from panel_i_old_rules import old_rule_sets  # noqa: E402
 
 fc.OA_RES = b.STAGE
 fc.ALYX_RES = b.STAGE
@@ -63,7 +71,7 @@ PLOT_DIR = b.OUT2.parents[1] / 'fit_targets_integ'
 OLD = ROOT / 'fit_targets'
 UNSPLIT = ['act_block_duringstim_l', 'act_block_duringstim_r']
 T_MAX_MS, WINDOW_MS = 80.0, 150.0
-OPTS = ('opt1_rawslope', 'opt2_shuffleslope')
+OPTS = ('opt1_rawslope', 'opt2_shuffleslope', 'oldrule')
 
 
 def _slope(y):
@@ -116,33 +124,38 @@ def s_prior_80(regs):
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--opts', nargs='+', choices=OPTS, default=list(OPTS[:2]))
+    opts = ap.parse_args().opts
     d = p4.Data()
-    q_s = whole_curve_q(d.af, 'choice_duringstim_act', d.regs)
-    q_m = whole_curve_q(d.af, 'choice_duringchoice_act', d.regs)
-    ok = lambda q, r: q.get(r, 1.0) <= fc.ALPHA  # noqa: E731
-    move = sorted(d.move_s | d.move_c)
-    integ = {
-        'opt1_rawslope': sorted(d.integ_s | d.integ_c),
-        'opt2_shuffleslope': sorted({r for r in d.integ_s if ok(q_s, r)}
-                                    | {r for r in d.integ_c if ok(q_m, r)}),
-    }
+    move = {o: sorted(d.move_s | d.move_c) for o in OPTS[:2]}
+    integ = {'opt1_rawslope': sorted(d.integ_s | d.integ_c)}
+    if 'opt2_shuffleslope' in opts:
+        q_s = whole_curve_q(d.af, 'choice_duringstim_act', d.regs)
+        q_m = whole_curve_q(d.af, 'choice_duringchoice_act', d.regs)
+        ok = lambda q, r: q.get(r, 1.0) <= fc.ALPHA  # noqa: E731
+        integ['opt2_shuffleslope'] = sorted({r for r in d.integ_s if ok(q_s, r)}
+                                            | {r for r in d.integ_c if ok(q_m, r)})
+    if 'oldrule' in opts:
+        integ['oldrule'], move['oldrule'] = old_rule_sets(d.af)
     sensory = sorted(d.sensory)
     s_prior = list(d.overlap)
-    if set(integ['opt1_rawslope']) & set(move):
-        raise RuntimeError('I/M overlap')
-    print(f"I opt1 {len(integ['opt1_rawslope'])}  opt2 {len(integ['opt2_shuffleslope'])}  "
-          f"M {len(move)}  S {len(sensory)}  S prior {s_prior}")
+    for o in opts:
+        if set(integ[o]) & set(move[o]):
+            raise RuntimeError(f'{o}: I/M overlap')
+        print(f'{o}: I {len(integ[o])}  M {len(move[o])}')
+    print(f'S {len(sensory)}  S prior {s_prior}')
 
     mf.pth_res = b.STAGE
     curves = {}
-    for opt in OPTS:
+    for opt in opts:
         out = OUT / opt
         out.mkdir(parents=True, exist_ok=True)
         for tf in ('act_block_duringstim', 'act_block_duringchoice'):
             is_choice = 'duringchoice' in tf
-            save = {'regs_int': integ[opt], 'regs_move': move, 'regs_stim': sensory,
+            save = {'regs_int': integ[opt], 'regs_move': move[opt], 'regs_stim': sensory,
                     'r_int': mf.load_group(integ[opt], tf, alpha=1.0, correction='simple'),
-                    'r_move': mf.load_group(move, tf, alpha=1.0, correction='simple'),
+                    'r_move': mf.load_group(move[opt], tf, alpha=1.0, correction='simple'),
                     'r_stim': None if is_choice else mf.load_group(
                         sensory, tf, is_stim=True, correction='simple'),
                     'source': f'res_standard staging {b.STAGE}'}
@@ -153,10 +166,11 @@ def main():
         np.save(out / 'data_act_block_duringstim_s_unsplit80.npy', s, allow_pickle=True)
         curves[(opt, 's')] = s
         (out / 'regions.json').write_text(json.dumps({
-            'rule': opt, 'I': integ[opt], 'M': move, 'S': sensory, 'S_prior': s_prior,
+            'rule': opt, 'I': integ[opt], 'M': move[opt], 'S': sensory, 'S_prior': s_prior,
             'P': list(np.load(OLD / 'mean_data_results.npy', allow_pickle=True)
                       .flat[0]['P']['regs']),
-            'source_sc_table': str(fc.SC_TABLE),
+            'source_sc_table': str(b.OUT4 / 'panel_i_old_rules_sc_table.csv'
+                                   if opt == 'oldrule' else fc.SC_TABLE),
         }, indent=1))
         print(f'wrote {out}')
 
@@ -167,16 +181,17 @@ def main():
         t = np.linspace(0, 150, 72) if 'stim' in tf else np.linspace(-150, 0, 72)
         ax.plot(t, old['r_int'], color='gold', ls=':', label='I old fit_targets')
         ax.plot(t, old['r_move'], color='tomato', ls=':', label='M old fit_targets')
-        for opt, ls in zip(OPTS, ('-', '--')):
+        for opt, ls in zip(opts, ('-', '--', '-.')):
             c = curves[(opt, tf)]
             ax.plot(t, c['r_int'], color='gold', ls=ls, label=f'I {opt} ({len(c["regs_int"])})')
-        ax.plot(t, curves[(OPTS[0], tf)]['r_move'], color='tomato', label=f'M ({len(move)})')
+            ax.plot(t, c['r_move'], color='tomato', ls=ls,
+                    label=f'M {opt} ({len(c["regs_move"])})')
         ax.set_title(tf, fontsize=9)
         ax.set_xlabel('ms')
     axs[0].set_ylabel('prior distance − shuffle mean')
     axs[0].legend(fontsize=6, frameon=False)
     old_s = np.load(OLD / 'data_act_block_duringstim_s_unsplit80.npy', allow_pickle=True).flat[0]
-    new_s = curves[(OPTS[0], 's')]
+    new_s = curves[(opts[0], 's')]
     axs[2].plot(np.linspace(0, 80, len(old_s['r_stim'])), old_s['r_stim'], color='C0', ls=':',
                 label=f"old ({len(old_s['regs_stim'])})")
     axs[2].plot(np.linspace(0, 80, len(new_s['r_stim'])), new_s['r_stim'], color='C0',
@@ -186,9 +201,10 @@ def main():
     for ax in axs:
         ax.spines[['top', 'right']].set_visible(False)
     for ext in ('svg', 'png'):
-        fig.savefig(PLOT_DIR / f'prior_targets.{ext}', dpi=200, facecolor='white')
+        fig.savefig(PLOT_DIR / f'prior_targets_{"_".join(opts)}.{ext}', dpi=200,
+                    facecolor='white')
     plt.close(fig)
-    print(f'wrote {PLOT_DIR}/prior_targets.png')
+    print(f'wrote {PLOT_DIR}/prior_targets_{"_".join(opts)}.png')
 
 
 if __name__ == '__main__':

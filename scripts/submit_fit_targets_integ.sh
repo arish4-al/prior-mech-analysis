@@ -73,6 +73,16 @@
 #   → OUT_TAG stageB_hold_newSbin56_mpre3_meancell_integ_<opt>
 #     (dirs …_regular_mask12-13_s<seed>)
 #
+# Original-rule set (2026-10-30, journals/stage_b_fit_variants.md): OPTS=oldrule.
+# Same standard data, S (10), S prior (5) and P; I/M from get_sc_table without
+# apply_move_rule (I 85: choice significant & rising; M 30: end peak & late
+# slope > 0.05 & choice significant). Laptop: build_fit_targets_integ.py
+# --opts oldrule. Then the traj targets (one job), then Stage B from the
+# existing newSbin s56 Stage A (its avg_mean_R must match; checked below):
+#   STEP=targets OPTS=oldrule bash scripts/submit_fit_targets_integ.sh
+#   STEP=fits OPTS=oldrule STAGEB_ARMS="full regular" RETINAL_TAG=retinal_newSbin \
+#     RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -109,6 +119,8 @@ _submit_targets() {
     TARGET_DIRS="$TARGET_DIRS fit_targets_integ/$o"
   done
   export TARGET_DIRS="${TARGET_DIRS# }"
+  # A set other than the 10-28 pair gets its own plot/check dir (no overwrite).
+  [[ "$OPTS" == "opt1_rawslope opt2_shuffleslope" ]] || export PLOT_DIR="${PLOT_DIR:-${ONE_MODELS%/models}/manifold/fit_targets_integ/${OPTS// /_}}"
   # shellcheck disable=SC2086
   TJID=$(sbatch --parsable $SBATCH_EXTRA --partition="$PARTITION" \
     --export=ALL scripts/run_fit_traj_targets_slurm.sh)
@@ -172,6 +184,13 @@ case "$STEP" in
       echo "ERROR: RETINAL_JSON is not a $RETINAL_TAG Stage A run" >&2; exit 1; }
     rseed="$(basename "$(dirname "$RETINAL_JSON")")"
     rseed="${rseed##*_s}"
+    # Stage A was fit on S_REF's avg_mean_R; every arm must score the same S.
+    S_REF="${S_REF:-fit_targets_integ/opt1_rawslope}"
+    for o in $OPTS; do
+      cmp -s "$S_REF/avg_mean_R.npy" "fit_targets_integ/$o/avg_mean_R.npy" || {
+        echo "ERROR: fit_targets_integ/$o/avg_mean_R.npy differs from $S_REF (Stage A target)" >&2
+        exit 1; }
+    done
     export RETINAL_JSON
     export HYBRID_JSON="$ONE_MODELS/stage_b_hybrid_WEIGHTS_REL_${RETINAL_TAG}_s${rseed}.json"
     for arm in $STAGEB_ARMS; do
