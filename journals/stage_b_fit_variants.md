@@ -480,6 +480,98 @@ The traj through `L_S` columns are medians over seeds.
 - **Loss and window:** window unset (~80 ms), stim×choice, S prior on, `m_pre_weight` 3 as fitted, no extra terms. Rank later at `m_pre_weight` 1.
 - **Tags:** `stageB_hold_newS34_integ_<opt>_ft<src>_gm0`. A dry run with a fake `sbatch` gave 16 jobs with the right targets, freeze mask and resume JSONs.
 
+**Fine-tune scored (2026-10-29).** All 16 runs have `FIT_DONE`, taking 2–13 min each.
+- **Method.** Script: `scripts/_tmp_integ_ft_eval_plots.py`. Same shared stim as above (bps 20, seed 12345, regular s101), `m_pre_weight` 1, each arm on its own targets.
+- **Outputs.** Eval: `alyx/models/stageB_hold_newS34_integ_<opt>_ft_gm0_eval.json`. Overlays and act-prior behaviour go in each `weights_run_fj_stageB_hold_newS34_integ_<opt>_ft<src>_gm0_full_mask0-1-3-4-7-9-10-11-14-15-16-17-18-19-20_s<seed>/`, with prior_effects drawn on the 80 ms window.
+- **Constraints held.** g_m and d_m stayed at about 1e-13 in every run. The retinal parameters are frozen, but `L_S` still moves because g_s/d_s (P→S) are free.
+
+Fair, best restart per source vs the source (all restarts in the eval JSON):
+
+| source | source fair | restarts (89 / 7 / 12 / 45) | best |
+|---|---:|---|---|
+| opt1 s45 | 1.314 | 1.321 / 1.326 / 1.398 / **1.295** | s45, −0.02 |
+| opt1 s7 | 1.368 | 1.372 / **1.363** / 1.395 / 1.368 | s7, −0.005 |
+| opt2 s12 | 1.476 | 1.443 / **1.282** / 1.525 / 1.472 | s7, −0.19 |
+| opt2 s303 | 1.732 | 1.582 / **1.412** / 1.610 / 1.636 | s7, −0.32 |
+
+Per term for the best restart, plus opt2 s303 ft s45, which keeps the best behaviour:
+
+| | opt1 ft45 s45 | opt1 ft7 s7 | opt2 ft12 s7 | opt2 ft303 s7 | opt2 ft303 s45 |
+|---|---:|---:|---:|---:|---:|
+| fair | 1.295 | 1.363 | 1.282 | 1.412 | 1.636 |
+| `L_S` | 0.523 | 0.528 | 0.556 | 0.593 | 0.653 |
+| traj C / M / P | 0.128 / 0.251 / 0.004 | 0.100 / 0.221 / 0.021 | 0.188 / 0.141 / 0.014 | 0.126 / 0.183 / 0.008 | 0.112 / 0.218 / 0.049 |
+| prior S | 0.086 | 0.128 | 0.088 | 0.203 | 0.403 |
+| prior C stim / move | 0.024 / 0.165 | 0.014 / 0.144 | 0.041 / 0.062 | 0.027 / 0.043 | 0.021 / 0.040 |
+| prior M stim / move | 0.093 / 0.019 | 0.118 / 0.089 | 0.090 / 0.102 | 0.143 / 0.087 | 0.086 / 0.054 |
+| g_i / d_i | 77 / 9.4 | **0.10 (floor)** / 14.4 | 200 / 3.4 | 200 / 19.8 | 198 / 22.1 |
+| g_s / d_s | ≈0 / 48.6 | ≈0 / 43.5 | 3.2 / 11.3 | 0.098 / 17.1 | ≈0 / 3.9 |
+| psychometric R² (source) | 0.87 (0.85) | 0.93 (0.93) | 0.43 (0.48) | 0.85 (0.97) | 0.94 (0.97) |
+| RT R² (source) | 0.41 (0.27) | 0.52 (0.55) | 0.08 (0.30) | 0.23 (0.78) | 0.77 (0.78) |
+| RT split R² con / inc | 0.59 / −0.49 | 0.63 / 0.11 | 0.84 / −9.76 | 0.70 / −2.78 | 0.86 / 0.25 |
+
+- **opt1 barely moves.** The s7 restarts push g_i onto the 0.1 floor: that basin wants no C prior, and the floor only clips it. The move-aligned C prior is unchanged in opt1 (0.14–0.17).
+- **opt2 gains come from the S prior via P→S coupling.** ft12 s7 sets g_s 3.2 / d_s 11 and brings S from 0.21 to 0.09. ft303 s7 sets g_s 0.1 / d_s 17 and brings S from 0.46 to 0.20. Neither found the d_s ≈ 45 basin that opt1 uses.
+- **The fair gain in opt2 costs behaviour.** ft303 s7 drops RT R² from 0.78 to 0.23 and incongruent RT from 0.51 to −2.78. ft12 keeps s12's overweighted prior (psychometric R² about 0.4). The two ft303 restarts that keep g_s ≈ 0 (s12, s45) hold behaviour at the source level (psychometric 0.94, RT split 0.50–0.57), but they gain less fair (1.61–1.64).
+- **Shape.** In ft303 s7 (prior_effects), the move-aligned M overshoots from −60 ms on and C falls in the last 20 ms. The low move-aligned C SSE comes with that shape.
+
+**All 16 restarts.**
+- **Overall** is fair (traj + prior + `L_S`) at `m_pre_weight` 1. "Old" is the source fit on the same protocol.
+- **Traj columns:** S traj is `L_S` (S RMS); C and M are the I/M traj terms. The P penalties (≤ 0.05) are in overall only.
+- **Prior columns:** C and M are stim + move-aligned summed; S is the 0–80 ms sidecar.
+- **Behaviour:** act-prior R², combined only.
+- **Parameters:** ≈0 means below 1e-4.
+- **Highlighting:** bold restart = best overall within its source. † = best balanced fit (rising C prior, behaviour at source level), with its behaviour R² in bold.
+
+| arm | source → restart | overall old → new | S traj (`L_S`) | C traj | M traj | S prior | C prior | M prior | psychometric R² | RT R² | g_i / d_i | g_s / d_s | g_m / d_m |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|
+| opt1 | s45 → s89 | 1.314 → 1.321 | 0.527 | 0.127 | 0.257 | 0.093 | 0.183 | 0.124 | 0.86 | 0.34 | 44.6 / 11 | ≈0 / 44.9 | ≈0 / ≈0 |
+| opt1 | s45 → s7 | 1.314 → 1.326 | 0.503 | 0.102 | 0.223 | 0.164 | 0.170 | 0.109 | 0.80 | -0.32 | 200 / 5.89 | ≈0 / 50.9 | ≈0 / ≈0 |
+| opt1 | s45 → s12 | 1.314 → 1.398 | 0.528 | 0.128 | 0.260 | 0.097 | 0.197 | 0.106 | 0.83 | 0.15 | 42.5 / 11 | ≈0 / 45.3 | ≈0 / ≈0 |
+| opt1 | **s45 → s45** | 1.314 → **1.295** | 0.523 | 0.128 | 0.251 | 0.086 | 0.189 | 0.113 | 0.87 | 0.41 | 77.2 / 9.37 | ≈0 / 48.6 | ≈0 / ≈0 |
+| opt1 | s7 → s89 | 1.368 → 1.372 | 0.528 | 0.101 | 0.225 | 0.158 | 0.157 | 0.189 | 0.94 | 0.60 | 0.218 / 14.5 | ≈0 / 43 | ≈0 / ≈0 |
+| opt1 | **s7 → s7** | 1.368 → **1.363** | 0.528 | 0.100 | 0.221 | 0.128 | 0.158 | 0.206 | 0.93 | 0.52 | 0.102 / 14.4 | ≈0 / 43.5 | ≈0 / ≈0 |
+| opt1 | s7 → s12 | 1.368 → 1.395 | 0.530 | 0.102 | 0.229 | 0.190 | 0.162 | 0.178 | 0.94 | 0.61 | 0.1 / 14.3 | ≈0 / 43.9 | ≈0 / ≈0 |
+| opt1 | s7 → s45 | 1.368 → 1.368 | 0.526 | 0.101 | 0.223 | 0.146 | 0.150 | 0.211 | 0.93 | 0.54 | 0.1 / 14.3 | ≈0 / 43.8 | ≈0 / ≈0 |
+| opt2 | s12 → s89 | 1.476 → 1.443 | 0.607 | 0.177 | 0.134 | 0.161 | 0.085 | 0.241 | 0.39 | 0.34 | 182 / 7.05 | 0.355 / 6.17 | ≈0 / ≈0 |
+| opt2 | **s12 → s7** | 1.476 → **1.282** | 0.556 | 0.188 | 0.141 | 0.088 | 0.102 | 0.192 | 0.43 | 0.08 | 200 / 3.37 | 3.23 / 11.3 | ≈0 / ≈0 |
+| opt2 | s12 → s12 | 1.476 → 1.525 | 0.597 | 0.150 | 0.151 | 0.154 | 0.121 | 0.324 | 0.35 | 0.60 | 200 / 6.22 | 0.9 / 7.36 | ≈0 / ≈0 |
+| opt2 | s12 → s45 | 1.476 → 1.472 | 0.607 | 0.172 | 0.133 | 0.158 | 0.085 | 0.256 | 0.40 | 0.38 | 180 / 7.15 | 0.291 / 6.19 | ≈0 / ≈0 |
+| opt2 | s303 → s89 | 1.732 → 1.582 | 0.634 | 0.146 | 0.201 | 0.345 | 0.070 | 0.111 | 0.88 | -0.08 | 200 / 20.7 | 0.000376 / 7.22 | ≈0 / ≈0 |
+| opt2 | **s303 → s7** | 1.732 → **1.412** | 0.593 | 0.126 | 0.183 | 0.203 | 0.070 | 0.230 | 0.85 | 0.23 | 200 / 19.8 | 0.0979 / 17.1 | ≈0 / ≈0 |
+| opt2 | s303 → s12 | 1.732 → 1.610 | 0.652 | 0.110 | 0.216 | 0.380 | 0.065 | 0.138 | 0.94 | 0.75 | 194 / 22.3 | ≈0 / 3.97 | ≈0 / ≈0 |
+| opt2 | s303 → s45 † | 1.732 → 1.636 | 0.653 | 0.112 | 0.218 | 0.403 | 0.061 | 0.140 | **0.94** | **0.77** | 198 / 22.1 | ≈0 / 3.92 | ≈0 / ≈0 |
+
+**Regular arm (2026-10-30e).** `stageB_hold_newSbin56_mpre3_meancell_integ_<opt>` (`STAGEB_ARMS=regular`): mask `12|13` (g_s = d_s ≈ 0), no S prior in the loss, otherwise as the newSbin56 `full` runs (WEIGHTS_REL ∪ newSbin s56, mpre3, window unset, stim×choice, 8 seeds). Own-stim 4-draw overall: best **opt1 s303 1.542** (median 1.620; best full 1.165), best **opt2 s303 1.625** (median 1.689; best opt2 fit 1.190). S prior fixed at about 0.5; without it, regular ties full. Details: [integ opt2 prior/sensory](integ_opt2_prior_sensory_fit.md) 2026-10-30e.
+
+**Original-rule target set, set up (2026-10-30f).** Aim: fit the standard split data with the 10-region S, but I/M defined the original way. Until now every 10-region fit also used the new I/M lists (opt1 84 / opt2 57, M 31).
+- **Rule.** `get_sc_table` with the published parameters (alpha 0.01, sc 0, fixed late-slope cut 0.05, amp_loc 67, n 20) on the res-standard staging, without `apply_move_rule`. I = choice significant & rising; M = end peak & late slope > 0.05 & choice significant; union of the two rows. This gives I 85, M 30, with no I/M overlap.
+- **Difference from opt1.** Only 7 regions change sides. MOs, PL, CA1 and MD are I here (M in opt1); MARN, PSV and SSp-ul are M here (I in opt1). S (10 regions), S prior (VISal VISam LP PO ZI) and P are identical to opt1 (checked).
+- **Figure 4 i check.** `scripts/paper_figs/fig4/panel_i_old_rules.py` → `<oa>/manifold/paper_figs/fig4/res_standard/panel_i_old_rules.{png,svg,json}` (+ `_sc_table.csv`). Rows: original rules, opt1 and opt2.
+
+  | rules | C stim / move mean | M stim / move mean |
+  |---|---|---|
+  | original (85 / 30) | 0.053 / 0.057 | 0.092 / 0.082 |
+  | opt1 (84 / 31) | 0.056 / 0.059 | 0.080 / 0.075 |
+  | opt2 (57 / 31) | 0.062 / 0.064 | 0.080 / 0.075 |
+
+  The original rules separate M from C most: the 4 regions that move to M under the shuffle rule (MOs, PL, CA1, MD) dilute M.
+- **Targets.** `python scripts/build_fit_targets_integ.py --opts oldrule` → `fit_targets_integ/oldrule/` (prior curves and `regions.json`). The prior targets equal the panel i means above. The traj targets (`mean_data_results.npy`, `avg_mean_R.npy`) come from the ORCD targets job (`STEP=targets OPTS=oldrule`). Plots and checks go to `manifold/fit_targets_integ/oldrule/`, so the 10-28 check is not overwritten.
+- **Stage A reused.** newSbin s56 serves as Stage A: its S target is the same 10-region `avg_mean_R`. The fits step now refuses to submit if a set's `avg_mean_R` differs from `opt1_rawslope`'s (`S_REF`). If the rebuilt file differs (for example, because the insertion cache changed), stop and compare before copying.
+- **Stage B.** Both arms, same protocol as newSbin56: WEIGHTS_REL ∪ newSbin s56, mpre3, window unset (~80 ms), stim×choice, 8 seeds.
+  - `full`: no freeze, S prior on. Tag `stageB_hold_newSbin56_full_mpre3_meancell_integ_oldrule`.
+  - `regular`: mask 12|13, no S prior. Tag `stageB_hold_newSbin56_mpre3_meancell_integ_oldrule`.
+  - A dry run with a stubbed `sbatch` gave 16 jobs with the right tags and `FIT_TARGETS_DIR`.
+
+**Report (2026-10-29).** A LaTeX summary of the four bold restarts (opt1 s45→s45, opt1 s7→s7, opt2 s12→s7, opt2 s303→s7) is at `alyx/models/stageB_hold_newS34_integ_ft_gm0_report/`. The folder holds `report.tex`, `report.pdf` (5 landscape pages), copies of the figures in `figs/<fit>/`, and `make_ft_report.py`, which rebuilds the `.tex` from the eval and plot-summary JSONs.
+- **Page 1:** the setup and this table's columns for the four fits.
+- **One page per fit:**
+  - S trajectory by contrast (`S_fit`).
+  - C/M trajectories, stim-aligned (`IM_post`) and move-aligned (`IM_pre`).
+  - `prior_effects` on the 80 ms windows.
+  - Act-prior psychometric split congruent / incongruent, and RT over all trials.
+  - Losses, R² and g/d values in the captions.
+
 ---
 
 ## 2026-09-17 — split window scored (150 post-stim / 80 pre-move)
