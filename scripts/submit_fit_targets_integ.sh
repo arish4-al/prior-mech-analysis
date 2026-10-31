@@ -22,7 +22,8 @@
 # S prior 0–80 ms curve (S ∩ prior 0–80 ms: VISal VISam LP PO ZI) and the
 # S RMS curves (avg_mean_R). Prior curves are from res_standard.
 #
-# All jobs run on pi_fiete (PARTITION to override).
+# All jobs run on mit_preemptable with --requeue (2026-10-30; PARTITION to
+# override, scripts/sbatch_defaults.sh). Every sbatch gets $SBATCH_EXTRA.
 #
 # Step 1 — laptop (done 2026-10-28): regions + prior targets
 #   python scripts/build_fit_targets_integ.py
@@ -94,7 +95,9 @@ STEP="${STEP:?set STEP=all, targets, retinal or fits}"
 OPTS="${OPTS:-opt1_rawslope opt2_shuffleslope}"
 RETINAL_TAG="${RETINAL_TAG:-retinal_newS}"
 ONE_MODELS="${ONE_MODELS:-/orcd/data/fiete/001/om2/arily/int-brain-lab/ONE/alyx/models}"
-export PARTITION="${PARTITION:-pi_fiete}"
+export PARTITION="${PARTITION:-mit_preemptable}"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/sbatch_defaults.sh"
 STAGEB_TAG="${RETINAL_TAG#retinal_}"
 STAGEB_ARMS="${STAGEB_ARMS:-full}"
 export REPO_DIR OPTS RETINAL_TAG ONE_MODELS
@@ -110,8 +113,6 @@ _need_targets() {
 }
 
 _submit_targets() {
-  # shellcheck disable=SC1091
-  source "$REPO_DIR/scripts/sbatch_defaults.sh"
   TARGET_DIRS=""
   for o in $OPTS; do
     [[ -f "fit_targets_integ/$o/regions.json" ]] || {
@@ -139,12 +140,13 @@ case "$STEP" in
   all)
     _submit_targets
     DEP="--dependency=afterok:$TJID --kill-on-invalid-dep=yes"
-    ROUT=$(SBATCH_EXTRA="$DEP" _submit_retinal)
+    ROUT=$(SBATCH_EXTRA="$SBATCH_EXTRA $DEP" _submit_retinal)
     echo "$ROUT"
     RJIDS=$(grep -o -- '-> [0-9]*' <<< "$ROUT" | awk '{print $2}' | paste -sd: -)
     [[ -n "$RJIDS" ]] || { echo "ERROR: no Stage A job ids; scancel $TJID" >&2; exit 1; }
     echo "Stage A jobs (after $TJID) -> $RJIDS"
-    SJID=$(sbatch --parsable --partition="$PARTITION" \
+    # shellcheck disable=SC2086
+    SJID=$(sbatch --parsable $SBATCH_EXTRA --partition="$PARTITION" \
       --dependency="afterany:$RJIDS" --kill-on-invalid-dep=yes \
       --export=ALL scripts/run_fit_integ_select_slurm.sh)
     echo "selector job (after Stage A) -> $SJID  — submits Stage B both arms"
@@ -168,7 +170,8 @@ case "$STEP" in
       RJIDS=$(grep -o -- '-> [0-9]*' <<< "$ROUT" | awk '{print $2}' | paste -sd: -)
       [[ -n "$RJIDS" ]] || { echo "ERROR: no Stage A job ids" >&2; exit 1; }
       export SUBMIT_FITS="${SUBMIT_FITS:-0}"
-      SJID=$(sbatch --parsable --partition="$PARTITION" \
+      # shellcheck disable=SC2086
+      SJID=$(sbatch --parsable $SBATCH_EXTRA --partition="$PARTITION" \
         --dependency="afterany:$RJIDS" --kill-on-invalid-dep=yes \
         --export=ALL scripts/run_fit_integ_select_slurm.sh)
       echo "selector job (after $RJIDS) -> $SJID  SUBMIT_FITS=$SUBMIT_FITS"

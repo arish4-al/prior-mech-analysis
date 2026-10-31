@@ -562,6 +562,7 @@ Per term for the best restart, plus opt2 s303 ft s45, which keeps the best behav
   - `full`: no freeze, S prior on. Tag `stageB_hold_newSbin56_full_mpre3_meancell_integ_oldrule`.
   - `regular`: mask 12|13, no S prior. Tag `stageB_hold_newSbin56_mpre3_meancell_integ_oldrule`.
   - A dry run with a stubbed `sbatch` gave 16 jobs with the right tags and `FIT_TARGETS_DIR`.
+- **Partition (same day).** `submit_fit_targets_integ.sh` now defaults to `mit_preemptable` and sources `sbatch_defaults.sh` at the top, so every job gets `--requeue`: targets, Stage A, selector and Stage B. `STEP=all` keeps `--requeue` next to its dependency flags. The selector is now requeue-safe. Before submitting Stage B it atomically creates `RANK_DIR/stageB_submitted_<opts>`, and a requeued run that finds the marker exits without submitting. `PARTITION=pi_fiete` restores the old behaviour.
 
 **Report (2026-10-29).** A LaTeX summary of the four bold restarts (opt1 s45→s45, opt1 s7→s7, opt2 s12→s7, opt2 s303→s7) is at `alyx/models/stageB_hold_newS34_integ_ft_gm0_report/`. The folder holds `report.tex`, `report.pdf` (5 landscape pages), copies of the figures in `figs/<fit>/`, and `make_ft_report.py`, which rebuilds the `.tex` from the eval and plot-summary JSONs.
 - **Page 1:** the setup and this table's columns for the four fits.
