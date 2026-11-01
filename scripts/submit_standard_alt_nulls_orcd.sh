@@ -19,6 +19,13 @@
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
 #   ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
+#   PREFIT=0           skip the sticky θ prefit (default 1). The prefit fits
+#                      each session once on the full session-loader table
+#                      ({eid8}_fullsess) before any sticky shard starts, so
+#                      every split uses the same θ; sessions already fit
+#                      are skipped. N_PREFIT_SHARDS (24; 459 eids, up to
+#                      ~17 min each) MEM_PREFIT (8G)
+#                      TIME_PREFIT (12:00:00)
 #   DEBIAS_EUC=1       noise-corrected d_euc; outputs and CLEAR_STREAM use
 #                      {suffix}_debias, so uncorrected files are kept
 #   N_SHARDS=  MEM_SHARD=  TIME_SHARD=  override that arm's defaults
@@ -38,6 +45,10 @@ NRAND="${NRAND:-2000}"
 RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 REBUILD_DONORS="${REBUILD_DONORS:-0}"
+PREFIT="${PREFIT:-1}"
+N_PREFIT_SHARDS="${N_PREFIT_SHARDS:-24}"
+MEM_PREFIT="${MEM_PREFIT:-8G}"
+TIME_PREFIT="${TIME_PREFIT:-12:00:00}"
 DEBIAS_EUC="${DEBIAS_EUC:-0}"
 N_SHARDS_USER="${N_SHARDS:-}"
 MEM_SHARD_USER="${MEM_SHARD:-}"
@@ -75,7 +86,7 @@ case "$ARM" in
 esac
 
 echo "Aim: standard act labels (full-session kernel, mask, drop true 0.5, min5)."
-echo "ARM=$ARM  nrand=$NRAND  CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS  DEBIAS_EUC=$DEBIAS_EUC"
+echo "ARM=$ARM  nrand=$NRAND  CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS  PREFIT=$PREFIT  DEBIAS_EUC=$DEBIAS_EUC"
 echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}{suffix}.npy"
 
@@ -139,6 +150,9 @@ submit_arm() {
   if [[ -n "${DONOR_JID:-}" && "$scheme" == "harris" ]]; then
     dep_flag=(--dependency="afterok:${DONOR_JID}")
   fi
+  if [[ -n "${PREFIT_DEP:-}" && "$scheme" == "sticky" ]]; then
+    dep_flag=(--dependency="afterok:${PREFIT_DEP}")
+  fi
 
   local sp k TAG JID FID DEP
   for sp in "${SPLITS[@]}"; do
@@ -186,6 +200,23 @@ if [[ "$need_donors" == "1" ]]; then
   echo "standard donor bank -> $DONOR_JID"
 fi
 
+PREFIT_DEP=""
+if [[ ( "$ARM" == "sticky" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
+  PREFIT_JOBS=()
+  for ((k=0; k<N_PREFIT_SHARDS; k++)); do
+    # shellcheck disable=SC2086
+    JID=$(sbatch --parsable $SBATCH_EXTRA \
+      --partition="$PARTITION" \
+      --mem="$MEM_PREFIT" --cpus-per-task=2 --time="$TIME_PREFIT" \
+      --job-name="std_akfit_s${k}" \
+      --export=ALL,PREFIT_FULL_SESSION=1,SHARD_IDX="$k",N_SHARDS="$N_PREFIT_SHARDS" \
+      scripts/run_goal2_ak_prefit_slurm.sh)
+    PREFIT_JOBS+=("$JID")
+    echo "sticky θ prefit (full session) shard $k/$N_PREFIT_SHARDS -> $JID"
+  done
+  PREFIT_DEP=$(IFS=:; echo "${PREFIT_JOBS[*]}")
+fi
+
 if [[ "$ARM" == "sticky" || "$ARM" == "all" ]]; then
   submit_arm standard_choice_harris sticky 4 12G 12:00:00 stdssc
   submit_arm standard_prior_harris_stim sticky 4 12G 12:00:00 stdsss
@@ -202,4 +233,4 @@ if [[ "$ARM" == "harris_prior_none" || "$ARM" == "all" ]]; then
 fi
 
 echo "Done (standard alternative nulls). Monitor: squeue -u \$USER"
-echo "Final outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}_pseudo_strat_sticky.npy and {split}_harris_unique.npy"
+echo "Final outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}_pseudo_strat_sticky[_debias].npy and {split}_harris_unique[_debias].npy"

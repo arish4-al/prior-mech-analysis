@@ -360,26 +360,51 @@ PRESETS = {
 }
 
 
-def _prefit_actkernel_sessions(restart=True):
-    """MCMC-fit ActionKernel once per BWM eid; cache under actkernel_fits/."""
+def _prefit_actkernel_sessions(restart=True, full_session=False,
+                               shard_idx=None, n_shards=None):
+    """MCMC-fit ActionKernel once per BWM eid; cache under actkernel_fits/.
+
+    ``full_session`` fits the session-loader table (``{eid8}_fullsess``), the
+    θ the standard sticky pseudo-sessions use. Its eids are bwm_query's,
+    split across ``n_shards`` jobs; a session with a pickle already
+    on disk is skipped. The default fits the ``bwm_include`` rows of the
+    aggregate trials table (``{eid8}``).
+    """
     from pathlib import Path as _P
-    pqt = _P(ba.one.cache_dir) / 'bwm_tables' / 'trials.pqt'
-    if not pqt.exists():
-        raise SystemExit(f'Missing {pqt}')
     import pandas as pd
-    df = pd.read_parquet(pqt)
-    eids = df['eid'].astype(str).unique()
+    if full_session:
+        eids = sorted(ba.bwm_query(ba.one)['eid'].astype(str).unique())
+        df = None
+    else:
+        pqt = _P(ba.one.cache_dir) / 'bwm_tables' / 'trials.pqt'
+        if not pqt.exists():
+            raise SystemExit(f'Missing {pqt}')
+        df = pd.read_parquet(pqt)
+        eids = df['eid'].astype(str).unique()
+    if n_shards is not None and n_shards > 1:
+        eids = eids[shard_idx::n_shards]
+    print(f'prefit: {len(eids)} eids  full_session={full_session}  '
+          f'shard={shard_idx}/{n_shards}', flush=True)
     n_ok = 0
     n_skip = 0
     for i, eid in enumerate(eids):
-        d = df[df['eid'] == eid]
-        if 'bwm_include' in d.columns:
-            d = d[d['bwm_include'].astype(bool)]
-        if len(d) < 10:
-            n_skip += 1
-            continue
         try:
-            ba.get_actkernel_choice_fit(str(eid), d.reset_index(drop=True))
+            if full_session:
+                tag = ba._actkernel_fit_tag(eid, full_session=True)
+                done = ba._actkernel_model_dir() / tag
+                if restart and any(done.rglob('train_*.pkl')):
+                    n_ok += 1
+                    continue
+                d = ba._full_session_trials_for_ak_fit(eid)
+            else:
+                d = df[df['eid'] == eid]
+                if 'bwm_include' in d.columns:
+                    d = d[d['bwm_include'].astype(bool)]
+            if len(d) < 10:
+                n_skip += 1
+                continue
+            ba.get_actkernel_choice_fit(
+                str(eid), d.reset_index(drop=True), full_session=full_session)
             n_ok += 1
         except Exception as exc:  # noqa: BLE001
             print(f'  skip {eid}: {exc}')
@@ -467,6 +492,10 @@ def main():
                    help='MCMC-fit ActionKernel on all BWM sessions and cache '
                         'under manifold/actkernel_fits/ (once per eid; '
                         'splits reuse the pickle)')
+    p.add_argument('--full-session', action='store_true', default=False,
+                   help='With --prefit-actkernel: fit the full session-loader '
+                        'table ({eid8}_fullsess, the standard sticky θ). '
+                        'Honors --shard-idx / --n-shards')
     p.add_argument('--actkernel-pseudo-len-factor', type=float, default=None,
                    help='Strat only: BWM pseudo length = factor × real n_trials '
                         '(default 3, or env ACTKERNEL_PSEUDO_LEN_FACTOR). '
@@ -483,7 +512,8 @@ def main():
                         'pLeft==0.5. min_trials_per_side stays 5. Writes '
                         'manifold/res_standard')
     p.add_argument('--debias-euc', action='store_true', default=False,
-                   help='Noise-corrected d_euc: subtract v0/(n0-1)+v1/(n1-1) '
+                   help='Noise-corrected d_euc: subtract s2*(1/n0+1/n1), s2 the '
+                        'pooled variance of the split, '
                         'per neuron and bin, so the null does not depend on '
                         'class counts (journals/alternative_null_fixes.md). '
                         'Appends _debias to output names. Env DEBIAS_EUC=1')
@@ -571,7 +601,9 @@ def main():
 
     if args.prefit_actkernel:
         print('ONE cache:', ba.one.cache_dir)
-        n = _prefit_actkernel_sessions(restart=args.restart)
+        n = _prefit_actkernel_sessions(
+            restart=args.restart, full_session=args.full_session,
+            shard_idx=args.shard_idx, n_shards=args.n_shards)
         print(f'Done. {n} ActionKernel fits under',
               ba._actkernel_model_dir())
         return
