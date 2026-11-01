@@ -148,7 +148,61 @@ Checks:
 - One-session smoke test (`ACTKERNEL_NB_STEPS=20`, shard 0/500): 692 full-session trials, pickle in `004d8fd5_fullsess_nb20`. Rerunning with a pickle in `004d8fd5_fullsess` skipped the fit. Both test dirs were removed.
 - Dry run of `DEBIAS_EUC=1 ARM=sticky` with `sbatch` stubbed: 100 jobs, made up of 24 prefit jobs plus 12 splits (8 choice, 2 stim-side prior, 2 fully unsplit prior). Every one of the 72 shard jobs depends on all 24 prefit jobs. The jobs export `STANDARD_ACT_PRIOR=1`, `ACTKERNEL_NULL_MODE=strat`, `ACTKERNEL_LATE_STICKY=1` and `DEBIAS_EUC=1`; the suffix is `_pseudo_strat_sticky_debias`. There is no junk split.
 
-## Rerun plan (not started)
+## 2026-11-01b — Harris rerun results (noise-corrected, no-choice fix, product pooling)
+
+All 12 `{split}_harris_unique_debias` files are back from ORCD (main `a61af57`). Splits are grouped as in the figures, with each group's regde stacks summed over its splits; when null counts differ across splits, 2,000 random combinations are drawn. The score is the time-mean p, then BH over the 202 regions in the figure sample (`fig2/res_standard/staging/act_block_only.csv`). `harris_old` is the Oct 19 `_harris_unique` set. `shuffle` is the plain shuffle catalog, which is still uncorrected: its `_debias` rerun has not been done, but the 10-30b check shows the correction barely moves shuffle ranks. Per-region p and q: `manifold/res_standard/harris_unique_debias_group_fdr.csv`.
+
+| group | splits | Harris new FDR .01 / .05 | Harris old | shuffle |
+|---|---|---:|---:|---:|
+| choice during stim | 4 `choice_duringstim_*_act` | 65 / 94 | 21 / 33 | 88 / 113 |
+| choice around movement | 4 `choice_stim_*_act` | 102 / 128 | 53 / 71 | 115 / 137 |
+| prior, stim-side | `act_block_duringstim_{l,r}` | 14 / 21 | 4 / 13 | 123 / 158 |
+| prior, fully unsplit, stim | `act_block_duringstim_fully_unsplit` | 21 / 50 | 13 / 27 | not run |
+| prior, fully unsplit, move | `act_block_duringchoice_fully_unsplit` | 35 / 71 | 14 / 53 | not run |
+
+- **Choice.**
+  - New Harris is close to the shuffle (Spearman 0.96 during stim, 0.94 around movement).
+  - At FDR 0.01 its hits are a subset of the shuffle's (65 of 88, 102 of 115). At 0.05 the only Harris-only regions are 5 around movement: CLA, ENTm, ORBm, PPT, VISam.
+  - The old Harris null was much wider, from the no-choice coding, the class-balance noise term, and min-U pooling (as low as 202 nulls per region). With those fixed, the choice result holds up under session permutation.
+  - The corrected null mean is about −0.035, against an observed mean of 0.54 (during stim) and 0.89 (around movement).
+- **Prior, stim-side.**
+  - Only 14 regions pass at 0.01, against 123 under the shuffle, and all 14 are also shuffle hits: CLA, CP, GRN, ILA, IRN, MOp, MRN, PL, RN, SCm, SOC, VPL, FOTU, LPO.
+  - The corrected Harris null still has a mean of 0.21, against an observed 0.29. The noise floor is removed, so what remains is temporal structure: block-length label runs lined up with slow drift in the recording.
+  - The within-stratum shuffle breaks that structure, so most of its prior hits are not separable from slow drift under this null. This is the drift confound that session permutation exists to test.
+- **Prior, fully unsplit.** 21 regions pass during stim and 35 around movement. There is no shuffle file for these splits.
+- **Coverage (problem 2).**
+  - All 202 figure regions are present in every group.
+  - The donor gap now costs 2 insertions per split, both probes of one long session.
+  - Most other skips are the usual min-5-per-side rule (116–206 per choice split, 2–6 per prior split), which the shuffle also applies. A few are other errors (2 each in two choice splits).
+- **Pooling (problem 3).**
+  - Every group region now has 2,000 nulls.
+  - In the choice groups, 51 regions still contain an insertion with fewer than 99 unique donor draws (15–17 with fewer than 20). Product pooling keeps those regions resolvable, since each one combines several insertions.
+  - The prior groups have no such insertions.
+
+## 2026-11-01c — Harris arm for the Figure 4 f1/f2 prior splits (set up, not run)
+
+Purpose: compare the Figure 4 prior results with the shuffle under session permutation. The stim-side prior lost most of its shuffle hits under Harris (11-01b).
+
+- **Splits:** the 8 `act_block_*_f1/f2` splits from the shuffle catalog.
+- **Contrast:** act prior L vs R.
+- **Stratum:** stim side × choice. That is the same cells as the journal's choice × feedback (stimOn splits) and stim × feedback (movement splits); choice is ±1 only.
+- **Windows:** stimOn 0–150 ms for `act_block_duringstim_*`; firstMovement 150 ms before for `act_block_stim_*_duringchoice_*`.
+- **Prior rows:**
+  - Recipient: α=0.2 kernel on the full session, then the mask, then the true-0.5 drop, min 5 per side.
+  - Donor: `act_binary` from `choice_donors_standard.npy`, the same pipeline, in the donor's own stim × choice cell. The donor view follows the split's alignment: stim view for stimOn splits, move view for movement splits.
+- **Null and statistic:** `nrand=2000`, `DEBIAS_EUC=1`, product pooling. Suffix `_harris_unique_debias`.
+
+No new analysis code was needed. `_act_block_conditioning_spec` already gives stim × choice for these names, and `_donor_block_conditioning_mask` and `_harris_block_donor_candidates` match it on the donor. Added:
+- Preset `standard_prior_harris_f12` in `run_goal2_splits.py`.
+- `ARM=harris_prior_f12` in `submit_standard_alt_nulls_orcd.sh`: 4 shards, 8G, 12 h, waiting on the donor job. It is not part of `ARM=all`.
+
+Checks:
+- `--list-splits` with `DEBIAS_EUC=1` gives the 8 splits.
+- A stubbed-`sbatch` dry run gives 41 jobs (the donor job plus 8 × (4 shards + finalize)). All 32 shards wait on the donor job, and the exports are `SESSION_SHUFFLE_NULL=1`, `STANDARD_ACT_PRIOR=1`, `DEBIAS_EUC=1`.
+- On a fake standard bank with no-choice trials, the null runs for one stimOn split and one movement split. Every donor-stratum trial has the split's stim side and choice.
+- The shuffle `_regde` files for all 8 splits are local, for the comparison.
+
+## Rerun plan (Harris done 11-01; shuffle and sticky not started)
 
 All standard arms get rerun with `DEBIAS_EUC=1`, so they are scored on the same statistic. The uncorrected files stay as they are.
 

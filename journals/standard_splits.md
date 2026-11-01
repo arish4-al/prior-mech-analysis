@@ -127,7 +127,7 @@ Unique donor draws, suffix `_harris_unique`. The donor bank is `manifold/choice_
 | prior, stim | `standard_prior_harris_stim` | `act_block_duringstim_{l,r}` | act prior L vs R | stim side |
 | prior, none | `standard_prior_harris_none` | `act_block_duringstim_fully_unsplit`, `act_block_duringchoice_fully_unsplit` | act prior L vs R | none |
 
-Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. Sticky uses these same windows and strata. The Figure 4 f1/f2 prior splits stay on the shuffle catalog only.
+Choice during stim is stimOn, 0–150 ms. Choice around movement is firstMovement, 150 ms before. Prior with a stim stratum is stimOn, 0–150 ms. Prior with no stratum is the same two windows: stimOn 0–150 ms, and firstMovement 150 ms before. Sticky uses these same windows and strata. The Figure 4 f1/f2 prior splits stay off the sticky arm. Since 2026-11-01 they have a Harris arm (`ARM=harris_prior_f12`, preset `standard_prior_harris_f12`), with the donor's full-session `act_binary` in the same stim × choice cell (stim view for stimOn splits, move view for firstMovement splits); see [alternative null fixes](alternative_null_fixes.md) 11-01c.
 
 ## 2026-10-19 — pseudo-session θ fit
 
@@ -136,3 +136,18 @@ The sticky ActionKernel θ fit was on the masked, true-0.5-dropped analysis tabl
 ## 2026-10-16 — alternative figures
 
 The 28 finished splits (everything except `act_block_only`) are enough for Figure 2 and Figure 4. The figures are the `res_standard` versions in openalyx `manifold/paper_figs/fig2/res_standard` and `paper_figs/fig4/res_standard`. The 80 ms stim×choice denominator and `prior_80ms` are prefixes of the 150 ms curves. Details in [paper main figures](paper_main_figures.md) (2026-10-16).
+
+## 2026-10-26 — run status
+
+Checked against local alyx `manifold/res_standard/` and `res_standard/new/`. The "Not run yet" lines above are out of date.
+
+| set | status |
+|---|---|
+| Figure 2, 18 shuffle splits | done (`res_standard/`, Oct 16) |
+| Figure 4 prior, 10 shuffle splits | done (`res_standard/`, Oct 16) |
+| `act_block_only` | **not run** |
+| Harris `_harris_unique`, 12 (8 choice, 2 stim-side prior, 2 fully unsplit prior) | done (`res_standard/new/`, Oct 19) |
+| Sticky prior, 4 (2 stim-side, 2 fully unsplit) | in `res_standard/new/` (Oct 19 ~17:00). Unclear whether these used the `{eid8}_fullsess` θ fit: that code was committed Oct 20 00:54 and the files carry no provenance. Check the ORCD logs. |
+| Sticky choice, 8 | **rerun needed**: only the Oct 16 copies exist, from the masked-table θ (10-19). |
+
+Figures 2 and 4 need nothing beyond the 28 finished shuffle splits.
