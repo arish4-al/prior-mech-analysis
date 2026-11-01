@@ -562,7 +562,8 @@ def set_debias_euc(on):
     DEBIAS_EUC = bool(on)
     if DEBIAS_EUC and not RES_FILE_SUFFIX.endswith(DEBIAS_SUFFIX):
         RES_FILE_SUFFIX = f'{RES_FILE_SUFFIX}{DEBIAS_SUFFIX}'
-        print(f'noise-corrected d_euc: file suffix *{{split}}{RES_FILE_SUFFIX}*.npy')
+        print(f'noise-corrected d_euc: file suffix *{{split}}{RES_FILE_SUFFIX}*.npy',
+              file=sys.stderr)
     return RES_FILE_SUFFIX
 
 

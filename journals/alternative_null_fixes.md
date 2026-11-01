@@ -126,6 +126,28 @@ Options not taken, in case coverage matters for a figure:
 
 Offline check: a fake standard bank with no-choice trials runs the Harris choice control (30 unique nulls from 6 donors) with the correction off and on. The suffixes are `_harris_unique_debias`, `_pseudo_strat_sticky_debias` and `_debias`. The skip summary drops a pooled insertion and ignores another split's log.
 
+## 2026-10-30c — Harris reruns submitted; `--list-splits` bug
+
+The three Harris arms were submitted on ORCD with `DEBIAS_EUC=1` (main `a61af57`). `set_debias_euc` printed its suffix message to stdout. `--list-splits` emitted that line, so each arm queued one extra "split" named after the message. Its shards died at once ("Splits missing from align/pre_post"), and its finalize job stays pending (DependencyNeverSatisfied) until cancelled. The real splits were unaffected. Fix: the message goes to stderr. Not committed or on `main` yet as of this entry.
+
+## 2026-11-01 — full-session θ prefit for the sticky arm
+
+The sticky arm had no θ prefit. `--prefit-actkernel` fits the `bwm_include` rows of the aggregate trials table and writes the masked `{eid8}` pickles, not `{eid8}_fullsess`. Without a prefit, each sticky shard fits the MCMC for every session it touches the first time it needs it. That causes three problems:
+- The same session gets fit about 12 times, once per split.
+- Two jobs can write the same pickle at once. `load_or_train` only checks whether the file exists, so another job can read a half-written pickle.
+- MCMC differs from run to run, so different splits can get a different θ for the same session.
+
+Changes:
+- `run_goal2_splits.py --prefit-actkernel --full-session [--shard-idx k --n-shards N]`. It covers `bwm_query`'s 459 eids, split across shards (`eids[k::N]`). Each session is fit on `_full_session_trials_for_ak_fit(eid)` with `full_session=True`, so pickles land in `{eid8}_fullsess`. Sessions that already have a `train_*.pkl` are skipped. The old mode is unchanged.
+- `run_goal2_ak_prefit_slurm.sh` takes `PREFIT_FULL_SESSION=1`, `SHARD_IDX` and `N_SHARDS`.
+- `submit_standard_alt_nulls_orcd.sh`: `ARM=sticky` (or `all`) first submits `N_PREFIT_SHARDS=24` prefit jobs (8G, 12 h). Every sticky shard job then waits on `afterok` of all 24. `PREFIT=0` skips the prefit.
+- Timing: a 5,000-step fit runs about 5 steps/s on a 692-trial session, so up to about 17 min per session. That is about 19 sessions per shard, under 6 h.
+- If a prefit shard times out, the sticky jobs never start. Cancel them and resubmit the same command: done sessions are skipped, and `CLEAR_STREAM=1` clears the `_debias` sticky outputs.
+
+Checks:
+- One-session smoke test (`ACTKERNEL_NB_STEPS=20`, shard 0/500): 692 full-session trials, pickle in `004d8fd5_fullsess_nb20`. Rerunning with a pickle in `004d8fd5_fullsess` skipped the fit. Both test dirs were removed.
+- Dry run of `DEBIAS_EUC=1 ARM=sticky` with `sbatch` stubbed: 100 jobs, made up of 24 prefit jobs plus 12 splits (8 choice, 2 stim-side prior, 2 fully unsplit prior). Every one of the 72 shard jobs depends on all 24 prefit jobs. The jobs export `STANDARD_ACT_PRIOR=1`, `ACTKERNEL_NULL_MODE=strat`, `ACTKERNEL_LATE_STICKY=1` and `DEBIAS_EUC=1`; the suffix is `_pseudo_strat_sticky_debias`. There is no junk split.
+
 ## Rerun plan (not started)
 
 All standard arms get rerun with `DEBIAS_EUC=1`, so they are scored on the same statistic. The uncorrected files stay as they are.
@@ -142,6 +164,6 @@ Before printing a submit command, follow the standard-splits rule: write down ai
 
 ## Open
 
-1. Copy the fixes to `main` for ORCD (after a commit is asked for).
+1. Done 10-30 (`a61af57`). Still to copy: the stderr fix (10-30c) and the sticky prefit (11-01).
 2. Whether to flag or rerun the older non-standard structured choice nulls (`res/new`, `res_sc_choice_harris_unique`, sticky exclusion) that problem 1 affects.
 3. Whether to add the per-insertion ActionKernel fallback for Harris coverage (problem 2).
