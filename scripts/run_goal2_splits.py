@@ -236,6 +236,10 @@ PRESETS = {
     ),
     'standard_prior_harris_stim': list(FIG4_PRIOR_UNSPLIT_STIM),
     'standard_prior_harris_none': list(ba.ACT_BLOCK_FULLY_UNSPLIT_SPLITS),
+    # Figure 4 prior splits, act prior L vs R inside stim × choice (f1/f2).
+    'standard_prior_harris_f12': (
+        list(FIG4_PRIOR_DURINGSTIM) + list(FIG4_PRIOR_DURINGCHOICE)
+    ),
     'choice_lr_session_null_true': (
         CHOICE_DURINGCHOICE + CHOICE_DURINGSTIM
     ),

@@ -11,13 +11,15 @@
 #   choice — choice L vs R (8), stratum = stim × act prior.
 #   prior_stim — prior L vs R inside stim side (2).
 #   prior_none — prior L vs R with no stratum (2 fully unsplit).
+#   prior_f12 — prior L vs R inside stim × choice (8 Figure 4 f1/f2;
+#            Harris only, ARM=harris_prior_f12, not part of ARM=all).
 #
 # Harris reads manifold/choice_donors_standard.npy (full-session kernel on
 # the donor, then the same mask and true-0.5 drop). The shuffle catalog in
 # res_standard/{split}.npy is left in place.
 #
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
-#   ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|all
+#   ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
 #   PREFIT=0           skip the sticky θ prefit (default 1). The prefit fits
 #                      each session once on the full session-loader table
@@ -78,9 +80,9 @@ if [[ ! -d third_party/behavior_models/behavior_models ]]; then
 fi
 
 case "$ARM" in
-  sticky|harris_choice|harris_prior_stim|harris_prior_none|all) ;;
+  sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) ;;
   *)
-    echo "ERROR: ARM must be sticky|harris_choice|harris_prior_stim|harris_prior_none|all (got $ARM)" >&2
+    echo "ERROR: ARM must be sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all (got $ARM)" >&2
     exit 1
     ;;
 esac
@@ -185,7 +187,7 @@ submit_arm() {
 
 need_donors=0
 case "$ARM" in
-  harris_choice|harris_prior_stim|harris_prior_none|all) need_donors=1 ;;
+  harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) need_donors=1 ;;
 esac
 
 DONOR_JID=""
@@ -230,6 +232,9 @@ if [[ "$ARM" == "harris_prior_stim" || "$ARM" == "all" ]]; then
 fi
 if [[ "$ARM" == "harris_prior_none" || "$ARM" == "all" ]]; then
   submit_arm standard_prior_harris_none harris 12 16G 12:00:00 stdhn
+fi
+if [[ "$ARM" == "harris_prior_f12" ]]; then
+  submit_arm standard_prior_harris_f12 harris 4 8G 12:00:00 stdhf
 fi
 
 echo "Done (standard alternative nulls). Monitor: squeue -u \$USER"
