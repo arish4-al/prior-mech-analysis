@@ -14,6 +14,12 @@ integrator rule (journals/paper_main_figures.md 2026-10-28):
                      = choice significant & rising, movement = end peak &
                      late slope > 0.05 (fixed cut) & choice significant
                      (C = 85, M = 30; panel_i_old_rules.py)
+  opt3_latemean      oldrule with the movement late-slope cut at its mean
+                     over the 118 choice-significant regions (0.0437, not
+                     0.05) (2026-11-02; C = 84, M = 31: PL moves to M)
+  opt4_overallmean   oldrule with movement = end peak & overall slope
+                     (amp_slope, 0–150 ms, per s) > its mean over them
+                     (12.5/s) (C = 91, M = 24; panel_i_slope_mean_cut.py)
 
 Groups follow Figure 4 i: I = during-stim integrator ∪ move-aligned
 integrator, M = during-stim movement ∪ move-aligned movement (get_sc_table
@@ -39,6 +45,7 @@ scripts/build_fit_traj_targets_from_cache.py. Plot goes to
   conda activate iblenv   # outside the sandbox
   python scripts/build_fit_targets_integ.py                 # opt1 + opt2
   python scripts/build_fit_targets_integ.py --opts oldrule  # that set only
+  python scripts/build_fit_targets_integ.py --opts opt3_latemean opt4_overallmean
 """
 from __future__ import annotations
 
@@ -58,6 +65,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'scripts'), str(ROOT / 'scripts/paper_figs
 import build_standard_figs as b  # noqa: E402
 import fig4_common as fc  # noqa: E402
 from panel_i_old_rules import old_rule_sets  # noqa: E402
+from panel_i_slope_mean_cut import mean_cut_sets  # noqa: E402
 
 fc.OA_RES = b.STAGE
 fc.ALYX_RES = b.STAGE
@@ -71,7 +79,8 @@ PLOT_DIR = b.OUT2.parents[1] / 'fit_targets_integ'
 OLD = ROOT / 'fit_targets'
 UNSPLIT = ['act_block_duringstim_l', 'act_block_duringstim_r']
 T_MAX_MS, WINDOW_MS = 80.0, 150.0
-OPTS = ('opt1_rawslope', 'opt2_shuffleslope', 'oldrule')
+OPTS = ('opt1_rawslope', 'opt2_shuffleslope', 'oldrule', 'opt3_latemean', 'opt4_overallmean')
+MEAN_CUT = ('opt3_latemean', 'opt4_overallmean')
 
 
 def _slope(y):
@@ -138,6 +147,10 @@ def main():
                                             | {r for r in d.integ_c if ok(q_m, r)})
     if 'oldrule' in opts:
         integ['oldrule'], move['oldrule'] = old_rule_sets(d.af)
+    cut = {}
+    if set(opts) & set(MEAN_CUT):
+        for o, (c, m, col, val) in mean_cut_sets().items():
+            integ[o], move[o], cut[o] = c, m, {'column': col, 'value': val}
     sensory = sorted(d.sensory)
     s_prior = list(d.overlap)
     for o in opts:
@@ -171,6 +184,7 @@ def main():
                       .flat[0]['P']['regs']),
             'source_sc_table': str(b.OUT4 / 'panel_i_old_rules_sc_table.csv'
                                    if opt == 'oldrule' else fc.SC_TABLE),
+            **({'move_cut': cut[opt]} if opt in cut else {}),
         }, indent=1))
         print(f'wrote {out}')
 

@@ -641,6 +641,25 @@ Per term for the best restart, plus opt2 s303 ft s45, which keeps the best behav
 
 Indices: g_i 6, g_m 7, d_i 8, d_m 9, g_s 12, d_s 13. Full tag: `stageB_hold_newSbin56_mpre3_meancell_integ_oldrule_<arm>`; dirs `weights_run_fj_<tag>_<mtype>_mask<slug>_s<seed>`. Wired as `STAGEB_ARMS=<arm>` in `scripts/submit_fit_targets_integ.sh`. A dry run with a stubbed `sbatch` gave 40 jobs: 5 arms × 8 seeds, the masks and S-prior flags above, and `FIT_TARGETS_DIR=fit_targets_integ/oldrule`. When scoring, leave the S prior out of overall for `gm0gs0`, as for regular.
 
+**Options 3 and 4: movement cut at the mean slope, set up (2026-11-02).** Aim: full Stage B fits on the C/M sets from the Fig 4 e/g/i mean-cut comparison ([paper main figures](paper_main_figures.md) 11-02). Both use oldrule's labelling (fixed rule, `get_sc_table` style, `panel_i_slope_mean_cut.label_sets`) and change only the movement cut. Each mean is taken over the 118 choice-significant regions.
+- `opt3_latemean`: late slope > 0.0437 (the mean; oldrule uses 0.05). I 84, M 31. The only change from oldrule is that PL moves from I to M.
+- `opt4_overallmean`: end peak & overall slope (`amp_slope`, 0–150 ms) > 12.54/s (the mean). I 91, M 24. CENT2, COAp, CP, GPe, GPi, PoT, SPVI and VPM move from M to I; CLI and PAR move from I to M.
+- **Targets:** `build_fit_targets_integ.py --opts opt3_latemean opt4_overallmean` → `fit_targets_integ/<opt>/`. `regions.json` records `move_cut`. Prior target means (stim / choice):
+  - opt3: I 0.0526 / 0.0573, M 0.0909 / 0.0813.
+  - opt4: I 0.0516 / 0.0551, M 0.1150 / 0.1019.
+  - oldrule, for comparison: I 0.0527 / 0.0570, M 0.0916 / 0.0824.
+  - S, S prior, P and the S prior curve are identical to oldrule, so the newSbin s56 Stage A serves both options (the fits step checks `avg_mean_R`).
+- **Traj targets** (`mean_data_results`, `avg_mean_R`) come from one ORCD job: `STEP=targets OPTS="opt3_latemean opt4_overallmean"`.
+- **Fits:** the `full` arm only: no freeze, S prior on, m_pre_weight 3, window unset (~80 ms), stim×choice, 8 seeds, the oldrule protocol otherwise. Tag `stageB_hold_newSbin56_full_mpre3_meancell_integ_<opt>`.
+- **No Alyx in this chain:**
+  - `submit_fit_targets_integ.sh` exports `PRIOR_MECH_NO_ONE=1` and `ONE_CACHE_DIR`, so neither the fit jobs nor the login-node hybrid build create a ONE object.
+  - The targets job opens ONE in local mode with Alyx blocked (`one_offline.py`) on `ONE_CACHE_DIR`. An insertion with missing local data now stops the job instead of being skipped.
+  - `STEP=targets/all` first runs `check_offline_inputs.py`, the same preflight as the alt-null submit; `PREFLIGHT=0` skips it.
+- **Dry run:**
+  - A stubbed `sbatch` gave 1 targets job plus 16 fits (2 options × 8 seeds, `VARIANTS=full:`, S prior on, `PRIOR_MECH_NO_ONE=1`, `BLOCK_ALYX=1`).
+  - The traj builder ran 2–3 insertions with `SLURM_JOB_ID` set: ONE was in local mode and no Alyx request was made. It then failed closed on purpose, because M is too sparse with that few insertions.
+  - On the laptop the preflight correctly flagged sessions with no local trials.
+
 **Report (2026-10-29).** A LaTeX summary of the four bold restarts (opt1 s45→s45, opt1 s7→s7, opt2 s12→s7, opt2 s303→s7) is at `alyx/models/stageB_hold_newS34_integ_ft_gm0_report/`. The folder holds `report.tex`, `report.pdf` (5 landscape pages), copies of the figures in `figs/<fit>/`, and `make_ft_report.py`, which rebuilds the `.tex` from the eval and plot-summary JSONs.
 - **Page 1:** the setup and this table's columns for the four fits.
 - **One page per fit:**
