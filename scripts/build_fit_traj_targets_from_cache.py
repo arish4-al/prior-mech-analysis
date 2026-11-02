@@ -29,13 +29,17 @@ copied from ``fit_targets``. Plots and the check go to ``--plot-dir``.
     --target-dir fit_targets_integ/opt1_rawslope \
     --target-dir fit_targets_integ/opt2_shuffleslope
 
-Run on ORCD via scripts/submit_fit_targets_integ.sh (needs ONE for the
-full-session trial tables).
+Run on ORCD via scripts/submit_fit_targets_integ.sh. No Alyx (2026-11-02):
+the full-session trial tables come from ``manifold/session_trials/`` or the
+local ONE files (``one_offline.py``: local mode inside Slurm, Alyx blocked).
+An insertion whose local data is missing stops the job instead of being
+skipped; the submit step runs ``check_offline_inputs.py`` first.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from itertools import product
@@ -209,12 +213,19 @@ def main():
     nb = {'stim': n_bins(*STIM_PRE_POST), 'choice': n_bins(*MOVE_PRE_POST)}
     acc = {name: {w: RmsAcc(n) for w, n in nb.items()} for name in sets}
     br = BrainRegions()
+    import block_analysis_allsplits as bas
+    from one_offline import is_missing_local_data
+    if os.environ.get('ONE_CACHE_DIR'):  # the cache the offline preflight checked
+        bas.one = bas.make_one(cache_dir=os.environ['ONE_CACHE_DIR'])
+    print(f'ONE mode={bas.one.mode} cache={bas.one.cache_dir}', flush=True)
     t0, used, skipped = time.time(), 0, []
     for i, f in enumerate(files, 1):
         cache = np.load(f, allow_pickle=True).item()
         try:
             used += process(cache, sets, br, acc, args.min_trials)
         except Exception as e:  # one bad session should not kill the job
+            if is_missing_local_data(e, bas.one):
+                raise SystemExit(f'{f.name}: local data missing offline ({e!r}); no targets written')
             print(f'  [{i}/{len(files)}] {f.name} SKIP {e!r}', flush=True)
             skipped.append(f.name)
             continue

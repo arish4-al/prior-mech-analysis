@@ -98,6 +98,25 @@
 #   → OUT_TAG stageB_hold_newSbin56_mpre3_meancell_integ_<opt>_<arm>
 #     (dirs …_<mtype>_mask<slug>_s<seed>)
 #
+# Options 3 and 4 (2026-11-02, journals/stage_b_fit_variants.md): oldrule with
+# the movement cut at the mean slope over the 118 choice-significant regions
+# (panel_i_slope_mean_cut.py). S (10), S prior (5), P and the S RMS target are
+# the oldrule ones, so the newSbin s56 Stage A serves both.
+#   opt3_latemean      late slope > 0.0437 (mean) instead of 0.05   I 84  M 31
+#   opt4_overallmean   overall slope (amp_slope) > 12.5/s (mean)     I 91  M 24
+# Laptop (done): build_fit_targets_integ.py --opts opt3_latemean opt4_overallmean.
+# Then the traj targets (one job, after the offline preflight), then the full arm:
+#   STEP=targets OPTS="opt3_latemean opt4_overallmean" bash scripts/submit_fit_targets_integ.sh
+#   STEP=fits OPTS="opt3_latemean opt4_overallmean" STAGEB_ARMS=full \
+#     RETINAL_TAG=retinal_newSbin RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
+#   → OUT_TAG stageB_hold_newSbin56_full_mpre3_meancell_integ_<opt>
+#
+# No Alyx anywhere in this chain (2026-11-02, one_offline.py): fits and the
+# login-node hybrid build run with PRIOR_MECH_NO_ONE=1 (no ONE object); the
+# targets job opens ONE in local mode with Alyx blocked, and STEP=targets/all
+# first runs check_offline_inputs.py (every session's trial table on disk;
+# PREFLIGHT=0 skips it).
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -115,6 +134,11 @@ source "$REPO_DIR/scripts/sbatch_defaults.sh"
 STAGEB_TAG="${RETINAL_TAG#retinal_}"
 STAGEB_ARMS="${STAGEB_ARMS:-full}"
 export REPO_DIR OPTS RETINAL_TAG ONE_MODELS
+# No ONE object in the fits or in python run here (model_functions bypass).
+export ONE_CACHE_DIR="${ONE_CACHE_DIR:-${ONE_MODELS%/models}}"
+export PRIOR_MECH_NO_ONE=1
+PREFLIGHT="${PREFLIGHT:-1}"
+if [[ -f "$HOME/conda_envs/ibl/bin/python" ]]; then PY="$HOME/conda_envs/ibl/bin/python"; else PY=python3; fi
 
 _need_targets() {
   for o in $OPTS; do
@@ -134,6 +158,14 @@ _submit_targets() {
     TARGET_DIRS="$TARGET_DIRS fit_targets_integ/$o"
   done
   export TARGET_DIRS="${TARGET_DIRS# }"
+  if [[ "$PREFLIGHT" == "1" ]]; then
+    # Same check as the alt-null submit: ONE local, Alyx blocked; saves any
+    # missing session trial table from local files, fails if one needs Alyx.
+    echo "Offline preflight: check_offline_inputs.py (ONE_CACHE_DIR=$ONE_CACHE_DIR)"
+    PRIOR_MECH_NO_ONE=0 BLOCK_ALYX=1 ONE_MODE=local "$PY" -u scripts/check_offline_inputs.py \
+      --one-cache-dir "$ONE_CACHE_DIR" || {
+      echo "ERROR: offline preflight failed; targets job not submitted" >&2; exit 1; }
+  fi
   # A set other than the 10-28 pair gets its own plot/check dir (no overwrite).
   [[ "$OPTS" == "opt1_rawslope opt2_shuffleslope" ]] || export PLOT_DIR="${PLOT_DIR:-${ONE_MODELS%/models}/manifold/fit_targets_integ/${OPTS// /_}}"
   # shellcheck disable=SC2086
