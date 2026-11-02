@@ -243,6 +243,84 @@ Checks:
 - Skip summary: a log with a partial line still gives the right summary.
 - Dry runs: every job is on `mit_preemptable` with `--requeue`. That is 96 jobs for `ARM=sticky_prior_f12`, 41 for `harris_prior_f12` and 100 for `sticky`.
 
+## 2026-11-01f — run every alternative arm with and without the correction
+
+Decision: each Harris and sticky split is run twice, with `DEBIAS_EUC=1` (`…_debias`) and with `DEBIAS_EUC=0` (plain suffix), so the effect of the correction can be read off directly. The no-choice fix and product pooling are in both, so the new uncorrected files are not the Oct 19 ones.
+
+The θ prefit has finished on ORCD, so every sticky submit uses `PREFIT=0` and the shards load `{eid8}_fullsess` directly.
+
+| arm | `DEBIAS_EUC=1` | `DEBIAS_EUC=0` |
+|---|---|---|
+| Harris choice / stim-side prior / fully unsplit prior (12) | done 11-01 (11-01b) | rerun (`ARM=all` part) |
+| Harris f1/f2 prior (8) | `ARM=harris_prior_f12` | `ARM=harris_prior_f12` |
+| Sticky choice / stim-side prior / fully unsplit prior (12) | `ARM=sticky` | rerun (`ARM=all` part) |
+| Sticky f1/f2 prior (8) | `ARM=sticky_prior_f12` | `ARM=sticky_prior_f12` |
+
+With `CLEAR_STREAM=1` (the default), the uncorrected submits delete the old `_harris_unique` (Oct 19, no-choice bug) and `_pseudo_strat_sticky` (Oct 16/19, masked or unknown θ) results and checkpoints in `res_standard` on ORCD before they run. Local copies of the Oct 19 Harris files and the Oct 19 sticky prior files are in alyx `res_standard`.
+
+Dry runs (stubbed `sbatch`, `PREFIT=0`): `DEBIAS_EUC=0 ARM=all` gives 153 jobs (donor + 76 sticky + 76 Harris). Both f1/f2 sticky submits give 72 and both Harris f1/f2 submits give 41; `DEBIAS_EUC=1 ARM=sticky` gives 76. Every job is on `mit_preemptable` with `--requeue`, no prefit is submitted, and the suffixes are right. The dry run caught one bug on macOS bash 3.2: an empty `dep_flag` array under `set -u` fails. ORCD's bash is not affected; the expansion is now portable (`${dep_flag[@]+…}`).
+
+### Submission status (2026-11-01, evening)
+
+Submitted on ORCD:
+0. `DEBIAS_EUC=1 ARM=sticky` (with the prefit, before the `mit_preemptable` change): sticky, corrected, the 12 original splits. Job names `stdssc_*`, `stdsss_*`, `stdssn_*`.
+1. `DEBIAS_EUC=0 ARM=all PREFIT=0` (`main` `313d923`): sticky and Harris, uncorrected, the 12 original splits.
+2. `DEBIAS_EUC=0 ARM=sticky_prior_f12 PREFIT=0`: sticky f1/f2, uncorrected.
+
+The uncorrected sticky jobs in 1 have the same job names as 0. The two are told apart by `DEBIAS_EUC` in the submit line (`sacct -j <id> -o SubmitLine%400`) or by `_debias` in the shard log. Their cleanup did not touch 0's files: it only deletes the exact `_pseudo_strat_sticky` names, not `_pseudo_strat_sticky_debias`.
+
+The job submission limit stopped the rest. Still to submit, one at a time as queued jobs drain. Do not resubmit 0–2 while they are queued or running, because `CLEAR_STREAM=1` would wipe their checkpoints.
+3. `DEBIAS_EUC=0 ARM=harris_prior_f12` (41 jobs)
+4. `DEBIAS_EUC=1 ARM=sticky_prior_f12 PREFIT=0` (72 jobs)
+5. `DEBIAS_EUC=1 ARM=harris_prior_f12` (41 jobs)
+
+## 2026-11-02 — Alyx throttling incident; cluster jobs made offline
+
+**What happened.** The Harris and sticky shards from 11-01/02 throttled the IBL Alyx database for other users. All jobs were stopped on 11-02.
+
+The cluster ONE (3.5.2) defaults to remote mode. In that mode each `load_trials_and_mask(one, eid)` sends `/sessions?id=<eid>` and then the heavy `/sessions/<eid>`, which returns every dataset record. Three per-insertion loads bypassed the insertion cache:
+
+| since | code | load |
+|---|---|---|
+| 10-15 `5932d21` | `attach_standard_act_prior` | full session per insertion, per job, kept in memory only (every standard arm, shuffle included) |
+| 10-20 `587c3d4` | `_null_choice_fit` (`standard_act_prior`) | `truncate_to_pass=False` table per insertion per sticky split, loaded before the pickle is read |
+| 11-01 `9fc1f12` | θ prefit | 459 sessions over 24 parallel shards (it used to read `bwm_tables/trials.pqt`) |
+
+Estimated from the code and job counts:
+
+- ~1.4k requests per Harris split and ~2.6k per sticky split (about 696 insertions each).
+- About 120k over the 11-01/02 submits plus the Harris `_debias` rerun. About half were `/sessions/<eid>` reads.
+- Bursts came from about 200 shards starting together. Requeues added to the total.
+
+**Fix** (develop working tree, not committed):
+
+- `one_offline.py`: `make_one()` opens ONE with `mode='local'` inside Slurm (`SLURM_JOB_ID`), or when `BLOCK_ALYX=1`, which `sbatch_defaults.sh` now exports for every submit wrapper. It also blocks HTTP to `*.internationalbrainlab.org`. `AlyxBlockedError` is a `BaseException`, so `except Exception` loops cannot swallow it.
+- Every ONE construction in analysis code now goes through it: `block_analysis_allsplits`, `run_goal2_splits`, `run_crf_slope`, `run_var_partition`, `model_functions`, `analysis_functions`, `choicestim_analysis`, `fig45_block_peths`.
+- `_session_trials_full(eid, truncate_to_pass)`: one load per session per process (both probes, the act prior and the θ table share it).
+- `_aggregate_trials_table()` reads `bwm_tables/trials.pqt` once. `download_aggregate_tables` asked Alyx for S3 credentials on every call.
+- The job loop passes `eid`/`probe` to `build_insertion_cache` (no `pid2eid`).
+- Missing local data (`ALFError` while offline) now stops a job: the insertion, split, donor-bank and prefit loops re-raise it instead of skipping.
+- `scripts/check_offline_inputs.py`: loads every session's inputs offline (trial tables, aggregate table, θ pickles, donor bank). `submit_standard_alt_nulls_orcd.sh` runs it first and submits nothing if it fails (`PREFLIGHT=0` to skip).
+
+The analysis is unchanged: same rows and the same tables, only read from disk.
+
+**Checks (laptop):**
+
+- Offline full tables for the 7 cached insertions reproduce the cached masked trials exactly (all 3 saturation views).
+- With `SLURM_JOB_ID` set and a scratch cache, these ran with no Alyx request:
+  - donor-bank build;
+  - Harris (`choice_duringstim_l_block_l_act`, `act_block_duringstim_l`, debias);
+  - sticky (`act_block_duringstim_l`, 30-step θ);
+  - the full-session prefit.
+- The preflight stops the submit on the laptop (447/459 sessions not on disk) and sends nothing to `sbatch`.
+- With `PREFLIGHT=0`, the stubbed `sbatch` dry run gives the same 72 jobs as before.
+
+**Not verified:** whether ORCD's ONE cache has every session's trials on disk with cache tables that list them. The preflight answers this on the first submit. If any are missing, fetch them once in a single serial job, never from the shards.
+
+**Resubmit.** Use `CLEAR_STREAM=0 RESTART=1` for the stopped arms, so their atomic stream checkpoints resume.
+
+Guardrails: `AGENTS.md` "Cluster jobs never contact Alyx", and `.cursor/rules/no-alyx-in-cluster-jobs.mdc`.
+
 ## Rerun plan (Harris done 11-01; shuffle and sticky not started)
 
 All standard arms get rerun with `DEBIAS_EUC=1`, so they are scored on the same statistic. The uncorrected files stay as they are.

@@ -171,7 +171,8 @@ trial_split = {'choice':['choice left', 'choice right','pseudo'],
 # one = ONE(cache_dir='/om2/user/arily/int-brain-lab/ONE',
 #           base_url='https://openalyx.internationalbrainlab.org',
 #           password='international', silent=True)  # (mode='local')
-one = ONE(base_url='https://alyx.internationalbrainlab.org')
+from one_offline import make_one
+one = make_one(base_url='https://alyx.internationalbrainlab.org')
 ba = AllenAtlas()
 br = BrainRegions()
 

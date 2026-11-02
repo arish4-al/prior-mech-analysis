@@ -433,6 +433,8 @@ def _prefit_actkernel_sessions(restart=True, full_session=False,
                 str(eid), d.reset_index(drop=True), full_session=full_session)
             n_ok += 1
         except Exception as exc:  # noqa: BLE001
+            if ba.is_missing_local_data(exc, ba.one):
+                raise
             print(f'  skip {eid}: {exc}')
             n_skip += 1
         if (i + 1) % 10 == 0:
@@ -448,7 +450,7 @@ def _configure_one(cache_dir: str | None, base_url: str | None):
         kwargs['cache_dir'] = cache_dir
     if base_url:
         kwargs['base_url'] = base_url
-    ba.one = ONE(**kwargs) if kwargs else ONE()
+    ba.one = ba.make_one(**kwargs)
     ba.pth_res = Path(ba.one.cache_dir, 'manifold', 'res')
     ba.pth_res.mkdir(parents=True, exist_ok=True)
     ba.pth_stream_acc = ba.pth_res / '_stream_acc'

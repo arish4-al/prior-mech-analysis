@@ -293,7 +293,10 @@ class Loader:
             kw = dict(base_url=self.args.base_url, silent=True, cache_dir=str(self.root))
             if 'openalyx' in self.args.base_url:
                 kw['password'] = 'international'
-            self._one = ONE(**kw)
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from one_offline import make_one
+            self._one = make_one(**kw)
         return self._one
 
     def sess_trials(self, eid):

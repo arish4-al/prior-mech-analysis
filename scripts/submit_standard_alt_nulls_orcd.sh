@@ -28,6 +28,10 @@
 #                      are skipped. N_PREFIT_SHARDS (24; 459 eids, up to
 #                      ~17 min each) MEM_PREFIT (8G)
 #                      TIME_PREFIT (12:00:00)
+#   PREFLIGHT=0        skip the offline input check (default 1). Every job
+#                      runs with ONE offline and Alyx blocked (one_offline.py);
+#                      the check loads each session's inputs the same way and
+#                      stops the submit if any would need Alyx.
 #   PREFIT_DEP=j1:j2:… with PREFIT=0: sticky shards wait on prefit jobs
 #                      already queued by another submit (e.g. ARM=sticky,
 #                      then ARM=sticky_prior_f12), so two prefits never
@@ -55,6 +59,7 @@ RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 REBUILD_DONORS="${REBUILD_DONORS:-0}"
 PREFIT="${PREFIT:-1}"
+PREFLIGHT="${PREFLIGHT:-1}"
 N_PREFIT_SHARDS="${N_PREFIT_SHARDS:-24}"
 MEM_PREFIT="${MEM_PREFIT:-8G}"
 TIME_PREFIT="${TIME_PREFIT:-12:00:00}"
@@ -176,7 +181,7 @@ submit_arm() {
         --partition="$PARTITION" \
         --mem="$mem" --cpus-per-task="$CPUS_SHARD" --time="$tshard" \
         --job-name="${prefix}_${TAG}_s${k}" \
-        "${dep_flag[@]}" \
+        ${dep_flag[@]+"${dep_flag[@]}"} \
         --export=ALL,SPLIT="$sp",SHARD_IDX="$k",N_SHARDS="$shards",NRAND="$NRAND",RESTART="$RESTART",$EXPORT \
         scripts/run_goal2_shard_slurm.sh)
       SHARD_JOBS+=("$JID")
@@ -199,6 +204,24 @@ need_donors=0
 case "$ARM" in
   harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) need_donors=1 ;;
 esac
+
+if [[ "$PREFLIGHT" == "1" ]]; then
+  PF_ARGS=()
+  case "$ARM" in
+    sticky|sticky_prior_f12|all)
+      PF_ARGS+=(--sticky)
+      if [[ "$PREFIT" == "1" || -n "${PREFIT_DEP:-}" ]]; then
+        PF_ARGS+=(--no-pickle-check)
+      fi ;;
+  esac
+  [[ "$need_donors" == "1" ]] && PF_ARGS+=(--harris)
+  echo "Offline preflight: check_offline_inputs.py ${PF_ARGS[*]-}"
+  if ! "$PY" -u scripts/check_offline_inputs.py ${PF_ARGS[@]+"${PF_ARGS[@]}"} \
+      --one-cache-dir "$ONE_CACHE_DIR"; then
+    echo "ERROR: offline preflight failed; nothing submitted" >&2
+    exit 1
+  fi
+fi
 
 DONOR_JID=""
 if [[ "$need_donors" == "1" ]]; then

@@ -61,6 +61,23 @@ after `PARTITION` is set, and pass `$SBATCH_EXTRA` to every `sbatch`.
 `PARTITION=mit_preemptable` (or `mit_preem`) defaults `--requeue`.
 Cursor rule: `.cursor/rules/sbatch-preemptable-requeue.mdc`.
 
+### Cluster jobs never contact Alyx (since 2026-11-02)
+
+On 11-01/02 the standard-split Harris/sticky shards sent ~120k Alyx requests
+(remote-mode `load_trials_and_mask` per insertion in ~200 concurrent jobs) and
+throttled the database for other IBL users. Now:
+
+- Create ONE only through `make_one()` (`one_offline.py`). In Slurm it is
+  `mode='local'` and HTTP to Alyx raises `AlyxBlockedError`; submit wrappers
+  export `BLOCK_ALYX=1` (`scripts/sbatch_defaults.sh`).
+- Per-insertion / per-split code reads disk only. Missing local data stops
+  the job (`is_missing_local_data`), it does not skip the insertion.
+- `scripts/check_offline_inputs.py` runs before any standard alt-null submit.
+- Before pushing cluster code: one real insertion with `SLURM_JOB_ID=test`
+  through the changed path, and report Alyx requests per job × jobs (must be 0).
+
+Cursor rule: `.cursor/rules/no-alyx-in-cluster-jobs.mdc` (always applied).
+
 ### Phase 4b sanity check
 
 Before trusting new analysis paths, verify split-conditioned Phase 4b matches the retest:

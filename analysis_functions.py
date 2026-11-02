@@ -30,8 +30,9 @@ from PIL import Image
 
 ba = AllenAtlas()
 br = BrainRegions()
-one = ONE(base_url='https://openalyx.internationalbrainlab.org',
-          password='international', silent=True)
+from one_offline import make_one
+one = make_one(base_url='https://openalyx.internationalbrainlab.org',
+               password='international', silent=True)
           
 # get pooled results here
 meta_pth = Path(one.cache_dir, 'meta')

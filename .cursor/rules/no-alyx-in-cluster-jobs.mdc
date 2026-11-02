@@ -1,0 +1,25 @@
+---
+description: Cluster jobs never contact Alyx; every input comes from the ONE cache on disk
+alwaysApply: true
+---
+
+# No Alyx from cluster jobs
+
+Incident 2026-11-02: per-insertion `load_trials_and_mask` calls in remote-mode
+ONE sent ~120k requests from ~200 concurrent shards and throttled Alyx for
+other IBL users.
+
+- Build ONE with `make_one()` from `one_offline.py`, never `ONE()` directly.
+  Inside Slurm it is offline and HTTP to `*.internationalbrainlab.org` raises
+  `AlyxBlockedError`. Do not set `ALLOW_ALYX_IN_SLURM` or `ONE_MODE=remote`
+  for a fan-out job.
+- Loops must not swallow offline data errors (`is_missing_local_data`):
+  a missing file is a stop, not a skipped insertion.
+- Code a shard runs per insertion or per split reads disk only: the insertion
+  cache, `bwm_tables/*.pqt`, memoized tables. Never call `download_*`,
+  `pid2eid`, `one.search`, `one.alyx.*` there.
+- Before printing a submit command, `scripts/check_offline_inputs.py` must
+  pass (submit wrappers run it; `PREFLIGHT=0` only when the user says so).
+- Before pushing code that cluster jobs run, run one real insertion with
+  `SLURM_JOB_ID=test` (Alyx blocked) through the changed path, and state
+  "Alyx requests per job × jobs" in the summary. Nonzero is a stop.
