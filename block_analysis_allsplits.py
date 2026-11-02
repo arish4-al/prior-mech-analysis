@@ -4,6 +4,7 @@ This script is used to analyze prior sensitivity of all splits (e.g. different a
 
 from one.api import ONE
 from one_offline import make_one, is_missing_local_data
+from uuid import UUID
 from brainbox.singlecell import bin_spikes2D
 from brainwidemap import (bwm_query, load_good_units, 
                           load_trials_and_mask, bwm_units,
@@ -746,23 +747,52 @@ def _actkernel_fit_tag(eid, nb_steps=None, full_session=False):
 
 _full_trials_memo = {}
 _FULL_TRIALS_MEMO_MAX = 8
+_SESSION_MASK_COL = '__bwm_mask__'
 
 
-def _session_trials_full(eid, truncate_to_pass=True):
-    '''Unmasked ``load_trials_and_mask`` table, loaded once per process.
+def _session_trials_path(eid, truncate_to_pass=True):
+    return Path(one.cache_dir, 'manifold', 'session_trials',
+                f'{eid}_t{int(bool(truncate_to_pass))}.pqt')
 
-    Both probes of a session and every split in a job share one load.
-    Returns a copy, so callers may modify it.
+
+def _session_trials_and_mask(eid, truncate_to_pass=True):
+    '''Unmasked ``load_trials_and_mask`` table and its bad-trial mask.
+
+    Saved once per session under ``manifold/session_trials/{eid}_t{0|1}.pqt``
+    (``t1`` = ``truncate_to_pass``), so jobs read the saved table instead of
+    re-reading the ONE files. If the file is missing, load it (from local
+    files in Slurm jobs, see ``one_offline.py``) and save it atomically.
+    Within a process, both probes and every split share one read. Returns
+    copies, so callers may modify them. The table is revision 2024-07-14 (the
+    ``load_trials_and_mask`` default); delete the folder if that changes.
     '''
     key = (str(eid), bool(truncate_to_pass))
     if key not in _full_trials_memo:
         if len(_full_trials_memo) >= _FULL_TRIALS_MEMO_MAX:
             _full_trials_memo.pop(next(iter(_full_trials_memo)))
-        full, _mask = load_trials_and_mask(
-            one, key[0], saturation_intervals=None,
-            truncate_to_pass=key[1])
-        _full_trials_memo[key] = full
-    return _full_trials_memo[key].copy()
+        path = _session_trials_path(*key)
+        if path.exists():
+            full = pd.read_parquet(path)
+            mask = full.pop(_SESSION_MASK_COL).astype(bool)
+        else:
+            full, mask = load_trials_and_mask(
+                one, key[0], saturation_intervals=None,
+                truncate_to_pass=key[1])
+            mask = pd.Series(np.asarray(mask, dtype=bool), index=full.index)
+            out = full.copy()
+            out[_SESSION_MASK_COL] = mask.to_numpy()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f'{path.name}.tmp{os.getpid()}')
+            out.to_parquet(tmp)
+            os.replace(tmp, path)
+        _full_trials_memo[key] = (full, mask)
+    full, mask = _full_trials_memo[key]
+    return full.copy(), mask.copy()
+
+
+def _session_trials_full(eid, truncate_to_pass=True):
+    '''Unmasked trial table only (see ``_session_trials_and_mask``).'''
+    return _session_trials_and_mask(eid, truncate_to_pass)[0]
 
 
 def _full_session_trials_for_ak_fit(eid):
@@ -1911,8 +1941,7 @@ def build_standard_choice_donor_bank(restart=True):
     n_skip = 0
     for i, eid in enumerate(eids):
         try:
-            trials, base_mask = load_trials_and_mask(
-                one, eid, saturation_intervals=None)
+            trials, base_mask = _session_trials_and_mask(eid)
             pack = _standard_act_pack(trials)
             views = {}
             for key, st in (
@@ -3408,7 +3437,7 @@ def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
 
 def load_trials_for_saturation(one, eid, saturation_intervals):
     '''Trials + mask for one saturation key; safe when truncate_to_pass applies.'''
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    trials, base_mask = _session_trials_and_mask(eid)
     return _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals)
 
 
@@ -3432,8 +3461,8 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
     if restart and cpath.exists():
         return np.load(cpath, allow_pickle=True).item()
 
-    spikes, clusters = load_good_units(one, pid)
-    trials, base_mask = load_trials_and_mask(one, eid, saturation_intervals=None)
+    spikes, clusters = load_good_units(one, pid, eid=eid, pname=probe)
+    trials, base_mask = _session_trials_and_mask(eid)
     trials_by_satur = {}
     for st in satur_types:
         _, mask = _apply_saturation_mask(trials, base_mask, one, eid, st)
@@ -3441,15 +3470,20 @@ def build_insertion_cache(pid, satur_types=SATURATION_TYPES, save=True, restart=
 
     cache = {
         'pid': pid,
-        'eid': eid,
+        # UUID, as pid2eid returned when the existing caches were built.
+        'eid': UUID(str(eid)),
         'probe': probe,
         'spikes': {'times': spikes['times'], 'clusters': spikes['clusters']},
         'clusters': {'cluster_id': clusters['cluster_id'], 'atlas_id': clusters['atlas_id']},
         'trials': trials_by_satur,
     }
     if save:
+        # Atomic: shards of different splits may build the same insertion.
         cpath.parent.mkdir(parents=True, exist_ok=True)
-        np.save(cpath, cache, allow_pickle=True)
+        tmp = cpath.with_name(f'{cpath.name}.tmp{os.getpid()}')
+        with open(tmp, 'wb') as fh:
+            np.save(fh, cache, allow_pickle=True)
+        os.replace(tmp, cpath)
     return cache
 
 

@@ -7,7 +7,8 @@ way a Slurm job does (see ``one_offline.py``). For every BWM session it then
 loads the inputs a shard reads:
 
   * the unmasked trial table (standard act prior), and with ``--sticky`` the
-    ``truncate_to_pass=False`` table for the θ fit;
+    ``truncate_to_pass=False`` table for the θ fit. Each is saved under
+    ``manifold/session_trials/`` the first time, so jobs read the saved file;
   * ``bwm_tables/trials.pqt`` (saturation masks);
   * ``manifold/insertion_cache/{eid}_{probe}.npy`` (a missing one is rebuilt
     by the job from local files, so it is a warning, not an error);
@@ -74,10 +75,14 @@ def main():
         eids = eids[:args.limit]
     variants = [True] + ([False] if args.sticky else [])
     bad = {}
+    n_saved = n_present = 0
     for i, eid in enumerate(eids, 1):
         for trunc in variants:
+            had = ba._session_trials_path(eid, trunc).exists()
+            n_present += had
             try:
                 ba._session_trials_full(eid, truncate_to_pass=trunc)
+                n_saved += not had
             except AlyxBlockedError as exc:
                 bad[eid] = f'needed Alyx: {exc}'
             except Exception as exc:  # noqa: BLE001
@@ -90,6 +95,8 @@ def main():
                 bad.setdefault(eid, f'no θ pickle in {fit_dir}')
         if i % 50 == 0:
             print(f'  {i}/{len(eids)} sessions checked, {len(bad)} bad', flush=True)
+    print(f'session trial tables: {n_present} already saved, '
+          f'{n_saved} built and saved under manifold/session_trials/')
     for eid, why in bad.items():
         errors.append(f'{eid}: {why}')
 
