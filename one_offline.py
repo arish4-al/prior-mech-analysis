@@ -87,7 +87,15 @@ def is_missing_local_data(exc, one):
     this as a bad insertion and skip it, or results change silently.
     '''
     from one.alf.exceptions import ALFError
-    return bool(getattr(one, 'offline', False)) and isinstance(exc, ALFError)
+    if not getattr(one, 'offline', False):
+        return False
+    if isinstance(exc, ALFError):
+        return True
+    # ONE/brainbox calls that only work online, e.g. SpikeSortingLoader
+    # without eid/pname, or pid2eid without an insertions table.
+    msg = str(exc).lower()
+    return ('local mode' in msg or 'remote connection' in msg
+            or 'offline' in msg)
 
 
 def make_one(**kwargs):

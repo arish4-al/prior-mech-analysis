@@ -57,7 +57,9 @@ echo "SPLIT=$SPLIT shard=$SHARD_IDX/$N_SHARDS nrand=$NRAND"
 echo "session_shuffle=$SESSION_SHUFFLE_NULL actkernel=$ACTKERNEL_CHOICE_NULL mode=${ACTKERNEL_NULL_MODE:-default} late_sticky=$ACTKERNEL_LATE_STICKY standard_act_prior=${STANDARD_ACT_PRIOR:-0} pseudo_len_factor=${ACTKERNEL_PSEUDO_LEN_FACTOR:-1}"
 echo "SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-?} SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-?}"
 
-ARGS=(--splits "$SPLIT" --nrand "$NRAND" --no-save-cache
+# Save any insertion cache a shard has to build (atomic write), so later
+# jobs read it instead of rebuilding.
+ARGS=(--splits "$SPLIT" --nrand "$NRAND" --save-cache
       --shard-idx "$SHARD_IDX" --n-shards "$N_SHARDS" --no-finalize)
 [[ "$RESTART" == "1" ]] && ARGS+=(--restart) || ARGS+=(--no-restart)
 ARGS+=(--stream-pool)
