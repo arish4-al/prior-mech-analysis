@@ -18,3 +18,8 @@ if [[ -z "${SBATCH_EXTRA+x}" ]]; then
   esac
 fi
 export SBATCH_EXTRA
+
+# Keep the login node and every job off Alyx (one_offline.py): python run by
+# the submit wrapper (e.g. --list-splits) opens ONE offline, and sbatch
+# --export=ALL passes this on. Jobs are also blocked by SLURM_JOB_ID alone.
+export BLOCK_ALYX="${BLOCK_ALYX:-1}"

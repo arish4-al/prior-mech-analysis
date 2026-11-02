@@ -156,7 +156,8 @@ if _one_bypass_requested() and _ONE_CACHE_ENV:
 else:
     # one = ONE(base_url='https://openalyx.internationalbrainlab.org',
     #           password='international', silent=True)  # (mode='local')
-    one = ONE(base_url='https://alyx.internationalbrainlab.org')
+    from one_offline import make_one
+    one = make_one(base_url='https://alyx.internationalbrainlab.org')
     _one_cache_dir = Path(one.cache_dir)
 
 ba = AllenAtlas()

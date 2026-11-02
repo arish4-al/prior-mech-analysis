@@ -3,6 +3,7 @@ This script is used to analyze prior sensitivity of all splits (e.g. different a
 '''
 
 from one.api import ONE
+from one_offline import make_one, is_missing_local_data
 from brainbox.singlecell import bin_spikes2D
 from brainwidemap import (bwm_query, load_good_units, 
                           load_trials_and_mask, bwm_units,
@@ -534,7 +535,8 @@ for _split in GOAL3_C0_CHOICE_SPLITS:
 #           base_url='https://openalyx.internationalbrainlab.org',
 #           password='international', silent=True)  # (mode='local')
 # one = ONE(base_url='https://alyx.internationalbrainlab.org')
-one = ONE()
+# Offline (local mode, Alyx blocked) inside Slurm jobs; see one_offline.py.
+one = make_one()
 ba = AllenAtlas()
 br = BrainRegions()
 
@@ -742,6 +744,27 @@ def _actkernel_fit_tag(eid, nb_steps=None, full_session=False):
     return tag
 
 
+_full_trials_memo = {}
+_FULL_TRIALS_MEMO_MAX = 8
+
+
+def _session_trials_full(eid, truncate_to_pass=True):
+    '''Unmasked ``load_trials_and_mask`` table, loaded once per process.
+
+    Both probes of a session and every split in a job share one load.
+    Returns a copy, so callers may modify it.
+    '''
+    key = (str(eid), bool(truncate_to_pass))
+    if key not in _full_trials_memo:
+        if len(_full_trials_memo) >= _FULL_TRIALS_MEMO_MAX:
+            _full_trials_memo.pop(next(iter(_full_trials_memo)))
+        full, _mask = load_trials_and_mask(
+            one, key[0], saturation_intervals=None,
+            truncate_to_pass=key[1])
+        _full_trials_memo[key] = full
+    return _full_trials_memo[key].copy()
+
+
 def _full_session_trials_for_ak_fit(eid):
     '''Trial table for the ActionKernel θ fit under the standard pipeline.
 
@@ -750,9 +773,7 @@ def _full_session_trials_for_ak_fit(eid):
     ``truncate_to_pass`` is off, so a failing tail is not cut. The bad-trial
     mask is not applied.
     '''
-    full, _mask = load_trials_and_mask(
-        one, str(eid), saturation_intervals=None, truncate_to_pass=False)
-    return full
+    return _session_trials_full(eid, truncate_to_pass=False)
 
 
 def get_actkernel_choice_fit(eid, trials, nb_steps=None, full_session=False):
@@ -1531,7 +1552,7 @@ def attach_standard_act_prior(cache):
     eid = cache.get('eid')
     if eid is None:
         raise RuntimeError('standard act prior needs eid on the insertion cache')
-    full, _ = load_trials_and_mask(one, eid, saturation_intervals=None)
+    full = _session_trials_full(eid, truncate_to_pass=True)
     cache['standard_act'] = _standard_act_pack(full)
     return cache
 
@@ -1885,7 +1906,7 @@ def build_standard_choice_donor_bank(restart=True):
 
     df = bwm_query(one)
     eids = sorted(df['eid'].astype(str).unique())
-    all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+    all_trials = _aggregate_trials_table()
     bank = {}
     n_skip = 0
     for i, eid in enumerate(eids):
@@ -1910,6 +1931,8 @@ def build_standard_choice_donor_bank(restart=True):
                 raise InsufficientTrials('no usable stim or move view')
             bank[str(eid)] = {'standard_act': True, 'views': views}
         except Exception as exc:
+            if is_missing_local_data(exc, one):
+                raise
             n_skip += 1
             print(f'  skip {eid}: {exc}')
         if (i + 1) % 25 == 0 or (i + 1) == len(eids):
@@ -3330,6 +3353,25 @@ SATURATION_TYPES = (
 )
 
 
+_aggregate_trials = None
+
+
+def _aggregate_trials_table():
+    '''BWM aggregate trials table, read once from ``bwm_tables/trials.pqt``.
+
+    ``download_aggregate_tables`` asks Alyx for S3 credentials on every
+    call, even when the file is already on disk, so it is only called when
+    the file is missing.
+    '''
+    global _aggregate_trials
+    if _aggregate_trials is None:
+        path = Path(one.cache_dir, 'bwm_tables', 'trials.pqt')
+        if not path.exists():
+            path = download_aggregate_tables(one, type='trials')
+        _aggregate_trials = pd.read_parquet(path)
+    return _aggregate_trials
+
+
 def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
                            all_trials=None):
     '''
@@ -3343,7 +3385,7 @@ def _apply_saturation_mask(trials, base_mask, one, eid, saturation_intervals,
     read the parquet once.
     '''
     if all_trials is None:
-        all_trials = pd.read_parquet(download_aggregate_tables(one, type='trials'))
+        all_trials = _aggregate_trials_table()
     sess_trials = all_trials[all_trials['eid'] == str(eid)].copy()
     sess_trials.reset_index(drop=True, inplace=True)
     n_sess = trials.shape[0]
@@ -4779,10 +4821,14 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
             continue
 
         try:
-            cache = build_insertion_cache(pid, save=save_cache, restart=restart) if use_cache else None
+            cache = (build_insertion_cache(pid, save=save_cache, restart=restart,
+                                           eid=eid, probe=probe)
+                     if use_cache else None)
             if standard_act_prior and cache is not None:
                 attach_standard_act_prior(cache)
         except Exception as exc:
+            if is_missing_local_data(exc, one):
+                raise
             Fs.append(pid)
             gc.collect()
             print(k, 'of', len(eids_plus), 'fail (load)', pid, exc)
@@ -4818,6 +4864,8 @@ def get_all_d_vars_allsplits(splits_list, eids_plus=None, control=True,
                 if stream_pool:
                     _record_skip(split, eid_probe, exc, shard=shard_idx)
             except Exception as exc:
+                if is_missing_local_data(exc, one):
+                    raise
                 print('   split fail', split, pid, exc)
         del cache
         gc.collect()
@@ -4851,7 +4899,7 @@ def cache_all_insertions(eids_plus=None, restart=True):
     for k, (eid, probe, pid) in enumerate(eids_plus, 1):
         t0 = time.perf_counter()
         try:
-            build_insertion_cache(pid, restart=restart)
+            build_insertion_cache(pid, restart=restart, eid=eid, probe=probe)
             print(k, 'of', len(eids_plus), 'cached', round(time.perf_counter() - t0, 1), 'sec')
         except Exception as exc:
             Fs.append(pid)
@@ -5643,7 +5691,8 @@ def get_all_var_partition(eids_plus=None, regions=None, mapping='Beryl',
                 if cpath.exists():
                     cache = np.load(cpath, allow_pickle=True).item()
                 else:
-                    cache = build_insertion_cache(pid, restart=False)
+                    cache = build_insertion_cache(pid, restart=False,
+                                                  eid=eid, probe=probe)
             # Skip early if cache has no overlap with target regions.
             if cache is not None and regions is not None:
                 acs = np.array(br.id2acronym(cache['clusters']['atlas_id'],

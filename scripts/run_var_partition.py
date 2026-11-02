@@ -61,7 +61,7 @@ def _configure_one(cache_dir: str | None, base_url: str | None,
         kwargs['mode'] = 'local'
     elif base_url:
         kwargs['base_url'] = base_url
-    ba.one = _real_ONE(**kwargs)
+    ba.one = ba.make_one(**kwargs)
     ba.pth_res = Path(ba.one.cache_dir, 'manifold', 'res')
     ba.pth_res.mkdir(parents=True, exist_ok=True)
 

@@ -47,7 +47,7 @@ def _configure_one(cache_dir: str | None, base_url: str | None, local: bool):
         kwargs['mode'] = 'local'
     elif base_url:
         kwargs['base_url'] = base_url
-    ba.one = _real_ONE(**kwargs)
+    ba.one = ba.make_one(**kwargs)
 
 
 def main():
