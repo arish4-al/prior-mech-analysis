@@ -5,6 +5,13 @@ One row per **run tag** (the `OUT_TAG` in `weights_run_fj_<tag>_…`).
 Details, keep/drop, and plots live in the topic journals; this file is
 the index of **what was fit**.
 
+**Current focus (2026-11-01, user decision).** From now on, fitting uses the
+**original-rule C/M** (`get_sc_table` published parameters: C 85, M 30) with
+the **new 10-region S** (S prior VISal VISam LP PO ZI), i.e. target set
+`fit_targets_integ/oldrule/`, Stage A newSbin s56. The opt1 (raw slope) and
+opt2 (shuffle slope) target sets are no longer the default for new fits. See
+"Original-rule target set" (10-30f setup, 11-01 results) below.
+
 **Not in scope:** Stage A retinal-only (except as the hybrid source);
 smokes (`*_smoke`); clamp-only diagnostics that did not refit
 (`mleak_clamp`, `im_to_m_gate_clamp`, CRF-warp RT).
@@ -563,6 +570,76 @@ Per term for the best restart, plus opt2 s303 ft s45, which keeps the best behav
   - `regular`: mask 12|13, no S prior. Tag `stageB_hold_newSbin56_mpre3_meancell_integ_oldrule`.
   - A dry run with a stubbed `sbatch` gave 16 jobs with the right tags and `FIT_TARGETS_DIR`.
 - **Partition (same day).** `submit_fit_targets_integ.sh` now defaults to `mit_preemptable` and sources `sbatch_defaults.sh` at the top, so every job gets `--requeue`: targets, Stage A, selector and Stage B. `STEP=all` keeps `--requeue` next to its dependency flags. The selector is now requeue-safe. Before submitting Stage B it atomically creates `RANK_DIR/stageB_submitted_<opts>`, and a requeued run that finds the marker exits without submitting. `PARTITION=pi_fiete` restores the old behaviour.
+
+**Original-rule target set, results (2026-11-01).** All 16 fits (`full` and `regular`, 8 seeds each) `FIT_DONE`. Eval: the 10-30b protocol (own α_w/β_w stimuli, 4 draws 12345/1/2/3, m_pre_weight 1, overall = traj + prior + `L_S`), via `ARM=oldrule OWN_STIM=1 BEHAV=1 BEHAV_CACHE=0 GROUPS="newSbin56 newSbin56_regular" python scripts/_tmp_integ_newSbin56_eval_plots.py`. Both `_tmp_integ_*_eval_plots.py` modules now fall back to no fine-tune picks for an arm other than opt1/opt2. Outputs: `alyx/models/stageB_hold_newSbin56_integ_oldrule_eval_ownstim.json`, `…_plot_summary_ownstim.json`, behaviour in `…_oldrule_{full,regular}_plot_summary.json`; S / I/M / P / prior overlays and act-prior psychometric + RT in every run dir.
+- **Comparability.** S prior, `L_S` and the P traj share targets with opt1/opt2. C/M traj and C/M prior are scored against oldrule's own curves, so overall is not a like-for-like comparison of the I/M fit.
+- **Per seed (oldrule):**
+
+  | arm | seed | overall | traj (C / M / P) | S prior | C prior | M prior | `L_S` | S R² | psych / RT R² | g_i / d_i | g_s / d_s | g_m |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | full | **s7** | **1.133±0.121** | 0.454 (0.135 / 0.226 / 0.093) | 0.145 | 0.109 | 0.077 | 0.348 | 0.72 | 0.91 / 0.15 | 99 / 3.8 | ≈0 / 35.6 | 0.27 |
+  | full | s101 | 1.269±0.115 | 0.476 (0.188 / 0.208 / 0.081) | 0.208 | 0.059 | 0.133 | 0.393 | 0.70 | 0.35 / 0.46 | 195 / 8.0 | ≈0 / 16.0 | 6.7 |
+  | full | s45 | 1.380±0.187 | 0.592 (0.161 / 0.291 / 0.141) | 0.194 | 0.131 | 0.074 | 0.390 | 0.70 | 0.99 / 0.33 | 65 / 20.3 | 135 / 90.7 | 0.89 |
+  | full | s34 | 1.491±0.210 | 0.422 | 0.346 | 0.138 | 0.176 | 0.408 | 0.68 | 0.96 / 0.13 | 61 / 20.8 | ≈0 / 10.5 | ≈0 |
+  | full | s303 | 1.524±0.068 | 0.391 | 0.515 | 0.068 | 0.090 | 0.460 | 0.61 | 0.64 / 0.30 | 200 / 15.5 | 0.19 / ≈0 | ≈0 |
+  | full | s12 | 1.574±0.179 | 0.507 | 0.513 | 0.050 | 0.081 | 0.424 | 0.67 | 0.91 / 0.09 | 197 / 21.0 | ≈0 / ≈0 | ≈0 |
+  | full | s89 | 1.659±0.182 | 0.511 | 0.536 | 0.133 | 0.059 | 0.420 | 0.67 | 0.97 / −0.29 | 11 / 20.6 | ≈0 / ≈0 | ≈0 |
+  | full | s333 | 1.693±0.117 | 0.361 | 0.525 | 0.115 | 0.175 | 0.517 | 0.60 | 0.67 / 0.18 | 200 / 9.4 | ≈0 / 0.12 | ≈0 |
+  | regular | **s303** | **1.494±0.167** | 0.425 (0.118 / 0.187 / 0.120) | 0.519 | 0.082 | 0.070 | 0.398 | 0.68 | 0.95 / −0.09 | 190 / 21.5 | 0 / 0 | ≈0 |
+  | regular | s12 | 1.536±0.157 | 0.459 | 0.526 | 0.066 | 0.062 | 0.422 | 0.67 | 0.55 / −1.07 | 184 / 14.3 | 0 / 0 | ≈0 |
+  | regular | s34 | 1.559±0.141 | 0.456 | 0.499 | 0.086 | 0.094 | 0.423 | 0.67 | 0.81 / −0.12 | 177 / 18.2 | 0 / 0 | ≈0 |
+  | regular | s101 | 1.561±0.191 | 0.450 | 0.513 | 0.115 | 0.060 | 0.423 | 0.67 | 0.95 / −0.53 | 200 / 24.1 | 0 / 0 | 57 |
+  | regular | s333 | 1.581±0.197 | 0.490 | 0.510 | 0.118 | 0.040 | 0.422 | 0.67 | 0.98 / −0.34 | 103 / 20.0 | 0 / 0 | 0.08 |
+  | regular | s45 | 1.618±0.176 | 0.487 | 0.544 | 0.049 | 0.115 | 0.422 | 0.67 | 0.88 / 0.38 | 191 / 23.3 | 0 / 0 | ≈0 |
+  | regular | s7 | 1.623±0.178 | 0.563 | 0.528 | 0.066 | 0.044 | 0.422 | 0.67 | 0.98 / −0.03 | 186 / 20.4 | 0 / 0 | ≈0 |
+  | regular | s89 | 1.648±0.175 | 0.483 | 0.554 | 0.099 | 0.090 | 0.422 | 0.67 | 0.99 / 0.26 | 75 / 16.8 | 0 / 0 | 0.58 |
+
+  C and M prior = stim + move-aligned summed.
+- **Medians over 8 seeds** (opt1 / opt2 from 10-30e):
+
+  | target set | arm | overall | overall − S prior | traj | S prior | `L_S` | psych R² | RT R² |
+  |---|---|---|---|---|---|---|---|---|
+  | oldrule | full | **1.508** | 1.092 | 0.465 | 0.430 | 0.414 | 0.91 | **0.17** |
+  | opt1 | full | 1.654 | 1.159 | 0.484 | 0.457 | 0.423 | 0.88 | −0.19 |
+  | opt2 | full | 1.653 | 1.143 | 0.428 | 0.465 | 0.424 | 0.85 | −0.44 |
+  | oldrule | regular | 1.571 | 1.065 | 0.471 | 0.523 | 0.422 | 0.95 | −0.11 |
+  | opt1 | regular | 1.620 | 1.105 | 0.442 | 0.513 | 0.422 | 0.87 | −0.69 |
+  | opt2 | regular | 1.689 | 1.153 | 0.498 | 0.528 | 0.422 | 0.90 | −0.64 |
+
+**Findings.**
+- **Best overall is oldrule full s7 (1.133 ± 0.121)**, against opt1 s45 1.165 ± 0.073 and the opt2 gm0 ft s12→s7 1.190. The gap is inside one draw-sd, so this is a tie, not a win. s7 gets there differently from opt1 s45: the lowest S prior (0.145) and `L_S` (0.348, S R² 0.72) of any fit, through the d_s offset basin (d_s 35.6), but a worse trajectory (0.454 vs 0.366; C 0.135 vs 0.093).
+- **Medians favour oldrule in both arms** (full 1.51 vs 1.65; regular 1.57 vs 1.62 / 1.69). In the full arm most of it is the S prior and `L_S`, which have the same targets as opt1, so it reflects more seeds finding the d_s basin (s7, s101, s45, s34: 4 of 8, against 3 of 8 for opt1) rather than an easier I/M target. In the regular arm the gain is in C/M prior (traj is similar).
+- **The d_s basin again.** Every full fit with S prior < 0.35 has d_s 10–91. s45 is the first fit in any set to use g_s (135, with d_s 90.7); it pays in trajectory (M 0.291).
+- **Same move-aligned miss.** In s7 the model C prior falls over the last ~40 ms before the move while the data rises, and the model M prior overshoots stim-aligned (≈0.10 against 0.06–0.09 data). The move-aligned C trajectory flattens about 20 ms early (R² 0.97, M 0.99).
+- **Behaviour (held out, check only).** RT R² is better than for opt1/opt2: median 0.17 full (opt1 −0.19, opt2 −0.44) and −0.11 regular (−0.69 / −0.64); 6 of 8 full seeds positive. Psychometric is about the same (0.91 / 0.95), except full s101 (0.35), s303 (0.64), s333 (0.67).
+- **Regular arm without the S prior (same day, user ask).** The overall in the tables above includes the S prior, which a regular fit cannot move (g_s = d_s = 0, not in its fit loss). From now on regular fits are scored as overall − S prior (traj + C/M prior + `L_S`, per draw; `prior` = the sum of its five parts, checked). Same-seed full fits are compared on the same quantity. Ranking hardly changes:
+
+  | set | best regular (no S) | 2nd | median regular / full (no S) | best full (no S) |
+  |---|---|---|---|---|
+  | oldrule | s303 0.975 ± 0.137 | s12 1.009 | 1.065 / 1.092 | s7 0.988 |
+  | opt1 | s303 1.043 ± 0.097 | s34 1.043 | 1.105 / 1.159 | s45 0.936 |
+  | opt2 | s303 1.095 ± 0.144 | s101 1.117 (was s12) | 1.153 / 1.143 | s45 1.070 |
+
+  Without the S prior, oldrule regular s303 matches the best oldrule full fit (0.975 vs 0.988). The report (`stageB_hold_newS34_integ_ft_gm0_report`, regular table and pages) now uses this score; opt2's second page moves from s12 to s101.
+- **Regular arm** behaves as on opt1/opt2: retinal parameters stay at s56 (`L_S` 0.422, S R² 0.67) except s303 (`L_S` 0.398), S prior fixed at about 0.5–0.55, g_i 75–200.
+
+**Open.**
+- Score the oldrule fits on the opt1 targets (and the opt1 fits on oldrule's) to separate "better model" from "easier target".
+- s7 is a candidate for a gm0-style fine-tune aimed at the C move-aligned fall.
+
+**Prior-gain variants on oldrule, set up (2026-11-01).** Aim: which prior modulations the oldrule C/M + 10-region S data need. Five Stage B arms. Each freezes a set of g_/d_ at ≈0: frozen dims are filled with LOG_ZERO, not held at the warm start, since `--freeze-hold` is off. Everything else is as the oldrule `full`/`regular` runs:
+- **Fixed protocol:** target set `fit_targets_integ/oldrule`, warm start WEIGHTS_REL ∪ newSbin s56, `--stage1-hold-retinal`, `de_cma_local`, bps 20/20, m_pre_weight 3, window unset (~80 ms), stim×choice, seeds 7 12 34 45 89 101 303 333, `mit_preemptable` + `--requeue`.
+- **What the loss sees:** C/M/P trajectory, C/M prior and `L_S`. The S prior curve is in the loss unless both g_s and d_s are frozen (user rule, same day).
+
+| arm | `VARIANTS` | frozen ≈ 0 | free prior params | S prior in loss | tag suffix |
+|---|---|---|---|---|---|
+| `gs0gm0` | `full:7\|9\|12` | g_s, g_m, d_m | g_i, d_i, d_s | yes | `_oldrule_gs0gm0` |
+| `gm0` | `full:7\|9` | g_m, d_m | g_i, d_i, g_s, d_s | yes | `_oldrule_gm0` |
+| `gm0gs0` | `regular:7\|9\|12\|13` | g_m, d_m, g_s, d_s | g_i, d_i | **no** | `_oldrule_gm0gs0` |
+| `donly` | `full:6\|7\|12` | g_i, g_m, g_s | d_i, d_m, d_s | yes | `_oldrule_donly` |
+| `gonly` | `full:8\|9\|13` | d_i, d_m, d_s | g_i, g_m, g_s | yes | `_oldrule_gonly` |
+
+Indices: g_i 6, g_m 7, d_i 8, d_m 9, g_s 12, d_s 13. Full tag: `stageB_hold_newSbin56_mpre3_meancell_integ_oldrule_<arm>`; dirs `weights_run_fj_<tag>_<mtype>_mask<slug>_s<seed>`. Wired as `STAGEB_ARMS=<arm>` in `scripts/submit_fit_targets_integ.sh`. A dry run with a stubbed `sbatch` gave 40 jobs: 5 arms × 8 seeds, the masks and S-prior flags above, and `FIT_TARGETS_DIR=fit_targets_integ/oldrule`. When scoring, leave the S prior out of overall for `gm0gs0`, as for regular.
 
 **Report (2026-10-29).** A LaTeX summary of the four bold restarts (opt1 s45→s45, opt1 s7→s7, opt2 s12→s7, opt2 s303→s7) is at `alyx/models/stageB_hold_newS34_integ_ft_gm0_report/`. The folder holds `report.tex`, `report.pdf` (5 landscape pages), copies of the figures in `figs/<fit>/`, and `make_ft_report.py`, which rebuilds the `.tex` from the eval and plot-summary JSONs.
 - **Page 1:** the setup and this table's columns for the four fits.

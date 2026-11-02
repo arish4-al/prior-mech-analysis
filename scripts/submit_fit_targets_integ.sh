@@ -84,6 +84,20 @@
 #   STEP=fits OPTS=oldrule STAGEB_ARMS="full regular" RETINAL_TAG=retinal_newSbin \
 #     RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
 #
+# Prior-gain variants (2026-11-01, oldrule focus): each arm freezes a set of
+# g_/d_ at LOG_ZERO (≈0; frozen dims are filled with LOG_ZERO, not held at the
+# warm start). Same protocol as full/regular otherwise. g_i 6, g_m 7, d_i 8,
+# d_m 9, g_s 12, d_s 13. S prior in the loss iff g_s or d_s is free.
+#   gs0gm0  full:7|9|12          g_s = g_m = d_m = 0        (d_s only for S)
+#   gm0     full:7|9             g_m = d_m = 0
+#   gm0gs0  regular:7|9|12|13    g_m = d_m = g_s = d_s = 0  (no S prior)
+#   donly   full:6|7|12          g_i = g_m = g_s = 0        (offsets only)
+#   gonly   full:8|9|13          d_i = d_m = d_s = 0        (gains only)
+#   STEP=fits OPTS=oldrule STAGEB_ARMS="gs0gm0 gm0 gm0gs0 donly gonly" \
+#     RETINAL_TAG=retinal_newSbin RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
+#   → OUT_TAG stageB_hold_newSbin56_mpre3_meancell_integ_<opt>_<arm>
+#     (dirs …_<mtype>_mask<slug>_s<seed>)
+#
 # Do not submit from the laptop.
 
 set -euo pipefail
@@ -211,8 +225,22 @@ case "$STEP" in
               OUT_TAG="stageB_hold_${STAGEB_TAG}${rseed}_mpre3_meancell_integ_$o" \
               bash scripts/submit_fit_stage_b_mpre.sh
             ;;
+          gs0gm0|gm0|gm0gs0|donly|gonly)
+            case "$arm" in
+              gs0gm0) var="full:7|9|12";       stim=1 ;;
+              gm0)    var="full:7|9";          stim=1 ;;
+              gm0gs0) var="regular:7|9|12|13"; stim=0 ;;
+              donly)  var="full:6|7|12";       stim=1 ;;
+              gonly)  var="full:8|9|13";       stim=1 ;;
+            esac
+            FIT_TARGETS_DIR="fit_targets_integ/$o" M_PRE_WEIGHT=3 \
+              VARIANTS="$var" INCLUDE_STIM_PRIOR="$stim" \
+              OUT_TAG="stageB_hold_${STAGEB_TAG}${rseed}_mpre3_meancell_integ_${o}_$arm" \
+              bash scripts/submit_fit_stage_b_mpre.sh
+            ;;
           *)
-            echo "ERROR: STAGEB_ARMS arm '$arm' (use full or regular)" >&2; exit 1 ;;
+            echo "ERROR: STAGEB_ARMS arm '$arm' (use full, regular, gs0gm0, gm0, gm0gs0, donly or gonly)" >&2
+            exit 1 ;;
         esac
       done
     done
