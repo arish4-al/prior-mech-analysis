@@ -1340,9 +1340,13 @@ def _write_skip_summary(split, pooled_keys=()):
         if not path.exists():
             continue
         for line in path.read_text().splitlines():
-            if line.strip():
+            if not line.strip():
+                continue
+            try:
                 rec = json.loads(line)
-                skipped[rec['insertion']] = rec['reason']
+            except json.JSONDecodeError:
+                continue  # partial line from a job killed mid-write
+            skipped[rec['insertion']] = rec['reason']
     pooled = set(map(str, pooled_keys))
     skipped = {k: v for k, v in skipped.items() if k not in pooled}
     out = Path(pth_res, f'{name}_skipped.json')

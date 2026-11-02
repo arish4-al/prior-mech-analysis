@@ -12,14 +12,14 @@
 #   prior_stim — prior L vs R inside stim side (2).
 #   prior_none — prior L vs R with no stratum (2 fully unsplit).
 #   prior_f12 — prior L vs R inside stim × choice (8 Figure 4 f1/f2;
-#            Harris only, ARM=harris_prior_f12, not part of ARM=all).
+#            ARM=harris_prior_f12 / sticky_prior_f12, not part of ARM=all).
 #
 # Harris reads manifold/choice_donors_standard.npy (full-session kernel on
 # the donor, then the same mask and true-0.5 drop). The shuffle catalog in
 # res_standard/{split}.npy is left in place.
 #
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
-#   ARM=sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all
+#   ARM=sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
 #   PREFIT=0           skip the sticky θ prefit (default 1). The prefit fits
 #                      each session once on the full session-loader table
@@ -28,12 +28,19 @@
 #                      are skipped. N_PREFIT_SHARDS (24; 459 eids, up to
 #                      ~17 min each) MEM_PREFIT (8G)
 #                      TIME_PREFIT (12:00:00)
+#   PREFIT_DEP=j1:j2:… with PREFIT=0: sticky shards wait on prefit jobs
+#                      already queued by another submit (e.g. ARM=sticky,
+#                      then ARM=sticky_prior_f12), so two prefits never
+#                      fit the same session at once. Only for prefit jobs
+#                      still pending/running; once they are done, PREFIT=0
+#                      alone is enough
 #   DEBIAS_EUC=1       noise-corrected d_euc; outputs and CLEAR_STREAM use
 #                      {suffix}_debias, so uncorrected files are kept
 #   N_SHARDS=  MEM_SHARD=  TIME_SHARD=  override that arm's defaults
 #     (ARM=all applies one override to every arm)
 #
-# Defaults: choice 4 shards (sticky 12G, Harris 6G), stim-stratum prior
+# Defaults: choice 4 shards (sticky 12G, Harris 6G), f1/f2 prior sticky
+# 8 shards × 12G (Harris 4 × 8G), stim-stratum prior
 # 4 shards (sticky 12G, Harris 8G), no-stratum prior 12×16G. nrand=2000.
 # CLEAR_STREAM=1 clears only that arm's suffix under res_standard.
 
@@ -61,7 +68,10 @@ CPUS_FIN="${CPUS_FIN:-2}"
 MEM_DONORS="${MEM_DONORS:-16G}"
 CPUS_DONORS="${CPUS_DONORS:-2}"
 TIME_DONORS="${TIME_DONORS:-8:00:00}"
-PARTITION="${PARTITION:-pi_fiete}"
+# mit_preemptable: sbatch_defaults adds --requeue to every job. Shards resume
+# from their atomic stream checkpoint; the prefit refits any session whose
+# pickle is missing or unreadable.
+PARTITION="${PARTITION:-mit_preemptable}"
 # shellcheck disable=SC1091
 source "$REPO_DIR/scripts/sbatch_defaults.sh"
 
@@ -80,9 +90,9 @@ if [[ ! -d third_party/behavior_models/behavior_models ]]; then
 fi
 
 case "$ARM" in
-  sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) ;;
+  sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) ;;
   *)
-    echo "ERROR: ARM must be sticky|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all (got $ARM)" >&2
+    echo "ERROR: ARM must be sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all (got $ARM)" >&2
     exit 1
     ;;
 esac
@@ -202,8 +212,12 @@ if [[ "$need_donors" == "1" ]]; then
   echo "standard donor bank -> $DONOR_JID"
 fi
 
-PREFIT_DEP=""
-if [[ ( "$ARM" == "sticky" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
+PREFIT_DEP="${PREFIT_DEP:-}"
+if [[ "$PREFIT" == "1" && -n "$PREFIT_DEP" ]]; then
+  echo "ERROR: PREFIT_DEP is set; pass PREFIT=0 to wait on those jobs instead" >&2
+  exit 1
+fi
+if [[ ( "$ARM" == "sticky" || "$ARM" == "sticky_prior_f12" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
   PREFIT_JOBS=()
   for ((k=0; k<N_PREFIT_SHARDS; k++)); do
     # shellcheck disable=SC2086
@@ -217,6 +231,7 @@ if [[ ( "$ARM" == "sticky" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
     echo "sticky θ prefit (full session) shard $k/$N_PREFIT_SHARDS -> $JID"
   done
   PREFIT_DEP=$(IFS=:; echo "${PREFIT_JOBS[*]}")
+  echo "PREFIT_DEP=$PREFIT_DEP  (pass with PREFIT=0 to another sticky submit)"
 fi
 
 if [[ "$ARM" == "sticky" || "$ARM" == "all" ]]; then
@@ -232,6 +247,9 @@ if [[ "$ARM" == "harris_prior_stim" || "$ARM" == "all" ]]; then
 fi
 if [[ "$ARM" == "harris_prior_none" || "$ARM" == "all" ]]; then
   submit_arm standard_prior_harris_none harris 12 16G 12:00:00 stdhn
+fi
+if [[ "$ARM" == "sticky_prior_f12" ]]; then
+  submit_arm standard_prior_harris_f12 sticky 8 12G 12:00:00 stdssf
 fi
 if [[ "$ARM" == "harris_prior_f12" ]]; then
   submit_arm standard_prior_harris_f12 harris 4 8G 12:00:00 stdhf

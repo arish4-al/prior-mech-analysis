@@ -364,6 +364,28 @@ PRESETS = {
 }
 
 
+def _fit_pickles_ok(fit_dir):
+    """True when ``fit_dir`` holds a fit pickle that loads.
+
+    behavior_models writes the pickle in place, so a job killed mid-write
+    (preemption) leaves a truncated file that ``load_or_train`` would load
+    and fail on. Such a file is removed so the session is fit again.
+    """
+    import pickle
+    pkls = list(fit_dir.rglob('train_*.pkl'))
+    if not pkls:
+        return False
+    for pkl in pkls:
+        try:
+            with open(pkl, 'rb') as fh:
+                pickle.load(fh)
+        except Exception as exc:  # noqa: BLE001
+            print(f'  removing unreadable fit {pkl}: {exc}')
+            pkl.unlink()
+            return False
+    return True
+
+
 def _prefit_actkernel_sessions(restart=True, full_session=False,
                                shard_idx=None, n_shards=None):
     """MCMC-fit ActionKernel once per BWM eid; cache under actkernel_fits/.
@@ -396,7 +418,7 @@ def _prefit_actkernel_sessions(restart=True, full_session=False,
             if full_session:
                 tag = ba._actkernel_fit_tag(eid, full_session=True)
                 done = ba._actkernel_model_dir() / tag
-                if restart and any(done.rglob('train_*.pkl')):
+                if restart and _fit_pickles_ok(done):
                     n_ok += 1
                     continue
                 d = ba._full_session_trials_for_ak_fit(eid)
