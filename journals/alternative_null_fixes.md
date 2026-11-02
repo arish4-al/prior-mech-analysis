@@ -202,6 +202,47 @@ Checks:
 - On a fake standard bank with no-choice trials, the null runs for one stimOn split and one movement split. Every donor-stratum trial has the split's stim side and choice.
 - The shuffle `_regde` files for all 8 splits are local, for the comparison.
 
+## 2026-11-01d — sticky arm for the Figure 4 f1/f2 prior splits (set up, not run)
+
+Same 8 splits, contrast, stratum, windows and recipient labels as 11-01c. The null is the standard sticky arm: option 1 (strat) ActionKernel pseudo-session with copy-last, the same as the stim-side and fully unsplit sticky prior splits. For each draw:
+- Simulate a pseudo-session from the session's full-table θ (`{eid8}_fullsess`), at 1× the kept session plus the 90-trial warm-up.
+- Run the α=0.2 kernel on the full pseudo, then drop its 0.5 trials.
+- Remake the split's stim × choice cell on the kept pseudo trials (`_act_block_stream_mask`; simulated choices are ±1 only).
+- Take a contiguous window of prior labels the length of the real cell.
+
+No analysis code was needed: `_compute_control_D_actkernel_block` already does this for any act_block split name. Added:
+- `ARM=sticky_prior_f12` in `submit_standard_alt_nulls_orcd.sh`, reusing the `standard_prior_harris_f12` preset. 8 shards × 12G, 12 h. Not part of `ARM=all`.
+- It submits the same 24-job full-session θ prefit as `ARM=sticky`, and every shard waits on it.
+- `PREFIT_DEP=j1:j2:…` with `PREFIT=0` waits instead on prefit jobs that another sticky submit already queued, so two prefits never fit the same session at once. `PREFIT=1` together with `PREFIT_DEP` is refused. Each prefit submit prints its `PREFIT_DEP`.
+
+Checks:
+- Dry run, default: 64 jobs (24 prefit + 8 × (8 shards + finalize)). Every shard waits on all 24 prefit jobs, and there is no donor job. The exports are strat, copy-last, `STANDARD_ACT_PRIOR=1`, `DEBIAS_EUC=1`; the suffix is `_pseudo_strat_sticky_debias`.
+- Dry run with `PREFIT=0 PREFIT_DEP=…`: 40 jobs, no prefit, and all shards wait on the given IDs.
+- Dry run with `PREFIT=1 PREFIT_DEP=…`: exits before any `sbatch`.
+- Real insertion (`56956777…_probe01`, 20-step test θ, `nrand=20`):
+  - `act_block_duringstim_r_choice_r_f1` ran, with the prior on the full pseudo.
+  - Its cell is 120 of 200 kept trials, more than a 1× pseudo usually gives, so the length doubled to 2× after 425 draws without a long-enough cell. This is the documented growth rule, and the stim-side arm uses the same code, but it costs draws, hence 8 shards.
+  - The two f2 cells there were skipped by min 5 per side, as the shuffle also skips them.
+  - The test θ folder was removed.
+
+## 2026-11-01e — alternative-null jobs on `mit_preemptable` with requeue
+
+`submit_standard_alt_nulls_orcd.sh` now defaults to `PARTITION=mit_preemptable` (pass `PARTITION=pi_fiete` to override). `sbatch_defaults.sh` then adds `--requeue`, and every `sbatch` in the script passes it: donor, prefit, shards, finalize.
+
+What a requeued job does:
+- **Shards** resume from the stream checkpoint, which is written atomically (temp file, then `os.replace`). Insertions already pooled are skipped. An insertion that was skipped before (min trials, no donor) is tried again and skipped again.
+- **Finalize** reruns from the shard checkpoints.
+- **Donor job** (`REBUILD_DONORS=0`) reloads the cached bank.
+- **Prefit** skips sessions with a fit pickle. `behavior_models` writes that pickle in place, so a kill mid-write leaves a truncated file. The skip check (`_fit_pickles_ok`) now loads each pickle and deletes an unreadable one, so that session is fit again.
+- **Skip logs** are append-only. `_write_skip_summary` now ignores a partial last line instead of failing finalize.
+
+`CLEAR_STREAM` runs only in the submit wrapper, never on requeue.
+
+Checks:
+- Pickle check: a good pickle counts as done; a truncated one is removed and refit; a missing one is fit.
+- Skip summary: a log with a partial line still gives the right summary.
+- Dry runs: every job is on `mit_preemptable` with `--requeue`. That is 96 jobs for `ARM=sticky_prior_f12`, 41 for `harris_prior_f12` and 100 for `sticky`.
+
 ## Rerun plan (Harris done 11-01; shuffle and sticky not started)
 
 All standard arms get rerun with `DEBIAS_EUC=1`, so they are scored on the same statistic. The uncorrected files stay as they are.
