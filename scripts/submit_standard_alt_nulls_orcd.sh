@@ -28,7 +28,10 @@
 #                      are skipped. N_PREFIT_SHARDS (24; 459 eids, up to
 #                      ~17 min each) MEM_PREFIT (8G)
 #                      TIME_PREFIT (12:00:00)
-#   PREFLIGHT=0        skip the offline input check (default 1). Every job
+#   PREFLIGHT=1        run the offline input check first (default 0: it
+#                      passed on ORCD 2026-11-02 at 39cd06c, 459 sessions,
+#                      0 errors, ~13 min). Rerun it after the session
+#                      tables, θ pickles or donor bank change. Every job
 #                      runs with ONE offline and Alyx blocked (one_offline.py);
 #                      the check loads each session's inputs the same way and
 #                      stops the submit if any would need Alyx.
@@ -40,6 +43,9 @@
 #                      alone is enough
 #   DEBIAS_EUC=1       noise-corrected d_euc; outputs and CLEAR_STREAM use
 #                      {suffix}_debias, so uncorrected files are kept
+#   SKIP_SPLITS="a b"  space-separated split names not to submit (finished
+#                      runs); applies to every arm in this submit, and
+#                      CLEAR_STREAM leaves their files alone
 #   N_SHARDS=  MEM_SHARD=  TIME_SHARD=  override that arm's defaults
 #     (ARM=all applies one override to every arm)
 #
@@ -59,11 +65,12 @@ RESTART="${RESTART:-1}"
 CLEAR_STREAM="${CLEAR_STREAM:-1}"
 REBUILD_DONORS="${REBUILD_DONORS:-0}"
 PREFIT="${PREFIT:-1}"
-PREFLIGHT="${PREFLIGHT:-1}"
+PREFLIGHT="${PREFLIGHT:-0}"  # checked 2026-11-02 (39cd06c)
 N_PREFIT_SHARDS="${N_PREFIT_SHARDS:-24}"
 MEM_PREFIT="${MEM_PREFIT:-8G}"
 TIME_PREFIT="${TIME_PREFIT:-12:00:00}"
 DEBIAS_EUC="${DEBIAS_EUC:-0}"
+SKIP_SPLITS="${SKIP_SPLITS:-}"
 N_SHARDS_USER="${N_SHARDS:-}"
 MEM_SHARD_USER="${MEM_SHARD:-}"
 TIME_SHARD_USER="${TIME_SHARD:-}"
@@ -144,6 +151,21 @@ submit_arm() {
   if [[ "$DEBIAS_EUC" == "1" ]]; then suffix="${suffix}_debias"; fi
 
   list_splits "$preset"
+  if [[ -n "$SKIP_SPLITS" ]]; then
+    local keep=() sp2
+    for sp2 in "${SPLITS[@]}"; do
+      if [[ " $SKIP_SPLITS " == *" $sp2 "* ]]; then
+        echo "SKIP_SPLITS: not submitting $sp2${suffix}"
+      else
+        keep+=("$sp2")
+      fi
+    done
+    if [[ ${#keep[@]} -eq 0 ]]; then
+      echo "PRESET=$preset  suffix=$suffix: every split skipped"
+      return 0
+    fi
+    SPLITS=("${keep[@]}")
+  fi
   local RES_ROOT="$ONE_CACHE_DIR/manifold/res_standard"
   if [[ "$CLEAR_STREAM" == "1" ]]; then
     local ACC="$RES_ROOT/_stream_acc"
@@ -224,6 +246,12 @@ if [[ "$PREFLIGHT" == "1" ]]; then
 fi
 
 DONOR_JID=""
+DONOR_BANK="$ONE_CACHE_DIR/manifold/choice_donors_standard.npy"
+if [[ "$need_donors" == "1" && "$REBUILD_DONORS" == "0" && -s "$DONOR_BANK" ]]; then
+  # The job would only reload the bank; shards read it directly.
+  echo "Donor bank present, REBUILD_DONORS=0: no donor job ($DONOR_BANK)"
+  need_donors=0
+fi
 if [[ "$need_donors" == "1" ]]; then
   # shellcheck disable=SC2086
   DONOR_JID=$(sbatch --parsable $SBATCH_EXTRA \

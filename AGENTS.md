@@ -24,7 +24,9 @@ throttled the database for other IBL users. Now:
   export `BLOCK_ALYX=1` (`scripts/sbatch_defaults.sh`).
 - Per-insertion / per-split code reads disk only. Missing local data stops
   the job (`is_missing_local_data`), it does not skip the insertion.
-- `scripts/check_offline_inputs.py` runs before any standard alt-null submit.
+- `scripts/check_offline_inputs.py` passed on ORCD 2026-11-02 (`39cd06c`), so
+  submits default to `PREFLIGHT=0`. Rerun it (`PREFLIGHT=1`) after session
+  tables, θ pickles or the donor bank change.
 - Before pushing cluster code: one real insertion with `SLURM_JOB_ID=test`
   through the changed path, and report Alyx requests per job × jobs (must be 0).
 

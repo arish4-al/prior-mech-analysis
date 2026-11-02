@@ -18,8 +18,9 @@ other IBL users.
 - Code a shard runs per insertion or per split reads disk only: the insertion
   cache, `bwm_tables/*.pqt`, memoized tables. Never call `download_*`,
   `pid2eid`, `one.search`, `one.alyx.*` there.
-- Before printing a submit command, `scripts/check_offline_inputs.py` must
-  pass (submit wrappers run it; `PREFLIGHT=0` only when the user says so).
+- `scripts/check_offline_inputs.py` passed on ORCD 2026-11-02 (`39cd06c`);
+  submit wrappers default to `PREFLIGHT=0`. Pass `PREFLIGHT=1` after session
+  tables, θ pickles or the donor bank change.
 - Before pushing code that cluster jobs run, run one real insertion with
   `SLURM_JOB_ID=test` (Alyx blocked) through the changed path, and state
   "Alyx requests per job × jobs" in the summary. Nonzero is a stop.
