@@ -41,6 +41,11 @@ Workflow (same trials throughout, no odd/even split):
                     C_choice, M_choice (populations only)
   stage BS compute  S_stim / S_prior on S_cell only (re-selected S cells,
                     without redoing the other stage-B populations)
+  cluster-types     one type per C / M rastermap cluster (needs NEW_STACK)
+                    -> data/fig45/cell_types_cm_clusters.npy
+  stage CL compute  choice_* on each C / M cluster (--cell-types that file)
+  choice-clusters   C vs M choice sensitivity (stage A), and one figure per
+                    C / M cluster (stage CL)
   stack             merge shard accumulators + per-cell files, plots, summary
   compare           S: pool vs S_cell vs S_clus (stim, prior; 0-80 ms);
                     C / M: all vs choice-selected (choice, prior; stim and
@@ -73,8 +78,8 @@ import numpy as np
 
 from fig45_block_peths import (DEFAULT_ONE_CACHE, Loader, binned, insertion_list,
                                load_cell_types, shuffled_diffs, typed_spikes)
-from fig45_common import (CELL_TYPES, COLORS, NRAND, OUT_ROOT, PAPER_FIGS, STS, T_BIN,
-                          savefig_svg_png)
+from fig45_common import (CELL_TYPES, COLORS, NEW_STACK, NRAND, OUT_ROOT, PAPER_FIGS, STS,
+                          T_BIN, TYPES_DIR, savefig_svg_png)
 
 OUT = OUT_ROOT / 'cvTrue' / 'sensitivity'
 MIN_TRIALS = 5
@@ -97,6 +102,11 @@ S_POOL_CLUSTERS = list(range(22, 29))
 CM = ['integrator', 'move_all']
 CM_SEL = ['C_choice', 'M_choice']
 S_SEL = ['S_cell', 'S_clus']
+# rastermap clusters picked for C (integrator) and M (move_all), one type each
+_PICKS = json.loads((TYPES_DIR / 'cell_types_picks.json').read_text())
+CM_CLUSTERS = {'C': _PICKS['integrator'], 'M': _PICKS['move_all']}
+CL_TYPES = [f'rm{c}' for c in sorted(set(CM_CLUSTERS['C']) | set(CM_CLUSTERS['M']))]
+CL_CELL_TYPES = TYPES_DIR / 'cell_types_cm_clusters.npy'
 # stage -> analysis -> (population types, per-cell test pool or None)
 STAGES = {
     'A': {'S_stim': (['stimint'] + [f'rm{c}' for c in S_POOL_CLUSTERS], ['stimint']),
@@ -107,6 +117,7 @@ STAGES = {
           'choice_stim': (CM_SEL, None), 'choice_move': (CM_SEL, None),
           'prior_stim': (CM_SEL, None), 'prior_move': (CM_SEL, None)},
     'BS': {'S_stim': (['S_cell'], None), 'S_prior': (['S_cell'], None)},
+    'CL': {'choice_stim': (CL_TYPES, None), 'choice_move': (CL_TYPES, None)},
 }
 # comparison figure: population -> (stage, label, colour, line style)
 COMPARE = {
@@ -459,7 +470,7 @@ def cmd_compare(args):
     S pool / per cell / per cluster (0-80 ms), C / M all vs choice-selected."""
     from fig45_plot_distances import distance_stats
     pops = {s: np.load(stage_dir(args.out, s) / 'population.npy', allow_pickle=True).item()
-            for s in STAGES}
+            for s in STAGES if (stage_dir(args.out, s) / 'population.npy').exists()}
     layout = {'S': [['S_stim', 'S_prior']],
               'CM': [['choice_stim', 'choice_move'], ['prior_stim', 'prior_move']]}
     cdir = args.out / 'compare'
@@ -591,27 +602,78 @@ def _block_curve(pops, stage, name, typ):
     return md, sc, n
 
 
-def _badge(ax, letter, color, xy=(0.1, 0.9)):
-    ax.scatter(*xy, s=220, c=[color], transform=ax.transAxes, zorder=6,
-               clip_on=False, edgecolors='none')
-    ax.text(*xy, letter, transform=ax.transAxes, ha='center', va='center',
-            fontsize=8, zorder=7, clip_on=False)
+# Figure 4 house style (scripts/paper_figs/fig4): Helvetica, 11 pt ticks, Times
+# y labels, 26 pt panel letters, filled S / C / M circles, layout in points.
+FIG4_RC = {'font.family': 'Helvetica', 'svg.fonttype': 'none', 'pdf.fonttype': 42,
+           'axes.spines.top': False, 'axes.spines.right': False,
+           'xtick.labelsize': 11, 'ytick.labelsize': 11, 'axes.labelsize': 11}
+PAGE_W, PAGE_H = 759.276, 600.0  # pt; Figure 4 page width
+BADGE = {'S': '#57C1EB', 'C': '#F3D37A', 'M': '#E24A33'}
+INSET_BAND = 0.30  # top fraction of each distance panel kept free for badge + inset
 
 
-def _stars(hist, rows):
-    """rows: (y, sig). A star sits to the right of a significant reference line."""
-    from matplotlib.transforms import blended_transform_factory
-    trans = blended_transform_factory(hist.transAxes, hist.transData)
-    for y, sig in rows:
-        if sig:
-            hist.text(1.08, y, '*', transform=trans, ha='left', va='center',
-                      fontsize=11, clip_on=False)
+def _page(fig):
+    return tuple(fig.get_size_inches() * 72)
 
 
-def _draw_block_panel(ax, md, sc, color, win, stim=True, hist=None,
-                      badge=None, inset_loc='upper left'):
-    """Fig 4.5 distance panel. The blue offset mark is the first 5 samples."""
-    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+def _box(fig, x0, y0, x1, y1):
+    """Axes rect from a top-left-origin box in points."""
+    w, h = _page(fig)
+    return [x0 / w, 1 - y1 / h, (x1 - x0) / w, (y1 - y0) / h]
+
+
+def _overlay(fig):
+    w, h = _page(fig)
+    ax = fig.add_axes([0, 0, 1, 1], zorder=5)
+    ax.set_xlim(0, w)
+    ax.set_ylim(h, 0)
+    ax.axis('off')
+    ax.patch.set_alpha(0)
+    return ax
+
+
+def _badge(ov, x, y, letter, radius=9):
+    """Figure 4 circle label at (x, y) pt."""
+    ov.add_patch(plt.Circle((x, y), radius, facecolor=BADGE[letter], edgecolor='none',
+                            clip_on=False))
+    ov.text(x, y, letter, fontsize=12, ha='center', va='center',
+            color='white' if letter == 'M' else 'k', zorder=6)
+
+
+def _letter(fig, x, y, s):
+    w, h = _page(fig)
+    fig.text(x / w, 1 - y / h, s, fontsize=26, va='center', ha='left')
+
+
+def _xlabel(fig, x, y, s='time (ms)'):
+    w, h = _page(fig)
+    fig.text(x / w, 1 - y / h, s, fontsize=14, ha='center', va='top')
+
+
+def _style_ax(ax, yticks, ylabel=None):
+    ax.set_yticks(yticks)
+    ax.set_yticklabels([f'{v:g}'.replace('-', '\u2212') for v in np.round(yticks, 3)])
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=10, fontfamily='Times New Roman', labelpad=0)
+    for s in ('left', 'bottom'):
+        ax.spines[s].set_linewidth(0.8)
+    ax.tick_params(length=3, width=0.8)
+
+
+def _data_ticks(lo, hi, n=4):
+    """At most n round ticks inside [lo, hi]."""
+    from matplotlib.ticker import MaxNLocator
+    t = MaxNLocator(nbins=n, steps=[1, 2, 2.5, 5, 10]).tick_values(lo, hi)
+    return t[(t >= lo - 1e-9) & (t <= hi + 1e-9)]
+
+
+def _draw_block_panel(ax, md, sc, color, win, stim=True, hist=None, ylabel=None,
+                      show_x=True):
+    """Fig 4.5 distance panel. The blue offset mark is the first 5 samples.
+
+    Curves fill the lower 1 - INSET_BAND of the axes; the band above them holds
+    the badge and the shuffle-subtracted inset, so neither covers a curve.
+    """
     from fig45_plot_distances import GAIN_SKIP, OFFSET_WINDOW, distance_stats
     st = distance_stats(md, sc)
     x = time_axis_ms(win, len(md))
@@ -627,16 +689,26 @@ def _draw_block_panel(ax, md, sc, color, win, stim=True, hist=None,
         ax.plot(x[early - 1:], md[early - 1:], color=color, ls='--', lw=1.3)
     else:
         ax.plot(x, md, color=color, ls='--', lw=1.3)
+    curves = [md, sc[:80].ravel()]
     if st['offset'] != 0.0:
         ax.plot(x, st['shifted'], color=color, lw=1.5)
-    ins = inset_axes(ax, width='32%', height='30%', loc=inset_loc, borderpad=0.6)
+        curves.append(st['shifted'])
+    lo = min(c.min() for c in curves)
+    hi = max(c.max() for c in curves)
+    pad = 0.04 * (hi - lo)
+    lo, hi = lo - pad, hi + pad
+    ax.set_ylim(lo, lo + (hi - lo) / (1 - INSET_BAND))
+    _style_ax(ax, _data_ticks(lo, hi), ylabel)
+    ins = ax.inset_axes([0.34, 1 - INSET_BAND + 0.02, 0.64, INSET_BAND - 0.04])
     cm = sc.mean(0)
-    lo, hi = np.percentile(sc - cm, [2.5, 97.5], axis=0)
-    ins.fill_between(x, lo, hi, color='0.75', alpha=0.7, lw=0)
+    qlo, qhi = np.percentile(sc - cm, [2.5, 97.5], axis=0)
+    ins.fill_between(x, qlo, qhi, color='0.75', alpha=0.7, lw=0)
     ins.plot(x, md - cm, color=color, lw=0.8)
     ins.axhline(0, color='k', lw=0.4)
+    ins.set_xlim(x[0], x[-1])
     ins.set_xticks([])
     ins.set_yticks([])
+    ins.patch.set_alpha(0)
     for s in ins.spines.values():
         s.set_visible(False)
     if hist is not None:
@@ -666,54 +738,106 @@ def _draw_block_panel(ax, md, sc, color, win, stim=True, hist=None,
         hist.spines['left'].set_linewidth(0.8)
     ax.axvline(0, color='#57C1EB' if stim else '#e74c3c', lw=1.4)
     ax.set_xticks([0, 40, 80] if (stim and win[1] <= 0.1) else
-                  ([0, 40, 80, 120] if stim else [0, -40, -80, -120]))
-    ax.tick_params(labelsize=10)
-    for s in ('top', 'right'):
-        ax.spines[s].set_visible(False)
-    if badge:
-        _badge(ax, *badge)
+                  ([0, 50, 100, 150] if stim else [-150, -100, -50, 0]))
+    if not stim:
+        ax.set_xticklabels(['−150', '−100', '−50', '0'])
+    if not show_x:
+        ax.tick_params(axis='x', labelbottom=False)
     return st
 
 
-def _panel_letter(ax, letter):
-    ax.text(0.0, 1.01, letter, transform=ax.transAxes, fontsize=14,
-            fontweight='bold', va='bottom', ha='left', clip_on=False)
+def _stars(hist, rows, min_gap=0.07):
+    """rows: (y, sig). A star sits to the right of a significant reference line;
+    stars closer than ``min_gap`` (axes fraction) are spread apart."""
+    lo, hi = hist.get_ylim()
+    ys = sorted((y - lo) / (hi - lo) for y, sig in rows if sig)
+    groups = []
+    for y in ys:
+        if groups and y - groups[-1][-1] < min_gap:
+            groups[-1].append(y)
+        else:
+            groups.append([y])
+    ys = [np.mean(g) + min_gap * (i - (len(g) - 1) / 2)
+          for g in groups for i in range(len(g))]
+    for y in ys:
+        hist.text(1.08, y, '*', transform=hist.transAxes, ha='left', va='center',
+                  fontsize=11, clip_on=False)
 
 
-def _cap_ticks(ax):
-    """At most five labeled ticks, at the original's size."""
-    from matplotlib.ticker import MaxNLocator
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 5, 10]))
-    ax.tick_params(axis='both', labelsize=10)
+def _place_ylabels(fig, gap_pt=3):
+    """Put each y label ``gap_pt`` left of its tick labels (mathtext labels in
+    Times otherwise land on the tick numbers)."""
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    px = fig.dpi / 72
+    for ax in fig.axes:
+        lab = ax.yaxis.label
+        if not lab.get_text():
+            continue
+        ticks = [t.get_window_extent(r) for t in ax.get_yticklabels()
+                 if t.get_visible() and t.get_text()]
+        left = min(b.x0 for b in ticks) if ticks else ax.bbox.x0
+        w = lab.get_window_extent(r).width
+        lab.set_va('center')
+        lab.set_ha('center')
+        ax.yaxis.set_label_coords((left - gap_pt * px - w / 2 - ax.bbox.x0) / ax.bbox.width,
+                                  0.5)
 
 
-def _draw_schematic(ax):
-    """Panel d, black line drawing. Marks and fills are left for later."""
-    ax.set_xlim(-0.2, 10.2)
-    ax.set_ylim(0.2, 4.2)
-    ax.axis('off')
-    nodes = [(1.1, 1.7, 'P'), (4.0, 1.7, 'S'), (6.7, 1.7, 'C'), (9.2, 1.7, 'M')]
-    for x, y, lab in nodes:
-        ax.add_patch(plt.Circle((x, y), 0.52, fc='white', ec='k', lw=1.0, zorder=3))
-        ax.text(x, y, lab, ha='center', va='center', fontsize=10, color='k', zorder=4)
-    for x0, x1 in ((1.7, 3.4), (4.6, 6.1), (7.3, 8.6)):
-        ax.annotate('', xy=(x1, 1.55), xytext=(x0, 1.55),
-                    arrowprops=dict(arrowstyle='-|>', color='k', lw=1.0,
-                                    mutation_scale=8))
-    ax.text(2.55, 1.15, 'stim', ha='center', fontsize=7, color='k')
-    for x0, x1 in ((1.1, 4.0), (4.0, 6.7), (6.7, 9.2)):
-        ax.annotate('', xy=(x1 - 0.15, 2.35), xytext=(x0 + 0.15, 2.35),
-                    arrowprops=dict(arrowstyle='-', color='k', lw=0.7,
-                                    connectionstyle='arc3,rad=-0.35'))
+def _draw_raster(fig, ov, cache, box, strip_x, letters, labels):
+    """Row-binned raster in ``box`` (pt) with one colour strip per letter."""
+    from matplotlib.colors import PowerNorm
+    from matplotlib.patches import Rectangle
+    part = 'top' if labels else 'zoom'
+    img, n = cache[part], int(cache[f'n_{part}'])
+    ax = fig.add_axes(_box(fig, *box))
+    ax.imshow(img, cmap='gray_r', norm=PowerNorm(gamma=0.5, vmin=0, vmax=1.5),
+              aspect='auto', interpolation='antialiased', extent=(0, img.shape[1], n, 0))
+    h = 0
+    for short, w in zip(cache['seg_short'], cache['seg_lens']):
+        if h:
+            ax.axvline(h, ls='--', lw=0.4, color='grey')
+        if labels:
+            ax.text(h + w / 2, 1.02, short, rotation=90, ha='center', va='bottom',
+                    fontsize=7, transform=ax.get_xaxis_transform())
+        h += w
+    ax.set_xticks([])
+    ax.tick_params(axis='y', length=3, width=0.8, labelsize=9)
+    for s in ax.spines.values():
+        s.set_linewidth(0.6)
+    ax.spines['top'].set_visible(True)
+    ax.spines['right'].set_visible(True)
+    y0, y1 = box[1], box[3]
+    for L in letters:
+        for a, b in cache[f'{part}_{L}']:
+            ov.add_patch(Rectangle((strip_x[L] - 3, y0 + (y1 - y0) * a / n), 6,
+                                   (y1 - y0) * (b - a) / n, facecolor=BADGE[L],
+                                   edgecolor='none'))
+    return ax, n
+
+
+def _panel_a(fig, ov, cache_f):
+    if not cache_f.exists():
+        raise FileNotFoundError(f'{cache_f}: run scripts/fig45_panel_a.py first')
+    cache = np.load(cache_f)
+    strip_x = {'S': 318, 'C': 338, 'M': 358}
+    ax, n = _draw_raster(fig, ov, cache, (52, 62, 300, 262), strip_x, 'SCM', True)
+    ax.set_yticks([0, 50000], ['1', '50K'])
+    ax.set_ylabel('cell #', fontsize=11, labelpad=2)
+    for L, x in strip_x.items():
+        _badge(ov, x, 50, L, radius=8)
+    az, nz = _draw_raster(fig, ov, cache, (52, 276, 300, 372), strip_x, 'CM', False)
+    az.set_yticks([0, 10000, 20000], ['1', '10K', '20K'])
+    az.set_ylabel('C + M cells', fontsize=11, labelpad=2)
 
 
 def cmd_fig45(args):
     """Figure 4.5 in the published layout: a raster, b C/M 2x2, c S, d schematic, e C vs M.
 
     C and M are the act-block distance within stim x choice. S per cell is its
-    act-block distance within stim side, 0-80 ms.
+    act-block distance within stim side, 0-80 ms. Fonts, sizes and S / C / M
+    circles follow Figure 4 (scripts/paper_figs/fig4/fig4_plot.py).
     """
-    import matplotlib.image as mpimg
     from fig45_plot_distances import distance_stats
     pops = {s: np.load(stage_dir(args.out, s) / 'population.npy', allow_pickle=True).item()
             for s in STAGES if (stage_dir(args.out, s) / 'population.npy').exists()}
@@ -741,8 +865,6 @@ def cmd_fig45(args):
             'M_move': spec['prior_move']['win']}
     colors = {'S': '#5BA4D9', 'C_stim': '#f4d03f', 'C_move': '#f4d03f',
               'M_stim': '#e07a5f', 'M_move': '#e07a5f'}
-    badges = {'S': ('S', '#5BA4D9'), 'C_stim': ('C', '#f4d03f'), 'C_move': ('C', '#f4d03f'),
-              'M_stim': ('M', '#e07a5f'), 'M_move': ('M', '#e07a5f')}
     ylabels = {
         'S': r'$d^{\mathrm{prior},s}_{S}(t)$',
         'C_stim': r'$d^{\mathrm{prior},s}_{C}(t)$',
@@ -750,109 +872,265 @@ def cmd_fig45(args):
         'M_stim': r'$d^{\mathrm{prior},s}_{M}(t)$',
         'M_move': r'$d^{\mathrm{prior},m}_{M}(t)$',
     }
-    insets = {'S': 'lower right', 'C_stim': 'center right', 'C_move': 'lower left',
-              'M_stim': 'center right', 'M_move': 'upper left'}
     summary = {k: {'n': n, 'p_mean': distance_stats(md, sc)['p_mean'], 'offset_gain': o}
                for k, ((md, sc, n), o) in ((k, (curves[k], og[k])) for k in curves)}
 
-    fig = plt.figure(figsize=(13.2, 7.3))
-    grid = fig.add_gridspec(2, 1, height_ratios=[2.2, 1], hspace=0.38,
-                            left=0.02, right=0.99, top=0.96, bottom=0.06)
-    upper = grid[0].subgridspec(1, 2, width_ratios=[1.05, 1.05], wspace=0.16)
-    lower = grid[1].subgridspec(1, 3, width_ratios=[1.0, 2.2, 1.65], wspace=0.22)
+    with plt.rc_context(FIG4_RC):
+        fig = plt.figure(figsize=(PAGE_W / 72, PAGE_H / 72))
+        fig.patch.set_facecolor('white')
+        ov = _overlay(fig)
 
-    ax_a = fig.add_subplot(upper[0])
-    raster = mpimg.imread(OUT_ROOT / 'cvTrue' / 'plots' / 'panel_a_raster_test.png')
-    rgb = raster[..., :3] if raster.ndim == 3 else raster
-    ink = (rgb < 0.98).any(2) if rgb.ndim == 3 else rgb < 0.98
-    ys, xs = ink.any(1), ink.any(0)
-    y0, y1 = int(ys.argmax()), int(len(ys) - ys[::-1].argmax())
-    x0, x1 = int(xs.argmax()), int(len(xs) - xs[::-1].argmax())
-    ax_a.imshow(raster[y0:y1, x0:x1], aspect='auto')
-    ax_a.axis('off')
-    _panel_letter(ax_a, 'a')
+        # --- a: raster, colour strips S / C / M ---
+        _panel_a(fig, ov, OUT_ROOT / 'cvTrue' / 'plots' / 'panel_a_test.npz')
+        _letter(fig, 2, 18, 'a')
 
-    block = upper[1].subgridspec(2, 2, hspace=0.42, wspace=0.42)
-    slots = {'C_stim': block[0, 0], 'C_move': block[0, 1],
-             'M_stim': block[1, 0], 'M_move': block[1, 1]}
-    first_b = None
-    for key, slot in slots.items():
-        inner = slot.subgridspec(1, 2, width_ratios=[5.2, 0.9], wspace=0.12)
-        ax = fig.add_subplot(inner[0])
-        hist = fig.add_subplot(inner[1], sharey=ax)
-        md, sc, _ = curves[key]
-        _draw_block_panel(ax, md, sc, colors[key], wins[key],
-                          stim=not key.endswith('move'), hist=hist, badge=badges[key],
-                          inset_loc=insets[key])
-        ax.set_ylabel(ylabels[key], fontsize=10)
-        ax.set_xlabel('time (ms)', fontsize=10)
-        _cap_ticks(ax)
-        if first_b is None:
-            first_b = ax
-    _panel_letter(first_b, 'b')
-    apos = ax_a.get_position()
-    bpos = first_b.get_position()
-    # Panel c's ylabel sticks out of the figure and bbox-tight then pads a.
-    # Start a left of that so the raster sits on the left edge, short of b.
-    right = bpos.x0 - 0.14
-    x0 = -0.03
-    ax_a.set_position([x0, apos.y0, right - x0, apos.height])
-
-    inner = lower[0].subgridspec(1, 2, width_ratios=[5.2, 0.9], wspace=0.12)
-    ax_c = fig.add_subplot(inner[0])
-    hist_c = fig.add_subplot(inner[1], sharey=ax_c)
-    md, sc, _ = curves['S']
-    _draw_block_panel(ax_c, md, sc, colors['S'], wins['S'], stim=True,
-                      hist=hist_c, badge=badges['S'], inset_loc=insets['S'])
-    ax_c.set_ylabel(ylabels['S'], fontsize=10)
-    ax_c.set_xlabel('time (ms)', fontsize=10)
-    _cap_ticks(ax_c)
-    _panel_letter(ax_c, 'c')
-
-    egs = lower[2].subgridspec(1, 2, wspace=0.28)
-    amps = {}
-    ax_e0 = None
-    for i, (side, akey, bkey) in enumerate((('stim', 'C_stim', 'M_stim'),
-                                            ('move', 'C_move', 'M_move'))):
-        ax = fig.add_subplot(egs[i])
-        if ax_e0 is None:
-            ax_e0 = ax
-        for key in (akey, bkey):
+        # --- b: C / M, stim then move ---
+        cols = {'stim': (440, 538, 541, 556), 'move': (630, 728, 731, 746)}
+        rows = {'C': (40, 160), 'M': (196, 316)}
+        for key in ('C_stim', 'C_move', 'M_stim', 'M_move'):
+            L, side = key.split('_')
+            ax0, ax1, h0, h1 = cols[side]
+            y0, y1 = rows[L]
+            ax = fig.add_axes(_box(fig, ax0, y0, ax1, y1))
+            hist = fig.add_axes(_box(fig, h0, y0, h1, y1), sharey=ax)
             md, sc, _ = curves[key]
-            tr = md - sc.mean(0)
-            x = time_axis_ms(wins[key], len(tr))
-            ax.plot(x, tr, color=colors[key], lw=1.3)
-            amps.setdefault(side, {})[key[0]] = float(tr.max() - tr.min())
-        amps[side]['M_over_C'] = amps[side]['M'] / amps[side]['C']
-        ax.axvline(0, color='#57C1EB' if side == 'stim' else '#e74c3c', lw=1.4)
-        ax.set_xlabel('time (ms)', fontsize=10)
-        ax.set_xticks([0, 40, 80, 120] if side == 'stim' else [0, -40, -80, -120])
-        _cap_ticks(ax)
-        for s in ('top', 'right'):
-            ax.spines[s].set_visible(False)
-        tag = 's' if side == 'stim' else 'm'
-        ax.set_ylabel(rf'$d^{{\mathrm{{prior}},{tag}}}_{{\{{C,M\}}}}(t)$', fontsize=10)
-    _badge(ax_e0, 'C', '#f4d03f', (0.16, 0.88))
-    _badge(ax_e0, 'M', '#e07a5f', (0.30, 0.88))
-    _panel_letter(ax_e0, 'e')
+            _draw_block_panel(ax, md, sc, colors[key], wins[key], stim=side == 'stim',
+                              hist=hist, ylabel=ylabels[key], show_x=L == 'M')
+            _badge(ov, ax0 + 14, y0 + 0.15 * (y1 - y0), L)
+        for side, (ax0, ax1, _, _) in cols.items():
+            _xlabel(fig, (ax0 + ax1) / 2, 338)
+        _letter(fig, 392, 18, 'b')
 
-    savefig_svg_png(fig, odir / 'fig45_Spercell_Call_Mall', dpi=160)
-    plt.close(fig)
+        # --- c: S ---
+        y0, y1 = 430, 550
+        ax = fig.add_axes(_box(fig, 62, y0, 162, y1))
+        hist = fig.add_axes(_box(fig, 165, y0, 180, y1), sharey=ax)
+        md, sc, _ = curves['S']
+        _draw_block_panel(ax, md, sc, colors['S'], wins['S'], stim=True, hist=hist,
+                          ylabel=ylabels['S'])
+        _badge(ov, 62 + 14, y0 + 0.15 * (y1 - y0), 'S')
+        _xlabel(fig, 112, 572)
+        _letter(fig, 2, 410, 'c')
+
+        # --- e: C vs M, shuffle mean removed ---
+        amps = {}
+        boxes = {'stim': (485, 595), 'move': (650, 750)}
+        for side, akey, bkey in (('stim', 'C_stim', 'M_stim'), ('move', 'C_move', 'M_move')):
+            ax = fig.add_axes(_box(fig, boxes[side][0], y0, boxes[side][1], y1))
+            trs = []
+            for key in (akey, bkey):
+                md, sc, _ = curves[key]
+                tr = md - sc.mean(0)
+                x = time_axis_ms(wins[key], len(tr))
+                ax.plot(x, tr, color=colors[key], lw=1.3)
+                trs.append(tr)
+                amps.setdefault(side, {})[key[0]] = float(tr.max() - tr.min())
+            amps[side]['M_over_C'] = amps[side]['M'] / amps[side]['C']
+            lo, hi = min(t.min() for t in trs), max(t.max() for t in trs)
+            pad = 0.04 * (hi - lo)
+            lo, hi = lo - pad, hi + pad
+            ax.set_ylim(lo, lo + (hi - lo) / (1 - INSET_BAND))
+            tag = 's' if side == 'stim' else 'm'
+            _style_ax(ax, _data_ticks(lo, hi),
+                      rf'$d^{{\mathrm{{prior}},{tag}}}_{{\{{C,M\}}}}(t)$')
+            ax.axvline(0, color='#57C1EB' if side == 'stim' else '#e74c3c', lw=1.4)
+            if side == 'stim':
+                ax.set_xticks([0, 50, 100, 150])
+            else:
+                ax.set_xticks([-150, -100, -50, 0])
+                ax.set_xticklabels(['−150', '−100', '−50', '0'])
+            _xlabel(fig, sum(boxes[side]) / 2, 572)
+        x0 = boxes['stim'][0]
+        _badge(ov, x0 + 14, y0 + 0.15 * (y1 - y0), 'C')
+        _badge(ov, x0 + 36, y0 + 0.15 * (y1 - y0), 'M')
+        _letter(fig, 425, 410, 'e')
+
+        _place_ylabels(fig)
+        savefig_svg_png(fig, odir / 'fig45_Spercell_Call_Mall', dpi=200)
+        overlaps = _panel_overlaps(fig, ov)
+        plt.close(fig)
     summary['C_vs_M_amp'] = amps
+    summary['layout_overlaps'] = overlaps
     (odir / 'summary.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps({k: {'n': v['n'], 'p_mean': v['p_mean'],
                           'p_offset': v['offset_gain']['p_offset'],
                           'p_gain': v['offset_gain']['p_gain']}
-                      for k, v in summary.items() if k != 'C_vs_M_amp'}, indent=2))
+                      for k, v in summary.items() if isinstance(v, dict) and 'n' in v},
+                     indent=2))
     print('amp', amps)
+    print('overlapping axes (with labels):', overlaps or 'none')
     print('wrote', odir)
+
+
+def _panel_overlaps(fig, ov):
+    """Pairs of axes whose full extents (tick labels, axis labels) intersect.
+
+    Each axis is checked against axes outside its own panel unit (main + its
+    histogram, which share a y axis by design)."""
+    r = fig.canvas.get_renderer()
+    axes = [a for a in fig.axes if a is not ov and a.get_label() != '<inset>']
+    axes = [a for a in axes if not any(a is c for p in fig.axes for c in p.child_axes)]
+    ext = [a.get_tightbbox(r) for a in axes]
+    shared = lambda a, b: a.get_shared_y_axes().joined(a, b)
+    out = []
+    for i in range(len(axes)):
+        for j in range(i + 1, len(axes)):
+            if shared(axes[i], axes[j]):
+                continue
+            bi, bj = ext[i], ext[j]
+            w = min(bi.x1, bj.x1) - max(bi.x0, bj.x0)
+            h = min(bi.y1, bj.y1) - max(bi.y0, bj.y0)
+            if w > 0.5 and h > 0.5:
+                out.append([i, j, round(float(w), 1), round(float(h), 1)])
+    return out
+
+
+def _draw_schematic(ax):
+    """Panel d, black line drawing. Marks and fills are left for later."""
+    ax.set_xlim(-0.2, 10.2)
+    ax.set_ylim(0.2, 4.2)
+    ax.axis('off')
+    nodes = [(1.1, 1.7, 'P'), (4.0, 1.7, 'S'), (6.7, 1.7, 'C'), (9.2, 1.7, 'M')]
+    for x, y, lab in nodes:
+        ax.add_patch(plt.Circle((x, y), 0.52, fc='white', ec='k', lw=1.0, zorder=3))
+        ax.text(x, y, lab, ha='center', va='center', fontsize=10, color='k', zorder=4)
+    for x0, x1 in ((1.7, 3.4), (4.6, 6.1), (7.3, 8.6)):
+        ax.annotate('', xy=(x1, 1.55), xytext=(x0, 1.55),
+                    arrowprops=dict(arrowstyle='-|>', color='k', lw=1.0,
+                                    mutation_scale=8))
+    ax.text(2.55, 1.15, 'stim', ha='center', fontsize=7, color='k')
+    for x0, x1 in ((1.1, 4.0), (4.0, 6.7), (6.7, 9.2)):
+        ax.annotate('', xy=(x1 - 0.15, 2.35), xytext=(x0 + 0.15, 2.35),
+                    arrowprops=dict(arrowstyle='-', color='k', lw=0.7,
+                                    connectionstyle='arc3,rad=-0.35'))
+
+
+def cmd_cluster_types(args):
+    """Split integrator / move_all into one type per rastermap cluster."""
+    raw = np.load(NEW_STACK, allow_pickle=True).flat[0]
+    rm = dict(zip(raw['uuids'], raw['rm_labels']))
+    del raw
+    _, ct_raw = load_cell_types(args.cell_types or CELL_TYPES)
+    types = {}
+    for src in ('integrator', 'move_all'):
+        v = ct_raw['types'][src]
+        lab = np.array([rm[u] for u in v['uuids']])
+        for c in np.unique(lab):
+            m = lab == c
+            types[f'rm{c}'] = {k: v[k][m] for k in ('uuids', 'pid', 'ids', 'cluster_id')}
+    missing = set(CL_TYPES) - set(types)
+    if missing:
+        raise KeyError(f'clusters without cells: {sorted(missing)}')
+    out = {'source': str(NEW_STACK), 'picks': CM_CLUSTERS,
+           'types': {t: types[t] for t in CL_TYPES}, 'insertions': ct_raw['insertions']}
+    save_atomic(out, CL_CELL_TYPES)
+    for t in CL_TYPES:
+        print(t, len(out['types'][t]['uuids']), 'cells',
+              len(set(out['types'][t]['pid'])), 'insertions')
+    print('wrote', CL_CELL_TYPES)
+
+
+def _choice_trace(r, win):
+    """Distance minus shuffle mean and the shuffle 2.5-97.5 % band around it."""
+    from fig45_plot_distances import distance_stats
+    keys, md, sc = population_traces(r)
+    cm = sc.mean(0)
+    lo, hi = np.percentile(sc - cm, [2.5, 97.5], axis=0)
+    return dict(x=time_axis_ms(win, len(md)), y=md - cm, lo=lo, hi=hi,
+                n=int(np.median([r['n'][k] for k in keys])),
+                p_mean=distance_stats(md, sc)['p_mean'])
+
+
+def _choice_axes(fig, curves, colors):
+    """Two panels (stim, move); each curve gets its shuffle band."""
+    axs = [fig.add_axes(_box(fig, *b)) for b in ((70, 40, 235, 170), (300, 40, 465, 170))]
+    for ax, name in zip(axs, ('choice_stim', 'choice_move')):
+        stim = name == 'choice_stim'
+        for key, tr in curves[name].items():
+            ax.fill_between(tr['x'], tr['lo'], tr['hi'], color=colors[key], alpha=0.18, lw=0)
+            ax.plot(tr['x'], tr['y'], color=colors[key], lw=1.5)
+        ax.axhline(0, color='k', lw=0.5)
+        ax.axvline(0, color='#57C1EB' if stim else '#e74c3c', lw=1.4)
+        ys = np.concatenate([np.r_[t['y'], t['lo'], t['hi']] for t in curves[name].values()])
+        lo, hi = ys.min(), ys.max()
+        pad = 0.04 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+        ax.set_ylim(lo, lo + (hi - lo) / (1 - INSET_BAND))
+        tag = 's' if stim else 'm'
+        _style_ax(ax, _data_ticks(lo, hi), rf'$d^{{\mathrm{{choice}},{tag}}}(t)$')
+        if stim:
+            ax.set_xticks([0, 50, 100, 150])
+        else:
+            ax.set_xticks([-150, -100, -50, 0])
+            ax.set_xticklabels(['\u2212150', '\u2212100', '\u221250', '0'])
+    for ax in axs:
+        pos = ax.get_position()
+        _xlabel(fig, (pos.x0 + pos.x1) / 2 * _page(fig)[0], 192)
+    return axs
+
+
+def cmd_choice_clusters(args):
+    """Choice sensitivity (choice L vs R within stim x act block; stim 0-150 ms,
+    move -150-0 ms), distance minus shuffle mean: C vs M groups from stage A,
+    then one figure per C / M rastermap cluster from stage CL."""
+    odir = args.fig_dir or args.out / 'choice_clusters'
+    odir.mkdir(parents=True, exist_ok=True)
+    wins = {n: ANALYSES[n]['win'] for n in ('choice_stim', 'choice_move')}
+    size = (490 / 72, 215 / 72)
+    summary = {}
+    with plt.rc_context(FIG4_RC):
+        pop_a = np.load(stage_dir(args.out, 'A') / 'population.npy', allow_pickle=True).item()
+        curves = {n: {L: _choice_trace(pop_a[n][t], wins[n])
+                      for L, t in (('C', 'integrator'), ('M', 'move_all'))} for n in wins}
+        fig = plt.figure(figsize=size)
+        fig.patch.set_facecolor('white')
+        ov = _overlay(fig)
+        _choice_axes(fig, curves, {'C': '#f4d03f', 'M': '#e07a5f'})
+        _badge(ov, 84, 58, 'C')
+        _badge(ov, 106, 58, 'M')
+        _place_ylabels(fig)
+        savefig_svg_png(fig, odir / 'choice_C_vs_M', dpi=200)
+        plt.close(fig)
+        summary['groups'] = {n: {L: {'n_median': v['n'], 'p_mean': v['p_mean']}
+                                 for L, v in c.items()} for n, c in curves.items()}
+        f_cl = stage_dir(args.out, 'CL') / 'population.npy'
+        if not f_cl.exists():
+            print(f'{f_cl} missing: per-cluster figures skipped')
+        else:
+            pop = np.load(f_cl, allow_pickle=True).item()
+            cdir = odir / 'clusters'
+            for t in CL_TYPES:
+                c = int(t[2:])
+                L = 'C' if c in CM_CLUSTERS['C'] else 'M'
+                if not all(pop.get(n, {}).get(t, {}).get('n') for n in wins):
+                    print(f'{t}: no valid pairs, skipped')
+                    continue
+                cc = {n: {L: _choice_trace(pop[n][t], wins[n])} for n in wins}
+                fig = plt.figure(figsize=size)
+                fig.patch.set_facecolor('white')
+                ov = _overlay(fig)
+                _choice_axes(fig, cc, {L: '#f4d03f' if L == 'C' else '#e07a5f'})
+                _badge(ov, 84, 58, L)
+                fig.text(0.5, 1 - 14 / 215, f'cluster {c}', fontsize=12,
+                         ha='center', va='center')
+                _place_ylabels(fig)
+                savefig_svg_png(fig, cdir / f'choice_cluster{c:03d}_{L}', dpi=200)
+                plt.close(fig)
+                summary.setdefault('clusters', {})[t] = {
+                    'type': L, **{n: {'n_median': cc[n][L]['n'],
+                                      'p_mean': cc[n][L]['p_mean']} for n in wins}}
+    (odir / 'summary.json').write_text(json.dumps(summary, indent=2))
+    print(json.dumps(summary.get('groups'), indent=2))
+    print(len(summary.get('clusters', {})), 'cluster figures; wrote', odir)
 
 
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
     for name, fn in (('compute', cmd_compute), ('stack', cmd_stack), ('select', cmd_select),
-                     ('compare', cmd_compare), ('fig45', cmd_fig45)):
+                     ('compare', cmd_compare), ('fig45', cmd_fig45),
+                     ('cluster-types', cmd_cluster_types),
+                     ('choice-clusters', cmd_choice_clusters)):
         p = sub.add_parser(name)
         p.add_argument('--out', type=Path, default=OUT)
         p.add_argument('--cell-types', type=Path, default=None)
@@ -865,6 +1143,9 @@ def main():
                            help='S_cell = uncorrected S_stim p below this (no BH)')
         if name == 'fig45':
             p.add_argument('--fig-dir', type=Path, default=PAPER_FIGS / 'fig45')
+        if name == 'choice-clusters':
+            p.add_argument('--fig-dir', type=Path, default=None,
+                           help='default <out>/choice_clusters')
         if name == 'compute':
             p.add_argument('--shard', type=int, default=0)
             p.add_argument('--n-shards', type=int, default=1)

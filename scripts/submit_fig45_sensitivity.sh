@@ -11,8 +11,11 @@
 # Override: N_SHARDS=8 MEM_SHARD=8G PARTITION=mit_preemptable Q=0.05 \
 #   bash scripts/submit_fig45_sensitivity.sh
 #
-# S cells only (stage BS, no A / select): S_ONLY=1 OUT=<new dir> \
-#   CELL_TYPES_B=<select output> bash scripts/submit_fig45_sensitivity.sh
+# One extra stage only (no A / select), with its cell-type file:
+#   ONLY_STAGE=BS OUT=<new dir> CELL_TYPES_B=<select output> bash scripts/submit_fig45_sensitivity.sh
+#   ONLY_STAGE=CL OUT=<new dir> CELL_TYPES_B=data/fig45/cell_types_cm_clusters.npy \
+#     bash scripts/submit_fig45_sensitivity.sh
+# (S_ONLY=1 is ONLY_STAGE=BS.)
 
 set -euo pipefail
 
@@ -63,12 +66,13 @@ submit_one() {  # $1 job name, $2 dependency, $3 export extras
     --job-name="$1" --export="$COMMON,$3" scripts/run_fig45_sensitivity_slurm.sh
 }
 
-if [[ "${S_ONLY:-0}" == 1 ]]; then
-  [[ -f "${CELL_TYPES_B:?S_ONLY=1 needs CELL_TYPES_B}" ]] || {
+[[ "${S_ONLY:-0}" == 1 ]] && ONLY_STAGE=BS
+if [[ -n "${ONLY_STAGE:-}" ]]; then
+  [[ -f "${CELL_TYPES_B:?ONLY_STAGE needs CELL_TYPES_B}" ]] || {
     echo "missing $CELL_TYPES_B" >&2; exit 1; }
-  BS=$(submit_shards BS "$N_SHARDS_B" "")
-  echo "stage BS shards: $BS"
-  echo "stack BS: $(submit_one f45s_stackBS "$BS" "STEP=stack,STAGE=BS")"
+  X=$(submit_shards "$ONLY_STAGE" "$N_SHARDS_B" "")
+  echo "stage $ONLY_STAGE shards: $X"
+  echo "stack $ONLY_STAGE: $(submit_one "f45s_stack$ONLY_STAGE" "$X" "STEP=stack,STAGE=$ONLY_STAGE")"
   exit 0
 fi
 

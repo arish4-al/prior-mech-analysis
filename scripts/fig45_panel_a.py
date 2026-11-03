@@ -11,6 +11,9 @@ Rows: held-out half (``concat_z``) in ``isort`` order (fit on the train half).
 Zoom rows: rm clusters picked for move_all (M) / integrator (C) (from
 ``fig45_define_cell_types.py save``), in isort order.
 
+Also writes ``panel_a_<half>.npz`` (row-binned rasters, column segments,
+S / C / M row spans) for the composite in ``fig45_sensitivity.py fig45``.
+
 Usage (iblenv, outside sandbox):
   python scripts/fig45_panel_a.py [--half test|train]
 """
@@ -36,6 +39,27 @@ SHORT = {'quiescence': 'quies', 'block_change_s': 'change_b,s', 'stimLbLcL': 'LL
          'sLbLchoiceL': 'LLL,m', 'sLbRchoiceL': 'LLR,m', 'sRbRchoiceR': 'RRR,m',
          'sRbLchoiceR': 'RRL,m', 'mistake_m': 'mistake,m', 'choiceL': 'L move',
          'choiceR': 'R move'}
+# composite colour strips: S pool, C, M (one colour each)
+STRIP_TYPES = {'S': 'stimint', 'C': 'integrator', 'M': 'move_all'}
+MAX_ROWS = 2000
+
+
+def cache_path(half):
+    return OUT / 'plots' / f'panel_a_{half}.npz'
+
+
+def row_bin(X, max_rows=MAX_ROWS):
+    """Mean over consecutive row groups so at most ``max_rows`` remain."""
+    k = int(np.ceil(len(X) / max_rows))
+    n = len(X) // k * k
+    out = X[:n].reshape(-1, k, X.shape[1]).mean(1)
+    return np.vstack([out, X[n:].mean(0, keepdims=True)]) if n < len(X) else out
+
+
+def runs(mask):
+    """(start, stop) row spans where ``mask`` is True."""
+    d = np.diff(np.r_[0, mask.astype(np.int8), 0])
+    return np.c_[np.flatnonzero(d == 1), np.flatnonzero(d == -1)]
 
 
 def column_slice(lens):
@@ -99,6 +123,17 @@ def main():
                  f'{X.shape[0]} cells', fontsize=8)
     savefig_svg_png(fig, OUT / 'plots' / f'panel_a_raster_{args.half}', dpi=200)
     plt.close(fig)
+
+    zl = lab_sorted[rows] if zoom else lab_sorted[:0]
+    cache = dict(top=row_bin(X).astype(np.float32), n_top=len(X),
+                 zoom=row_bin(X[rows]).astype(np.float32) if zoom else np.zeros((0, X.shape[1])),
+                 n_zoom=len(zl), seg_keys=np.array(list(seg_lens)),
+                 seg_lens=np.array(list(seg_lens.values())),
+                 seg_short=np.array([SHORT.get(k, k) for k in seg_lens]))
+    for L, t in STRIP_TYPES.items():
+        cache[f'top_{L}'] = runs(np.isin(lab_sorted, picks.get(t, [])))
+        cache[f'zoom_{L}'] = runs(np.isin(zl, picks.get(t, [])))
+    np.savez_compressed(cache_path(args.half), **cache)
     print('wrote', OUT / 'plots')
 
 
