@@ -31,13 +31,16 @@ Workflow (same trials throughout, no odd/even split):
   stage A  compute  S_stim on the clusters 22-28 pool (whole pool, per cluster,
                     per cell); S_prior on the whole pool; choice_* / prior_*
                     on all of C and all of M (per-cell choice_*)
-  select            S_cell  = BH(q) over pool cells on S_stim
+  select            S_cell  = BH(q) over pool cells on S_stim (--s-cell-p P:
+                    uncorrected p < P instead)
                     S_clus  = clusters with BH(q) population S_stim p_mean
                     C_choice / M_choice = cells with BH(q) choice p (stim or
                     move window, BH over both windows jointly)
                     -> <out>/stageB_cell_types.npy
   stage B  compute  S_stim / S_prior on S_cell, S_clus; choice_* / prior_* on
                     C_choice, M_choice (populations only)
+  stage BS compute  S_stim / S_prior on S_cell only (re-selected S cells,
+                    without redoing the other stage-B populations)
   stack             merge shard accumulators + per-cell files, plots, summary
   compare           S: pool vs S_cell vs S_clus (stim, prior; 0-80 ms);
                     C / M: all vs choice-selected (choice, prior; stim and
@@ -103,6 +106,7 @@ STAGES = {
     'B': {'S_stim': (S_SEL, None), 'S_prior': (S_SEL, None),
           'choice_stim': (CM_SEL, None), 'choice_move': (CM_SEL, None),
           'prior_stim': (CM_SEL, None), 'prior_move': (CM_SEL, None)},
+    'BS': {'S_stim': (['S_cell'], None), 'S_prior': (['S_cell'], None)},
 }
 # comparison figure: population -> (stage, label, colour, line style)
 COMPARE = {
@@ -275,7 +279,7 @@ def cmd_compute(args):
             continue
         t0 = time.perf_counter()
         rng = np.random.default_rng([args.seed, uuid.UUID(pid).int % (2 ** 32),
-                                     ord(args.stage)])
+                                     int.from_bytes(args.stage.encode(), "big")])
         try:
             loaded = load(pid, cell_types, types)
             if loaded[7].any():
@@ -548,9 +552,12 @@ def cmd_select(args):
     _, ct_raw = load_cell_types(args.cell_types or CELL_TYPES)
     sel, info = {}, {}
     c = np.load(sdir / 'cells_S_stim.npy', allow_pickle=True).item()
-    sig = bh(c['p'], args.q)
+    if args.s_cell_p is None:
+        sig, rule = bh(c['p'], args.q), f'BH q={args.q}'
+    else:
+        sig, rule = c['p'] < args.s_cell_p, f'uncorrected p<{args.s_cell_p}'
     sel['S_cell'] = set(c['uuids'][sig])
-    info['S_cell'] = {'pool': len(c['uuids']), 'selected': int(sig.sum())}
+    info['S_cell'] = {'pool': len(c['uuids']), 'selected': int(sig.sum()), 'rule': rule}
     s_pop = summ['population']['S_stim']
     pc = {k: s_pop[f'rm{k}']['p_mean'] for k in S_POOL_CLUSTERS if f'rm{k}' in s_pop}
     ks = list(pc)
@@ -709,10 +716,10 @@ def cmd_fig45(args):
     import matplotlib.image as mpimg
     from fig45_plot_distances import distance_stats
     pops = {s: np.load(stage_dir(args.out, s) / 'population.npy', allow_pickle=True).item()
-            for s in STAGES}
+            for s in STAGES if (stage_dir(args.out, s) / 'population.npy').exists()}
     spec = {name: ANALYSES[name] for name in ('S_prior', 'prior_stim', 'prior_move')}
     curves = {
-        'S': _block_curve(pops, 'B', 'S_prior', 'S_cell'),
+        'S': _block_curve(pops, 'BS' if 'BS' in pops else 'B', 'S_prior', 'S_cell'),
         'C_stim': _block_curve(pops, 'A', 'prior_stim', 'integrator'),
         'C_move': _block_curve(pops, 'A', 'prior_move', 'integrator'),
         'M_stim': _block_curve(pops, 'A', 'prior_stim', 'move_all'),
@@ -854,6 +861,8 @@ def main():
             p.add_argument('--stage', choices=list(STAGES), required=True)
         if name == 'select':
             p.add_argument('--q', type=float, default=Q_FDR)
+            p.add_argument('--s-cell-p', type=float, default=None,
+                           help='S_cell = uncorrected S_stim p below this (no BH)')
         if name == 'fig45':
             p.add_argument('--fig-dir', type=Path, default=PAPER_FIGS / 'fig45')
         if name == 'compute':
