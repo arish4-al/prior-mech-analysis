@@ -11,11 +11,12 @@
 #SBATCH -o fig45_sens_%x_%j.out
 
 # fig45_sensitivity.py on ORCD (insertion cache + bwm_tables/trials.pqt).
-#   STEP=compute STAGE=A|B SHARD_IDX N_SHARDS   one shard (checkpointed; requeue-safe)
-#   STEP=stack   STAGE=A|B                      merge shards, plots, summary.json
+#   STEP=compute STAGE=A|B|BS SHARD_IDX N_SHARDS   one shard (checkpointed; requeue-safe)
+#   STEP=stack   STAGE=A|B|BS                      merge shards, plots, summary.json
 #   STEP=select                                 stage A -> stageB_cell_types.npy
 #   STEP=compare                                A + B -> compare/ (also run after stack B)
-# Env: NRAND, SEED, PRIOR (act), Q, OUT, CELL_TYPES, SOURCE
+# Env: NRAND, SEED, PRIOR (act), Q, OUT, CELL_TYPES, CELL_TYPES_B, SOURCE
+# CELL_TYPES_B: stage B/BS selection file (default <OUT>/stageB_cell_types.npy)
 
 set -euo pipefail
 
@@ -44,7 +45,8 @@ git log -1 --oneline
 case "$STEP" in
   compute)
     CT_ARGS=()
-    [[ "${STAGE:?}" == "A" ]] && CT_ARGS=(--cell-types "$CELL_TYPES")
+    if [[ "${STAGE:?}" == "A" ]]; then CT_ARGS=(--cell-types "$CELL_TYPES")
+    elif [[ -n "${CELL_TYPES_B:-}" ]]; then CT_ARGS=(--cell-types "$CELL_TYPES_B"); fi
     python3 -u fig45_sensitivity.py compute --stage "$STAGE" \
       --shard "${SHARD_IDX:?}" --n-shards "${N_SHARDS:?}" \
       --nrand "$NRAND" --seed "$SEED" --prior "$PRIOR" --source "$SOURCE" \

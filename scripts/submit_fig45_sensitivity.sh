@@ -10,6 +10,9 @@
 #
 # Override: N_SHARDS=8 MEM_SHARD=8G PARTITION=mit_preemptable Q=0.05 \
 #   bash scripts/submit_fig45_sensitivity.sh
+#
+# S cells only (stage BS, no A / select): S_ONLY=1 OUT=<new dir> \
+#   CELL_TYPES_B=<select output> bash scripts/submit_fig45_sensitivity.sh
 
 set -euo pipefail
 
@@ -36,6 +39,7 @@ source "$REPO_DIR/scripts/sbatch_defaults.sh"
   echo "missing $ONE_CACHE_DIR/bwm_tables/trials.pqt" >&2; exit 1; }
 
 COMMON="ALL,ONE_CACHE_DIR=$ONE_CACHE_DIR,OUT=$OUT,CELL_TYPES=$CELL_TYPES,NRAND=$NRAND,PRIOR=$PRIOR,Q=$Q"
+[[ -n "${CELL_TYPES_B:-}" ]] && COMMON="$COMMON,CELL_TYPES_B=$CELL_TYPES_B"
 echo "PARTITION=$PARTITION N_SHARDS=$N_SHARDS/$N_SHARDS_B NRAND=$NRAND PRIOR=$PRIOR Q=$Q OUT=$OUT"
 
 submit_shards() {  # $1 stage, $2 n_shards, $3 dependency ("" for none)
@@ -44,7 +48,7 @@ submit_shards() {  # $1 stage, $2 n_shards, $3 dependency ("" for none)
   for ((k=0; k<$2; k++)); do
     # shellcheck disable=SC2086
     ids+=("$(sbatch --parsable $SBATCH_EXTRA --partition="$PARTITION" \
-      --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" "${dep_arg[@]}" \
+      --mem="$MEM_SHARD" --cpus-per-task="$CPUS_SHARD" ${dep_arg[@]+"${dep_arg[@]}"} \
       --job-name="f45s_$1_s${k}" \
       --export="$COMMON,STEP=compute,STAGE=$1,SHARD_IDX=$k,N_SHARDS=$2" \
       scripts/run_fig45_sensitivity_slurm.sh)")
@@ -58,6 +62,15 @@ submit_one() {  # $1 job name, $2 dependency, $3 export extras
     --mem="$MEM_STACK" --cpus-per-task=2 --dependency=afterok:"$2" \
     --job-name="$1" --export="$COMMON,$3" scripts/run_fig45_sensitivity_slurm.sh
 }
+
+if [[ "${S_ONLY:-0}" == 1 ]]; then
+  [[ -f "${CELL_TYPES_B:?S_ONLY=1 needs CELL_TYPES_B}" ]] || {
+    echo "missing $CELL_TYPES_B" >&2; exit 1; }
+  BS=$(submit_shards BS "$N_SHARDS_B" "")
+  echo "stage BS shards: $BS"
+  echo "stack BS: $(submit_one f45s_stackBS "$BS" "STEP=stack,STAGE=BS")"
+  exit 0
+fi
 
 A=$(submit_shards A "$N_SHARDS" "")
 echo "stage A shards: $A"
