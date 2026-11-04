@@ -16,6 +16,9 @@
 #   ONLY_STAGE=CS OUT=<new dir> CELL_TYPES_B=data/fig45/cell_types_cm_choice_p01.npy
 #   ONLY_STAGE=CL OUT=<new dir> CELL_TYPES_B=data/fig45/cell_types_cm_clusters.npy \
 #     bash scripts/submit_fig45_sensitivity.sh
+#   ONLY_STAGE=RM N_SHARDS_B=20 OUT=<new dir> CELL_TYPES_B=data/fig45/cell_types_rm100.npy \
+#     bash scripts/submit_fig45_sensitivity.sh
+#   (all 100 rastermap clusters as regions; shards split the clusters; stack runs select-rm)
 # (S_ONLY=1 is ONLY_STAGE=BS.)
 
 set -euo pipefail
