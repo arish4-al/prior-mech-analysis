@@ -11,9 +11,9 @@
 #SBATCH -o fig45_sens_%x_%j.out
 
 # fig45_sensitivity.py on ORCD (insertion cache + bwm_tables/trials.pqt).
-#   STEP=compute STAGE=A|B|BS|CL|CS|RM SHARD_IDX N_SHARDS   one shard (checkpointed; requeue-safe;
-#                                                           RM shards split clusters, not insertions)
-#   STEP=stack   STAGE=A|B|BS|CL|CS|RM   merge shards, plots, summary.json (RM: + select-rm)
+#   STEP=compute STAGE=A|B|BS|CL|CS|RM|RS SHARD_IDX N_SHARDS   one shard (checkpointed; requeue-safe;
+#                                                           RM / RS shards split clusters)
+#   STEP=stack   STAGE=A|B|BS|CL|CS|RM|RS merge shards, plots, summary.json (RM: + select-rm)
 #   STEP=select                                 stage A -> stageB_cell_types.npy
 #   STEP=compare                                A + B -> compare/ (also run after stack B)
 # Env: NRAND, SEED, PRIOR (act), Q, OUT, CELL_TYPES, CELL_TYPES_B, SOURCE

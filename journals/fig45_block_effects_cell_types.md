@@ -23,6 +23,11 @@ Outputs live under `<dmn>/res/fig45/` with
 
 ---
 
+
+<!-- plot stim responding cells in raster -->
+<!-- check percentage of prior modulations?? -->
+<!-- quantification of contextualization in sequence/tornado cells -->
+
 ## What each panel is
 
 | Panel | Analysis | Data / function |
@@ -551,3 +556,226 @@ The loader in `fig45_block_peths.py` (shared with `fig45_sensitivity.py`) now fo
 3. Drop trials whose true `probabilityLeft` is 0.5, using the saved true block. The act label is written on after that, so the drop is not a filter on the overwritten column.
 
 Finished `dmn/res/fig45` and `manifold/res/fig45` files were built with all six saturation keys and with true-0.5 trials left in the pools. They are not this trial table.
+
+## 2026-11-02 — standard trial table rerun (Oct 20) and S cells at uncorrected p < 0.01
+
+**Oct 20 run, not journaled until now.** The full sensitivity chain was rerun on ORCD on the 10-19 trial table (commit `587c3d4` or later) with nrand 2000. A local copy is in alyx `dmn/res/sensitivity_standard/` (stageA, stageB, compare, fig45). Of 513 insertions, Stage A finished all of them. BH at q 0.05 now keeps **0** S cells (54 on the old table). 34 cells sit at the 5e-4 floor, and BH would need about 36. So panel c of that figure is the whole S pool (clusters 22–28, 3,624 cells): offset 0.10 (p 0.0005), gain 0.042 (p 0.008). C_choice is 129 and M_choice 1,461 (160 / 1,688 before). C and M prior stay significant in both windows. M/C amplitude is 0.75 (stim) and 0.95 (move).
+
+**S cells without BH (user, 11-02).** Uncorrected S_stim p < 0.01 keeps **119** of 3,632 pool cells across 71 insertions; chance alone predicts about 36. Other thresholds: p < 0.05 → 343 (182 expected), p < 0.005 → 82 (18), p < 0.001 → 49 (4).
+
+- **Code** (`ebadd93` develop, `bcddf95` main):
+  - `select --s-cell-p P` sets S_cell to cells with uncorrected p < P. BH is still the default, and the rule is written to `stageB_selection.json`.
+  - New stage `BS` runs S_stim / S_prior on S_cell only, so the other stage-B populations are not recomputed.
+  - `fig45` takes S from BS when it is present.
+  - Submit with `S_ONLY=1 CELL_TYPES_B=...`.
+  - The selection is in the repo as `data/fig45/stageB_cell_types_Sp01.npy`.
+- **Run:** ORCD, 4 shards. All 71 insertions done, 0 failures. Locally run with `SLURM_JOB_ID=test BLOCK_ALYX=1`, it made 0 HTTP requests. Output: alyx `dmn/res/sensitivity_standard_Sp01/stageBS/`. stageA and stageB there are symlinks to `sensitivity_standard/`.
+
+S prior, stimOn 0–80 ms, act block L vs R within stim side:
+
+| S population | cells | offset (p) | gain (p) |
+|---|---|---|---|
+| old table, BH | 53 | 0.52 (0.0005) | 0.082 (0.098) |
+| standard table, whole pool | 3,624 | 0.10 (0.0005) | 0.042 (0.008) |
+| standard table, p < 0.01 | 119 | 0.33 (0.0005) | 0.117 (0.0035) |
+
+On the p < 0.01 set, both offset and gain are significant, so the S mark on the schematic would be ✓ / ✓. Panels b and e are the same as the Oct 20 run.
+
+**Caveats.**
+- About 30% of the 119 are expected false positives.
+- Selection uses the same trials as the prior test; the contrasts differ (stim side vs block within stim side).
+
+**Figures:**
+- res_standard (p < 0.01 S): `<oa>/manifold/paper_figs/fig45/res_standard/fig45_Spercell_Call_Mall.{svg,png}` and `summary.json`. The same figure is also in `sensitivity_standard_Sp01/fig45/`.
+- Whole-pool S version: `sensitivity_standard/fig45/`.
+- `paper_figs/fig45/` itself is still the Oct 14 old-table figure.
+
+```bash
+python scripts/fig45_sensitivity.py fig45 \
+    --out ~/Downloads/ONE/alyx.internationalbrainlab.org/dmn/res/sensitivity_standard_Sp01 \
+    --fig-dir ~/Downloads/ONE/openalyx.internationalbrainlab.org/manifold/paper_figs/fig45/res_standard
+```
+
+## 2026-11-02b — Figure 4 styling; choice sensitivity of the C / M rastermap clusters
+
+**Restyle (develop `38d5f08`, main `3220f4b`).** `fig45_sensitivity.py fig45` now matches Figure 4.
+
+- **Layout and fonts:** the 759 pt page width with a point grid. Helvetica throughout: 11 pt ticks, 14 pt "time (ms)" labels, 26 pt panel letters. y labels are Times and are placed clear of the tick labels.
+- **Circles and ticks:** S/C/M are drawn as Figure 4's filled circles. Time ticks are 0/50/100/150 and −150/−100/−50/0.
+- **Panel a:**
+  - Drawn from `dmn/res/fig45/cvTrue/plots/panel_a_test.npz`, which `fig45_panel_a.py` writes (rows binned to 2,000).
+  - It used to show 1 px tick marks, with no S and M in three colours. It now has solid S (clusters 22–28), C and M strips.
+- **No overlaps:** each distance panel keeps its top 30% clear for the circle and the inset. Each draw checks the full axis extents and writes the result to `summary.json` as `layout_overlaps` (empty).
+- Redrawn: `paper_figs/fig45/res_standard/` and `sensitivity_standard_Sp01/fig45/`.
+
+**Choice sensitivity of the C / M clusters (user, 11-02).**
+
+- **Contrast:** choice L vs R within stim × act block. stimOn 0–150 ms and move −150–0 ms, standard trial table, nrand 2000.
+- **Trace:** distance minus the shuffle mean, with the 2.5–97.5 % shuffle band.
+- **Code:**
+  - `cluster-types` builds one type per rastermap cluster from the concat stack: 35 clusters (C 22–27; M = the 29 `move_all` clusters), 296–1,243 cells each, saved in `data/fig45/cell_types_cm_clusters.npy`.
+  - Stage `CL` runs choice_* on each cluster.
+  - `choice-clusters` draws the plots.
+  - Submit with `ONLY_STAGE=CL`.
+- **Groups — plotted.** Stage A of the Oct 20 run, C (`integrator`) vs M (`move_all`) overlaid. Output: alyx `dmn/res/sensitivity_standard_clusters/choice_clusters/choice_C_vs_M.{svg,png}`.
+  - Both are at p_mean 0.0005 in both windows.
+  - The two are about the same up to roughly 60 ms after stimOn. After that M rises above C: about 0.43 vs 0.19 at 150 ms, and about 0.65 vs 0.25 at movement onset.
+- **Per cluster — code ready, not yet run.**
+  - Each cluster will get its own figure: stim and move panels, with its C or M circle. Output: `choice_clusters/clusters/choice_cluster<k>_<C|M>`.
+  - Needs stage CL on ORCD over the same 513 insertions as Stage A. A local check (3 cached insertions plus 1 uncached, Alyx blocked) made 0 HTTP requests.
+  - Then copy `stageCL/` into `sensitivity_standard_clusters/` and rerun `choice-clusters`.
+
+```bash
+ONLY_STAGE=CL OUT=$ONE_CACHE_DIR/dmn/res/fig45/cvTrue/sensitivity_standard_clusters \
+  CELL_TYPES_B=$PWD/data/fig45/cell_types_cm_clusters.npy bash scripts/submit_fig45_sensitivity.sh
+```
+
+**Fix.** `compare` loads only the stages that exist. After stage BS was added, stack B in a full chain would have crashed on the missing `stageBS`.
+
+## 2026-11-03 — per-cluster choice (stage CL); choice-selected C / M cells (stage CS); panel e on the selected cells
+
+**Runs.** Both ran on ORCD with nrand 2000, on the standard trial table (Oct 20 Stage A). No failures in either.
+
+| stage | insertions | output |
+|---|---|---|
+| CL | 513 / 513 | alyx `dmn/res/sensitivity_standard_clusters/stageCL/` |
+| CS | 378 / 378 | alyx `dmn/res/sensitivity_standard_cmsel/stageCS/` |
+
+**Per-cluster choice (CL).** One figure per cluster in `sensitivity_standard_clusters/choice_clusters/clusters/choice_cluster<k>_<C|M>`.
+- 34 of the 35 C / M clusters are choice-significant in both windows. Most are at the 0.0005 floor; M clusters 17, 81 and 90 have stim-window p of 0.004–0.013.
+- The exception is **M cluster 80** (about 131 cells/pair): p 0.99 stim, 0.89 move. It has no choice signal.
+- End peak and slope were not computed per cluster (user asked for groups only).
+
+**Choice-selected cells (user, 11-03; options confirmed).**
+- **Selection:** per-cell choice tests from Stage A (choice L vs R within stim × act block), uncorrected p < 0.01.
+  - Figure 2's BH 0.01 keeps no cells: the per-cell p floor at nrand 2000 is 5e-4.
+  - **C_sel** = C clusters 22–27 with p < 0.01 in the stim (0–150 ms) or move (−150–0 ms) window: 325 of 3,271 cells, about 65 expected by chance.
+  - **M_sel** = the 29 M clusters with p < 0.01 in the move window only: 1,885 of 18,418, about 184 expected by chance.
+  - Selection file: `data/fig45/cell_types_cm_choice_p01.npy` (`select-cm --p 0.01`).
+- **Stage CS:** choice_* and prior_* on both sets.
+- **Choice shape:** Figure 2's `compute_amp_slope` definitions on the raw choice distance, values only (user). These are per-cell-normalised units, so Figure 2's regional slope cuts do not apply.
+
+| set | window | cells/pair | end peak | late slope (20 bins) | overall slope /s | peak |
+|---|---|---|---|---|---|---|
+| C_sel | stim | 280 | no | 0.0006 | 7.7 | 152 ms |
+| C_sel | move | 281 | no | −0.0041 | 7.9 | −15 ms |
+| M_sel | stim | 1,547 | yes | 0.0383 | 13.5 | 154 ms |
+| M_sel | move | 1,556 | yes | 0.0603 | 19.6 | 4 ms |
+| C all | stim / move | 2,765 / 2,771 | no / no | −0.0018 / 0.0014 | 2.7 / 2.8 | 119 / −9 ms |
+| M all | stim / move | 14,265 / 14,334 | yes / yes | 0.0154 / 0.0224 | 4.1 / 5.6 | 154 / 4 ms |
+
+- **C_sel** has the integrator shape: an early rise, then a plateau; around movement it peaks about 15 ms before onset and dips.
+- **M_sel** has the movement shape: it ramps into movement with an end peak in both windows.
+- In the move window C_sel is above M_sel until about −70 ms.
+
+**Prior on the selected cells.** Offset and gain as in panel b, with the move offset taken from stim. Every p is at or near the floor.
+
+| set | offset (p) | gain stim (p) | gain move (p) |
+|---|---|---|---|
+| C_sel | 0.22 (0.0005) | 0.12 (0.001) | 0.14 (0.0005) |
+| M_sel | 0.13 (0.0005) | 0.18 (0.0005) | 0.23 (0.0005) |
+| C all | 0.06 (0.0005) | 0.036 (0.006) | 0.039 (0.001) |
+| M all | 0.05 (0.0005) | 0.069 (0.0005) | 0.068 (0.0005) |
+
+- The selected cells carry about 3–4× the prior signal of their clusters.
+- C_sel has the larger offset (early prior, by about 40 ms after stimOn).
+- M_sel has the larger gain (builds toward movement).
+
+Figures: `sensitivity_standard_cmsel/choice_selected/{choice,prior}_Csel_vs_Msel.{svg,png}` and `summary.json` (`choice-selected`).
+
+**Panel e on the selected cells.**
+- `panel-e-sel` draws Figure 4.5 e with C_sel / M_sel in place of C all / M all. S is the 119-cell p < 0.01 S set from stage BS: `sensitivity_standard_cmsel/stageBS` is a symlink to `sensitivity_standard_Sp01/stageBS`.
+- Output: `sensitivity_standard_cmsel/fig45/panel_e_Csel_Msel.{svg,png,json}`.
+- Amplitudes (max − min of distance − shuffle mean):
+  - stim: S 0.38, C 0.28, M 0.25 (M/C 0.89);
+  - move: C 0.32, M 0.22 (M/C 0.69).
+  - With all cells: C 0.115 / M 0.086 (stim) and C 0.084 / M 0.080 (move).
+- With the selected cells, C ≥ M on both sides. On the move side, M rises steadily to movement, while C is higher and noisier through the window.
+- Panel e code is now `_draw_panel_e`, shared with `fig45`. Redrawing res_standard reproduced its amplitudes exactly.
+
+**Note.** S on the stim side of panel e (`grp = 'S,C,M'`) was a working-tree edit that went into `d5edeab` / `c50d435` with the stage CS commit.
+
+## 2026-11-05 — rastermap clusters as regions (stage RM): standard splits per cluster, S / C / M selection
+
+**Aim (user, 11-04).** Treat each of the 100 rastermap clusters of `concat_cvTrue` (test set, 54,569 cells, 515 insertions) as a region. Run the six standard analyses on each and select S / C / M clusters with the Figure 2 region rules.
+
+**Setup.**
+- `rm-types` writes `data/fig45/cell_types_rm100.npy` (types `rm0`–`rm99`).
+- Stage RM runs the six ANALYSES (S_stim, S_prior, choice_stim, choice_move, prior_stim, prior_move) on the standard trial table, nrand 2000. It shards over clusters (20 shards × 5 clusters), each shard running every insertion of its clusters.
+- `select-rm` applies the Figure 2 rules to the per-cluster population curves, with BH over the 100 clusters at 0.01:
+  - S = 80 ms stim significant, minus an onset confound (offset only) and early choice (run of ≥ 5 bins with p ≤ 0.01 at t ≤ 80 ms);
+  - C = choice significant and rising, minus movement;
+  - M = end peak, late (20-bin) slope above the cut, and choice significant around movement. Default cut is `late_mean` (mean over choice-significant clusters, 0.0114).
+- `rm-report` draws the overview and the S / C / M group curves (per-cluster accumulators summed).
+- Run on ORCD `mit_preemptable`, 11-04. Output: alyx `dmn/res/sensitivity_standard_rm100/stageRM/`, selection and figures in `select_rm/`.
+
+**Save race (fixed 11-05).**
+- All RM shards wrote `cells/{pid}.npy` through the same temporary name. Concurrent saves failed, and the failure came after the insertion had been added to the sums, so the done lists hold only 6,483 of 9,389 shard × insertion entries.
+- **The sums are complete and not double-counted:**
+  - no shard's done list is out of order, so no requeue reprocessed an insertion;
+  - stage CL counts and distances equal RM exactly on all 35 shared clusters, and S_stim rm22–28 equals stage A;
+  - all 515 insertions and 54,569 cells are present. Against the trial counts, no count exceeds the expected number (2,000 cluster × pair entries); the median is 0.985 of it. The shortfall is cells silent in that stratum, which stage CL shows identically.
+  - The clobbered cells files hold only trial counts (RM has no per-cell stats), so nothing was lost. **No rerun.**
+- Fix: unique temp names in `save_atomic`, per-shard cells files in RM, and the cells save before `add_to_acc`.
+
+**Selection (late_mean).**
+
+| set | clusters | cells |
+|---|---|---|
+| S | 5, 8, 15, 20, 24–27, 30, 32, 37, 40, 58, 86, 89, 95 (16) | 9,709 |
+| C | 41 | 24,842 |
+| M | 18, 21, 22, 37–42, 56, 57, 81–83, 85, 86 (16) | 9,235 |
+| none | 38 | 18,133 |
+
+- Overlaps: S∩C 8, S∩M 3 (37, 40, 86).
+- 30 clusters pass the 80 ms stim test; 9 fail the onset confound and 9 the early-choice cut. The early-choice cut removes the three strongest stim clusters (4, 33, 42; early choice runs of 11–15 bins). Choice is stratified by stim side × act block, not contrast, so part of that early choice may be contrast.
+- Movement rule matters: C / M = 41 / 16 (late_mean), 53 / 4 (late_fixed 0.05), 27 / 30 (end_peak).
+- Against the old picks: of the 29 old M clusters, 14 are M and 14 C; of old S pool 22–28, 4 are S.
+- Prior with no S / C / M: clusters 9 and 10 have the largest S_prior excess (0.48, 0.37). Clusters 28, 70, 71, 97 are choice-significant but not rising.
+
+**Prior significance (BH q ≤ 0.01).**
+
+| group | any window | S_prior (0–80) | prior_stim (150) | prior_move (−150–0) | all three |
+|---|---|---|---|---|---|
+| S (16) | 15 | 15 | 14 | 14 | 14 |
+| C (41) | 34 | 33 | 26 | 29 | 25 |
+| M (16) | 16 | 16 | 13 | 16 | 13 |
+
+- None: S rm5 (q 0.012–0.022); C rm44, 46, 54, 62, 92, 94, 98 (most q 0.012–0.06; rm54 0.6–0.7).
+
+**Group curves (all S / C / M clusters, no prior gate).** Every p at the floor (0.0005).
+- Choice excess, M vs C: 0.19 vs 0.12 (stim), 0.30 vs 0.17 (move).
+- Prior offset (stim) is similar: S 0.055, C 0.057, M 0.047.
+- Prior gain is about 2.5× larger in M: 0–80 ms S 0.042 / C 0.037 / M 0.083; stim S 0.041 / C 0.036 / M 0.107; move S 0.060 / C 0.045 / M 0.091.
+
+**Prior gate in the regional Figure 4 (checked 11-05).** `fig4_plot.py` gates only S: panel c and the S curve of i average sensory ∩ prior 0–80 ms (5 regions). Panels e, g and the C / M curves of i average **all** C (85) and M (30) regions with no prior test. Only the strips (b, d, f, h) are prior-gated. The RM group curves above gate nothing, so they match the regional C / M but not S. Open: whether to gate (user asked 11-05).
+
+**Figure 4.5 on the RM selection (user, 11-05: keep all groups ungated).**
+- `fig45_panel_a.py --rm-select <stageRM>/select_rm` outlines the RM C / M clusters in panel a; `fig45-rm` draws the published layout with S / C / M = all clusters of each group (late_mean). The page code is now `_fig45_page`, shared with `fig45`; `fig45` on `sensitivity_standard_Sp01` reproduces its summary.json exactly.
+- Output: `sensitivity_standard_rm100/stageRM/select_rm/fig45/fig45_rm_late_mean.{svg,png,json}`.
+- Cells/pair: S 9,515; C 20,918 / 21,076; M 7,900 / 7,958. Every p_mean, p_offset and p_gain at the floor.
+- Panel e amplitudes: stim S 0.079, C 0.052, M 0.135 (M/C 2.6); move C 0.050, M 0.104 (M/C 2.1). With the old picks (all cells) C and M were close (0.115 / 0.086 stim). On the cluster selection M is above C from about 90 ms after stim and in the last 50 ms before movement.
+- **Revision (user, 11-05).** Panel e S is now the 150 ms prior_stim curve (stim × choice strata), the same analysis as C / M (amp 0.073; panel c keeps S_prior 0–80 ms). Panel a also outlines the S clusters in blue.
+- **Panel a box rule (general, `TYPE_COLS`):** S and C boxes span every stim-aligned segment (change_b,s → mistake,s), M boxes every move-aligned segment (m → R move). `sensitivity_standard_Sp01/fig45` was redrawn with it (curves unchanged).
+- **Layout (user, 11-05), `fig45-rm` only (`compact`):** panel a has no C + M zoom, a taller raster and the S / C / M circles stacked beside it; rows are tighter and the two halves of e are equal width (110 pt). The 8 S∩C clusters (15, 20, 24, 25, 30, 32, 89, 95) are boxed in green (`#7FC8A9`, Figure 2 `C_SENS_INTEG`); S-only blue, C-only yellow (`BOX_COLORS`). The published `fig45` layout is unchanged (summary.json identical).
+- **Panel c (user, 11-05):** S in panel c is now prior_stim too (0–150 ms, stim × choice strata), so c and e show the same S curve (8,391 cells/pair; mean, offset and gain p at the floor). `_fig45_page(s_name=...)` sets c's window; the published `fig45` keeps S_prior 0–80 ms.
+- **Sensitivity panel (user, 11-05), layout `sens` (`FIG45_LAYOUTS`):**
+  - a is unchanged.
+  - New b, stacked to the right of a: S_stim (0–80 ms) for S, then choice_stim and choice_move for C and M, as distance minus shuffle mean.
+  - c is the old b and c together: S prior in the left column, then the C and M rows.
+  - The d slot is left empty under S; e is stacked to the right of c.
+  - The published layout is unchanged (summary.json identical).
+- **Layout `sens` reworked (user, 11-05):**
+  - a: the full-height raster down the left.
+  - b: the three sensitivity panels in one row on the top right (S_stim narrower, as its window is 80 ms).
+  - c: stim and move columns, with rows S, C, M. The move cell beside S is the empty d schematic slot.
+  - e: stim and move halves, equal width (162 pt), below c.
+  - No axes or labels overlap.
+
+**S from stim sensitivity with choice held fixed (user, 11-05; options confirmed).**
+- Every Figure 4.5 RM analysis so far used the act prior (α=0.2 kernel on the full session, binarised onto `probabilityLeft`, true-0.5 trials dropped after).
+- New analysis `S_stim_cb`: stim-aligned, 0–150 ms, stim L vs R within choice × act prior (4 pairs). With choice fixed, one side of each pair is error trials, mostly low contrast, so contrast is not matched.
+- Stage RS runs it on the 100 clusters (sharded over clusters like RM, same OUT). Local check, one insertion: 4 pairs of 72 bins; the error side has 16–35 trials per pair.
+- Selection: `select-rm --s-test S_stim_cb` → `select_rm_S150cb/`. S = BH q ≤ 0.01 on S_stim_cb minus the onset confound; no early-choice cut, since choice is held fixed. C / M unchanged; default `select-rm` output reproduced (lists identical).
+- Figure: `fig45-rm --s-test S_stim_cb` draws a separate variant in `select_rm_S150cb/fig45/`, with the S_stim_cb curve in panel b. Panel a needs `fig45_panel_a.py --rm-select <stageRM>/select_rm_S150cb` first.
+- Submit (not yet sent): `ONLY_STAGE=RS N_SHARDS_B=20`, `mit_preemptable`, same OUT as RM. Dry run with stubbed sbatch: 20 shards and 1 stack job.
