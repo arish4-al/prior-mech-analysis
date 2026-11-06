@@ -19,6 +19,10 @@
 #   ONLY_STAGE=RM N_SHARDS_B=20 OUT=<new dir> CELL_TYPES_B=data/fig45/cell_types_rm100.npy \
 #     bash scripts/submit_fig45_sensitivity.sh
 #   (all 100 rastermap clusters as regions; shards split the clusters; stack runs select-rm)
+#   ONLY_STAGE=RS N_SHARDS_B=20 OUT=<the RM dir> CELL_TYPES_B=data/fig45/cell_types_rm100.npy \
+#     bash scripts/submit_fig45_sensitivity.sh
+#   (S_stim_cb per cluster, stim L vs R within choice x act prior, 0-150 ms; then
+#    select-rm / fig45-rm --s-test S_stim_cb locally)
 # (S_ONLY=1 is ONLY_STAGE=BS.)
 
 set -euo pipefail

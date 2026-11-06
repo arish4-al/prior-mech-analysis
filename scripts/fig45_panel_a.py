@@ -14,11 +14,16 @@ Zoom rows: rm clusters picked for move_all (M) / integrator (C) (from
 Also writes ``panel_a_<half>.npz`` (row-binned rasters, column segments,
 S / C / M row spans) for the composite in ``fig45_sensitivity.py fig45``.
 
+``--rm-select <stageRM>/select_rm`` takes S / C / M from the stage RM cluster
+selection (``clusters.csv``, ``--move-rule``) instead of the picks and writes
+the raster and cache into ``<select_rm>/fig45``.
+
 Usage (iblenv, outside sandbox):
-  python scripts/fig45_panel_a.py [--half test|train]
+  python scripts/fig45_panel_a.py [--half test|train] [--rm-select DIR]
 """
 import argparse
 import json
+from pathlib import Path
 
 import matplotlib
 matplotlib.use('Agg')
@@ -46,6 +51,15 @@ MAX_ROWS = 2000
 
 def cache_path(half):
     return OUT / 'plots' / f'panel_a_{half}.npz'
+
+
+def rm_picks(csv_f, move_rule):
+    """Stage RM S / C / M clusters as picks (``STRIP_TYPES`` names)."""
+    import csv
+    with open(csv_f) as f:
+        rows = list(csv.DictReader(f))
+    col = {'stimint': 'S', 'integrator': f'C_{move_rule}', 'move_all': f'M_{move_rule}'}
+    return {t: [int(r['cluster']) for r in rows if r[k] == 'True'] for t, k in col.items()}
 
 
 def row_bin(X, max_rows=MAX_ROWS):
@@ -84,6 +98,8 @@ def draw(ax, img, seg_lens, norm, labels=True):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--half', choices=['test', 'train'], default='test')
+    ap.add_argument('--rm-select', type=Path, default=None)
+    ap.add_argument('--move-rule', default='late_mean')
     args = ap.parse_args()
     raw = np.load(NEW_STACK, allow_pickle=True).flat[0]
     key = 'concat_z' if args.half == 'test' else 'concat_z_train'
@@ -93,8 +109,13 @@ def main():
     X = raw[key][isort, c0:c1]
     norm = PowerNorm(gamma=0.5, vmin=0, vmax=1.5)
 
-    picks_f = TYPES_DIR / 'cell_types_picks.json'
-    picks = json.loads(picks_f.read_text()) if picks_f.exists() else {}
+    if args.rm_select:
+        picks = rm_picks(args.rm_select / 'clusters.csv', args.move_rule)
+        odir, cache_f = args.rm_select / 'fig45', args.rm_select / 'fig45' / f'panel_a_{args.half}.npz'
+    else:
+        picks_f = TYPES_DIR / 'cell_types_picks.json'
+        picks = json.loads(picks_f.read_text()) if picks_f.exists() else {}
+        odir, cache_f = OUT / 'plots', cache_path(args.half)
 
     fig = plt.figure(figsize=(8, 9))
     ax_top = fig.add_axes([0.08, 0.45, 0.8, 0.48])
@@ -119,9 +140,7 @@ def main():
             if len(r):
                 ax_z.plot([X.shape[1] + 3] * len(r), r, '|', color=col, ms=1, clip_on=False)
         ax_z.set_xlim(-0.5, X.shape[1] + 6)
-    fig.suptitle(f'concat_cvTrue rastermap ({args.half} half, isort from train), '
-                 f'{X.shape[0]} cells', fontsize=8)
-    savefig_svg_png(fig, OUT / 'plots' / f'panel_a_raster_{args.half}', dpi=200)
+    savefig_svg_png(fig, odir / f'panel_a_raster_{args.half}', dpi=200)
     plt.close(fig)
 
     zl = lab_sorted[rows] if zoom else lab_sorted[:0]
@@ -133,8 +152,9 @@ def main():
     for L, t in STRIP_TYPES.items():
         cache[f'top_{L}'] = runs(np.isin(lab_sorted, picks.get(t, [])))
         cache[f'zoom_{L}'] = runs(np.isin(zl, picks.get(t, [])))
-    np.savez_compressed(cache_path(args.half), **cache)
-    print('wrote', OUT / 'plots')
+    cache_f.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(cache_f, **cache)
+    print('wrote', odir)
 
 
 if __name__ == '__main__':

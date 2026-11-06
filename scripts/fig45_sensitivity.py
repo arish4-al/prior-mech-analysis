@@ -114,7 +114,12 @@ ANALYSES = {
                        group='CM'),
     'prior_move': dict(align='move', win=(0.15, 0), contrast='b', strata=('s', 'c'),
                        group='CM'),
+    # stage RS only: stim L vs R with choice held fixed (within choice x act prior, so
+    # one side of each pair is error trials), 150 ms (user, 11-05)
+    'S_stim_cb': dict(align='stim', win=(0, 0.15), contrast='s', strata=('c', 'b'),
+                      group='S'),
 }
+RM_ANALYSES = ('S_stim', 'S_prior', 'choice_stim', 'choice_move', 'prior_stim', 'prior_move')
 S_POOL_CLUSTERS = list(range(22, 29))
 CM = ['integrator', 'move_all']
 CM_SEL = ['C_choice', 'M_choice']
@@ -130,6 +135,7 @@ CS_TYPES = ['C_sel', 'M_sel']
 # every rastermap cluster of concat_cvTrue (rm_labels 0-99), one type each
 RM_TYPES = [f'rm{c}' for c in range(100)]
 RM_CELL_TYPES = TYPES_DIR / 'cell_types_rm100.npy'
+CLUSTER_STAGES = ('RM', 'RS')  # rastermap clusters as regions, sharded over clusters
 # stage -> analysis -> (population types, per-cell test pool or None)
 STAGES = {
     'A': {'S_stim': (['stimint'] + [f'rm{c}' for c in S_POOL_CLUSTERS], ['stimint']),
@@ -143,7 +149,8 @@ STAGES = {
     'CL': {'choice_stim': (CL_TYPES, None), 'choice_move': (CL_TYPES, None)},
     'CS': {'choice_stim': (CS_TYPES, None), 'choice_move': (CS_TYPES, None),
            'prior_stim': (CS_TYPES, None), 'prior_move': (CS_TYPES, None)},
-    'RM': {name: (RM_TYPES, None) for name in ANALYSES},
+    'RM': {name: (RM_TYPES, None) for name in RM_ANALYSES},
+    'RS': {'S_stim_cb': (RM_TYPES, None)},
 }
 # comparison figure: population -> (stage, label, colour, line style)
 COMPARE = {
@@ -279,7 +286,8 @@ def add_to_acc(acc, pop):
 
 
 def save_atomic(obj, path):
-    tmp = path.with_name(f'.{path.stem}.tmp.npy')
+    # unique tmp: concurrent RM shards write into the same cells/ dir
+    tmp = path.with_name(f'.{path.stem}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp.npy')
     np.save(tmp, obj, allow_pickle=True)
     tmp.replace(path)
 
@@ -291,20 +299,22 @@ def stage_dir(out, stage):
 def cmd_compute(args):
     from iblatlas.regions import BrainRegions
     br = BrainRegions()
-    ct_path = args.cell_types or {'A': CELL_TYPES, 'RM': RM_CELL_TYPES}.get(
+    ct_path = args.cell_types or {'A': CELL_TYPES, 'RM': RM_CELL_TYPES, 'RS': RM_CELL_TYPES}.get(
         args.stage, args.out / 'stageB_cell_types.npy')
     cell_types, ct_raw = load_cell_types(ct_path)
     types = [t for t in stage_types(args.stage) if t in ct_raw['types']]
     missing = set(stage_types(args.stage)) - set(types)
     if missing:
         raise KeyError(f'{ct_path} lacks types {sorted(missing)}')
-    if args.stage == 'RM':  # shard over clusters: every insertion of this shard's clusters
+    if args.stage in CLUSTER_STAGES:  # shard over clusters: every insertion of their clusters
         types = types[args.shard::args.n_shards]
     pids = insertion_list(ct_raw, types)
     if args.pids:
         pids = [p for p in pids if p in set(args.pids)]
-    if args.stage != 'RM':
+    if args.stage not in CLUSTER_STAGES:
         pids = pids[args.shard::args.n_shards]
+    # RM shards share insertions (different clusters), so each writes its own cells file
+    csuf = f'_shard{args.shard}of{args.n_shards}' if args.stage in CLUSTER_STAGES else ''
     sdir = stage_dir(args.out, args.stage)
     cdir = sdir / 'cells'
     cdir.mkdir(parents=True, exist_ok=True)
@@ -327,9 +337,9 @@ def cmd_compute(args):
             if loaded[7].any():
                 pop, cells = compute_insertion(loaded, cell_types, args.stage, args.nrand,
                                                rng, br, keep=types)
-                add_to_acc(acc['pop'], pop)
                 cells['pid'] = pid
-                save_atomic(cells, cdir / f'{pid}.npy')
+                save_atomic(cells, cdir / f'{pid}{csuf}.npy')
+                add_to_acc(acc['pop'], pop)  # after the save: a failure must not leave sums without done
             acc['done'].append(pid)
             since += 1
             if since >= CKPT:
@@ -489,7 +499,7 @@ def cmd_stack(args):
         np.save(sdir / f'cells_{name}.npy', dict(uuids=uu, pid=pid, stat=stat, p=p),
                 allow_pickle=True)
     np.save(sdir / 'population.npy', pop, allow_pickle=True)
-    if args.stage == 'RM':  # pair-averaged curves only (~0.3 GB), what select-rm reads
+    if args.stage in CLUSTER_STAGES:  # pair-averaged curves only, what select-rm reads
         tr = {}
         for name, res in pop.items():
             for t, r in res.items():
@@ -830,8 +840,23 @@ def _place_ylabels(fig, gap_pt=3):
                                   0.5)
 
 
-# Panel a: each C / M row range is outlined over these raster columns (first, last).
-TYPE_COLS = {'C': ('LLL,s', 'RRR,s'), 'M': ('LLL,m', 'R move')}
+# Panel a: each S / C / M row range is outlined over these raster columns (first, last).
+# S and C span every stim-aligned segment, M every move-aligned one (user, 11-05).
+TYPE_COLS = {'S': ('change_b,s', 'mistake,s'), 'C': ('change_b,s', 'mistake,s'),
+             'SC': ('change_b,s', 'mistake,s'), 'M': ('m', 'R move')}
+BOX_COLORS = {**BADGE, 'SC': '#7FC8A9'}  # SC: fig2_common.C_SENS_INTEG
+
+
+def _span_mask(runs, n):
+    m = np.zeros(n, bool)
+    for a, b in runs:
+        m[a:b] = True
+    return m
+
+
+def _mask_runs(m):
+    d = np.diff(np.r_[0, m.astype(np.int8), 0])
+    return np.c_[np.flatnonzero(d == 1), np.flatnonzero(d == -1)]
 
 
 def _draw_raster(fig, ov, cache, box, letters, labels):
@@ -860,25 +885,37 @@ def _draw_raster(fig, ov, cache, box, letters, labels):
     starts = np.cumsum([0] + list(cache['seg_lens'][:-1]))
     col = {str(k): (int(a), int(a + w)) for k, a, w in
            zip(cache['seg_short'], starts, cache['seg_lens'])}
-    for L in letters:
+    spans = {L: cache[f'{part}_{L}'] for L in letters}
+    if 'S' in spans and 'C' in spans:  # S and C clusters in green, as in the Figure 2 table
+        S, C = (_span_mask(spans[L], n) for L in 'SC')
+        spans.update(S=_mask_runs(S & ~C), C=_mask_runs(C & ~S), SC=_mask_runs(S & C))
+    for L, rr in spans.items():
         c0, c1 = col[TYPE_COLS[L][0]][0], col[TYPE_COLS[L][1]][1]
-        for a, b in cache[f'{part}_{L}']:
+        for a, b in rr:
             ax.add_patch(Rectangle((c0, a), c1 - c0, b - a, facecolor='none',
-                                   edgecolor=BADGE[L], lw=1.2, zorder=3))
+                                   edgecolor=BOX_COLORS[L], lw=1.2, zorder=3))
     return ax, n
 
 
-def _panel_a(fig, ov, cache_f):
+def _panel_a(fig, ov, cache_f, zoom_ticks=(0, 10000, 20000), letters='CM', geom=None):
+    """Raster with S / C / M boxes. ``geom`` = (raster box, circle x): no C + M zoom,
+    the raster in that box and the circles stacked vertically beside it."""
+    compact = geom is not None
     if not cache_f.exists():
         raise FileNotFoundError(f'{cache_f}: run scripts/fig45_panel_a.py first')
     cache = np.load(cache_f)
-    ax, n = _draw_raster(fig, ov, cache, (52, 62, 300, 262), 'CM', True)
+    box = geom[0] if compact else (52, 62, 300, 262)
+    ax, n = _draw_raster(fig, ov, cache, box, letters, True)
     ax.set_yticks([0, 50000], ['1', '50K'])
     ax.set_ylabel('cell #', fontsize=11, labelpad=2)
-    for L, x in {'C': 338, 'M': 358}.items():
-        _badge(ov, x, 50, L, radius=8)
-    az, nz = _draw_raster(fig, ov, cache, (52, 276, 300, 372), 'CM', False)
-    az.set_yticks([0, 10000, 20000], ['1', '10K', '20K'])
+    for i, L in enumerate(L for L in 'SCM' if L in letters):
+        _badge(ov, *((geom[1], box[1] + 10 + 22 * i) if compact
+                     else ({'S': 318, 'C': 338, 'M': 358}[L], 50)),
+               L, radius=8)
+    if compact:
+        return
+    az, nz = _draw_raster(fig, ov, cache, (52, 276, 300, 372), letters, False)
+    az.set_yticks(zoom_ticks, ['1'] + [f'{t // 1000}K' for t in zoom_ticks[1:]])
     az.set_ylabel('C + M cells', fontsize=11, labelpad=2)
 
 
@@ -887,8 +924,11 @@ def _draw_panel_e(fig, ov, curves, wins, colors, y0, y1, boxes, xlabel_y):
     stim side, C and M on the move side. Returns peak-to-trough amplitudes."""
     amps = {}
     stim_keys = tuple(k for k in ('S', 'C_stim', 'M_stim') if k in curves)
+    sy = {}
     for side, keys in (('stim', stim_keys), ('move', ('C_move', 'M_move'))):
-        ax = fig.add_axes(_box(fig, boxes[side][0], y0, boxes[side][1], y1))
+        bx = boxes[side]  # (x0, x1) on the shared rows, or (x0, y0, x1, y1)
+        x0, x1, sy[side] = (bx[0], bx[1], (y0, y1)) if len(bx) == 2 else (bx[0], bx[2], bx[1::2])
+        ax = fig.add_axes(_box(fig, x0, sy[side][0], x1, sy[side][1]))
         trs = []
         for key in keys:
             md, sc, _ = curves[key]
@@ -912,10 +952,10 @@ def _draw_panel_e(fig, ov, curves, wins, colors, y0, y1, boxes, xlabel_y):
         else:
             ax.set_xticks([-150, -100, -50, 0])
             ax.set_xticklabels(['−150', '−100', '−50', '0'])
-        _xlabel(fig, sum(boxes[side]) / 2, xlabel_y)
-    x0 = boxes['stim'][0]
+        _xlabel(fig, (x0 + x1) / 2, xlabel_y + sy[side][1] - y1)
+    x0, (s0, s1) = boxes['stim'][0], sy['stim']
     for i, L in enumerate('SCM' if 'S' in curves else 'CM'):
-        _badge(ov, x0 + 14 + 22 * i, y0 + 0.15 * (y1 - y0), L)
+        _badge(ov, x0 + 14 + 22 * i, s0 + 0.15 * (s1 - s0), L)
     return amps
 
 
@@ -926,10 +966,8 @@ def cmd_fig45(args):
     act-block distance within stim side, 0-80 ms. Fonts, sizes and S / C / M
     circles follow Figure 4 (scripts/paper_figs/fig4/fig4_plot.py).
     """
-    from fig45_plot_distances import distance_stats
     pops = {s: np.load(stage_dir(args.out, s) / 'population.npy', allow_pickle=True).item()
             for s in STAGES if (stage_dir(args.out, s) / 'population.npy').exists()}
-    spec = {name: ANALYSES[name] for name in ('S_prior', 'prior_stim', 'prior_move')}
     curves = {
         'S': _block_curve(pops, 'BS' if 'BS' in pops else 'B', 'S_prior', 'S_cell'),
         'C_stim': _block_curve(pops, 'A', 'prior_stim', 'integrator'),
@@ -937,6 +975,75 @@ def cmd_fig45(args):
         'M_stim': _block_curve(pops, 'A', 'prior_stim', 'move_all'),
         'M_move': _block_curve(pops, 'A', 'prior_move', 'move_all'),
     }
+    _fig45_page(curves, OUT_ROOT / 'cvTrue' / 'plots' / 'panel_a_test.npz',
+                args.fig_dir, 'fig45_Spercell_Call_Mall')
+
+
+# Figure 4.5 page geometry (pt, top-left origin). cols: axis x0, x1, histogram x0, x1.
+FIG45_LAYOUTS = {
+    'published': dict(
+        page_h=PAGE_H, rows={'C': (40, 160), 'M': (196, 316)}, prior_xlabel=338,
+        cols={'stim': (440, 538, 541, 556), 'move': (630, 728, 731, 746)},
+        s_cols=(62, 162, 165, 180), s_rows=(430, 550), s_xlabel=572,
+        e_boxes={'stim': (485, 595), 'move': (650, 750)},
+        letters={'c': (2, 410), 'e': (425, 410)}),
+    # a down the left; right column: b (one row), c (stim | move columns; rows S, C, M;
+    # the move cell beside S is the d schematic slot), e (stim | move)
+    'sens': dict(
+        page_h=660, a_geom=((52, 62, 268, 625), 287),
+        sens_boxes={'S_stim': (372, 40, 442, 120), 'choice_stim': (506, 40, 608, 120),
+                    'choice_move': (662, 40, 755, 120)}, sens_xlabel=140,
+        s_rows=(180, 265), s_show_x=False, s_xlabel=None, s_cols=(372, 512, 515, 528),
+        rows={'C': (290, 375), 'M': (400, 485)}, prior_xlabel=507,
+        cols={'stim': (372, 512, 515, 528), 'move': (600, 738, 741, 754)},
+        e_boxes={'stim': (375, 540, 537, 625), 'move': (593, 540, 755, 625)}, e_xlabel=645,
+        letters={'b': (306, 18), 'c': (306, 162), 'e': (306, 522)}),
+}
+
+
+def _draw_sensitivity(fig, ov, sens, boxes, xlabel_y):
+    """Panel b (layout 'sens'): distance minus shuffle mean for S stim (0-80 ms) and
+    C / M choice aligned to stim and to movement."""
+    colors = {'S': '#5BA4D9', 'C': '#f4d03f', 'M': '#e07a5f'}
+    labels = {'S_stim': r'$d^{\mathrm{stim},s}_{S}(t)$', 'S_stim_cb': r'$d^{\mathrm{stim},s}_{S}(t)$',
+              'choice_stim': r'$d^{\mathrm{choice},s}_{\{C,M\}}(t)$',
+              'choice_move': r'$d^{\mathrm{choice},m}_{\{C,M\}}(t)$'}
+    for name, (x0, y0, x1, y1) in zip(sens, boxes.values()):  # S, choice stim, choice move
+        ax = fig.add_axes(_box(fig, x0, y0, x1, y1))
+        win, trs = ANALYSES[name]['win'], []
+        for L, (md, sc, _) in sens[name].items():
+            tr = md - sc.mean(0)
+            ax.plot(time_axis_ms(win, len(tr)), tr, color=colors[L], lw=1.3)
+            trs.append(tr)
+        lo, hi = min(t.min() for t in trs), max(t.max() for t in trs)
+        pad = 0.04 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+        ax.set_ylim(lo, lo + (hi - lo) / (1 - INSET_BAND))
+        _style_ax(ax, _data_ticks(lo, hi), labels[name])
+        move = ANALYSES[name]['align'] == 'move'
+        ax.axvline(0, color='#e74c3c' if move else '#57C1EB', lw=1.4)
+        if move:
+            ax.set_xticks([-150, -100, -50, 0])
+            ax.set_xticklabels(['−150', '−100', '−50', '0'])
+        else:
+            ax.set_xticks([0, 40, 80] if win[1] <= 0.1 else [0, 50, 100, 150])
+        for i, L in enumerate(sens[name]):
+            _badge(ov, x0 + 14 + 22 * i, y0 + 0.15 * (y1 - y0), L, radius=8)
+        _xlabel(fig, (x0 + x1) / 2, xlabel_y)
+
+
+def _fig45_page(curves, panel_a_cache, odir, stem, zoom_ticks=(0, 10000, 20000), extra=None,
+                a_letters='CM', s_e=None, layout='published', s_name='S_prior', sens=None):
+    """Draw the Figure 4.5 page from S / C / M prior curves; write ``<stem>`` and summary.json.
+
+    ``s_e``: (name, curve) for S in panel e when it differs from panel c's S_prior.
+    ``layout``: 'published' (a, b = C/M prior 2x2, c = S prior, e), or 'sens'
+    (a without the zoom; b = stim / choice sensitivity from ``sens``; c = S prior
+    beside the C/M prior rows; e stacked to the right of c).
+    ``s_name``: the analysis behind ``curves['S']`` (sets the S prior window)."""
+    from fig45_plot_distances import distance_stats
+    spec = {name: ANALYSES[name] for name in ('prior_stim', 'prior_move')}
+    spec['S_prior'] = ANALYSES[s_name]
     og = {}
     for key, (md, sc, _) in curves.items():
         if key == 'S':
@@ -947,7 +1054,6 @@ def cmd_fig45(args):
         else:
             win, off = spec['prior_stim']['win'], None
         og[key] = prior_offset_gain(md, sc, win, offset_from=off)
-    odir = args.fig_dir
     wins = {'S': spec['S_prior']['win'], 'C_stim': spec['prior_stim']['win'],
             'C_move': spec['prior_move']['win'], 'M_stim': spec['prior_stim']['win'],
             'M_move': spec['prior_move']['win']}
@@ -964,17 +1070,22 @@ def cmd_fig45(args):
                for k, ((md, sc, n), o) in ((k, (curves[k], og[k])) for k in curves)}
 
     with plt.rc_context(FIG4_RC):
-        fig = plt.figure(figsize=(PAGE_W / 72, PAGE_H / 72))
+        g = FIG45_LAYOUTS[layout]
+        rows, cols, bx = g['rows'], g['cols'], g['prior_xlabel']
+        (sx0, sx1, sh0, sh1), (cy0, cy1) = g['s_cols'], g['s_rows']
+        fig = plt.figure(figsize=(PAGE_W / 72, g['page_h'] / 72))
         fig.patch.set_facecolor('white')
         ov = _overlay(fig)
 
         # --- a: raster, colour strips S / C / M ---
-        _panel_a(fig, ov, OUT_ROOT / 'cvTrue' / 'plots' / 'panel_a_test.npz')
+        _panel_a(fig, ov, panel_a_cache, zoom_ticks, a_letters, g.get('a_geom'))
         _letter(fig, 2, 18, 'a')
 
-        # --- b: C / M, stim then move ---
-        cols = {'stim': (440, 538, 541, 556), 'move': (630, 728, 731, 746)}
-        rows = {'C': (40, 160), 'M': (196, 316)}
+        if layout == 'sens':  # --- b: stim and choice sensitivity ---
+            _draw_sensitivity(fig, ov, sens, g['sens_boxes'], g['sens_xlabel'])
+            _letter(fig, *g['letters']['b'], 'b')
+
+        # --- C / M prior, stim then move ---
         for key in ('C_stim', 'C_move', 'M_stim', 'M_move'):
             L, side = key.split('_')
             ax0, ax1, h0, h1 = cols[side]
@@ -986,32 +1097,45 @@ def cmd_fig45(args):
                               hist=hist, ylabel=ylabels[key], show_x=L == 'M')
             _badge(ov, ax0 + 14, y0 + 0.15 * (y1 - y0), L)
         for side, (ax0, ax1, _, _) in cols.items():
-            _xlabel(fig, (ax0 + ax1) / 2, 338)
-        _letter(fig, 392, 18, 'b')
+            _xlabel(fig, (ax0 + ax1) / 2, bx)
+        if layout == 'published':
+            _letter(fig, 392, 18, 'b')
 
-        # --- c: S ---
-        y0, y1 = 430, 550
-        ax = fig.add_axes(_box(fig, 62, y0, 162, y1))
-        hist = fig.add_axes(_box(fig, 165, y0, 180, y1), sharey=ax)
+        # --- S prior ---
+        ax = fig.add_axes(_box(fig, sx0, cy0, sx1, cy1))
+        hist = fig.add_axes(_box(fig, sh0, cy0, sh1, cy1), sharey=ax)
         md, sc, _ = curves['S']
         _draw_block_panel(ax, md, sc, colors['S'], wins['S'], stim=True, hist=hist,
-                          ylabel=ylabels['S'])
-        _badge(ov, 62 + 14, y0 + 0.15 * (y1 - y0), 'S')
-        _xlabel(fig, 112, 572)
-        _letter(fig, 2, 410, 'c')
+                          ylabel=ylabels['S'], show_x=g.get('s_show_x', True))
+        _badge(ov, sx0 + 14, cy0 + 0.15 * (cy1 - cy0), 'S')
+        if g['s_xlabel']:
+            _xlabel(fig, (sx0 + sx1) / 2, g['s_xlabel'])
+        _letter(fig, *g['letters']['c'], 'c')
 
         # --- e: S (stim side only), C and M, shuffle mean removed ---
-        amps = _draw_panel_e(fig, ov, curves, wins, colors, y0, y1,
-                             {'stim': (485, 595), 'move': (650, 750)}, 572)
-        _letter(fig, 425, 410, 'e')
+        e_curves, e_wins = dict(curves), dict(wins)
+        if s_e:
+            e_curves['S'], e_wins['S'] = s_e[1], ANALYSES[s_e[0]]['win']
+        # _draw_panel_e puts x labels at xlabel_y + (box bottom - cy1)
+        e_xl = (g['e_xlabel'] - g['e_boxes']['stim'][-1] + cy1 if 'e_xlabel' in g
+                else g['s_xlabel'])
+        amps = _draw_panel_e(fig, ov, e_curves, e_wins, colors, cy0, cy1, g['e_boxes'], e_xl)
+        _letter(fig, *g['letters']['e'], 'e')
 
         _place_ylabels(fig)
-        savefig_svg_png(fig, odir / 'fig45_Spercell_Call_Mall', dpi=200)
+        savefig_svg_png(fig, odir / stem, dpi=200)
         overlaps = _panel_overlaps(fig, ov)
         plt.close(fig)
     summary['C_vs_M_amp'] = amps
     summary['layout_overlaps'] = overlaps
-    (odir / 'summary.json').write_text(json.dumps(summary, indent=2))
+    if s_e:
+        md, sc, n = s_e[1]
+        summary['S_panel_e'] = {'analysis': s_e[0], 'n': n,
+                                'p_mean': distance_stats(md, sc)['p_mean'],
+                                'offset_gain': prior_offset_gain(md, sc, ANALYSES[s_e[0]]['win'])}
+    summary.update(extra or {})
+    (odir / ('summary.json' if stem == 'fig45_Spercell_Call_Mall' else f'{stem}.json')).write_text(
+        json.dumps(summary, indent=2))
     print(json.dumps({k: {'n': v['n'], 'p_mean': v['p_mean'],
                           'p_offset': v['offset_gain']['p_offset'],
                           'p_gain': v['offset_gain']['p_gain']}
@@ -1391,12 +1515,19 @@ def cmd_select_rm(args):
     Integrator, per row: choice on that row, rising (overall slope > 0), not movement.
     C = integrator on either row, M = movement. Prior: BH <= 0.01 per window, with
     offset / gain as in Figure 4.5 (move offset from the stim curve).
+
+    ``--s-test S_stim_cb``: S from stage RS instead (stim L vs R within choice x act
+    prior, 0-150 ms), BH <= 0.01 minus the onset confound; no early-choice cut, since
+    choice is held fixed. Writes ``select_rm_S150cb`` (C / M unchanged).
     """
     import csv
     from fig45_plot_distances import distance_stats
     sdir = stage_dir(args.out, 'RM')
     traces = np.load(sdir / 'traces.npy', allow_pickle=True).item()
-    odir = sdir / 'select_rm'
+    if args.s_test != 'S_stim':
+        traces.update(np.load(stage_dir(args.out, 'RS') / 'traces.npy',
+                              allow_pickle=True).item())
+    odir = sdir / SELECT_DIRS[args.s_test]
     odir.mkdir(parents=True, exist_ok=True)
     rows = []
     for t in RM_TYPES:
@@ -1413,7 +1544,7 @@ def cmd_select_rm(args):
             row[f'{name}_p'] = st['p_mean']
             row[f'{name}_n'] = r['n']
             row[f'{name}_amp'] = float((md - sc.mean(0)).mean())
-            if name == 'S_stim':
+            if name == args.s_test:
                 row['S_p_offset'], row['S_p_gain'] = st['p_offset'], st['p_gain']
         if 'choice_stim' in tr:
             md, sc = tr['choice_stim']
@@ -1440,10 +1571,11 @@ def cmd_select_rm(args):
             r[f'{name}_q'] = float(v)
     get = lambda r, k, d=np.nan: r.get(k, d)
     for r in rows:
-        r['s80'] = bool(get(r, 'S_stim_q') <= RM_ALPHA)
+        r['s80'] = bool(get(r, f'{args.s_test}_q') <= RM_ALPHA)  # the S stim test passes
         r['onset_confound'] = bool(get(r, 'S_p_offset', 1) <= RM_ALPHA
                                    and get(r, 'S_p_gain', 1) > RM_ALPHA)
-        r['early_choice'] = bool(get(r, 'early_choice_run', 0) >= EARLY_CHOICE_RUN)
+        r['early_choice'] = (args.s_test == 'S_stim'
+                             and bool(get(r, 'early_choice_run', 0) >= EARLY_CHOICE_RUN))
         r['S'] = r['s80'] and not r['onset_confound'] and not r['early_choice']
         r['choice_s'] = bool(get(r, 'choice_stim_q') <= RM_ALPHA)
         r['choice_m'] = bool(get(r, 'choice_move_q') <= RM_ALPHA)
@@ -1468,7 +1600,7 @@ def cmd_select_rm(args):
         w.writerows(rows)
     sel = lambda k: [r['cluster'] for r in rows if r.get(k)]
     summary = {
-        'alpha_bh': RM_ALPHA, 'n_clusters': len(rows),
+        'alpha_bh': RM_ALPHA, 'n_clusters': len(rows), 's_test': args.s_test,
         'move_slope_cuts': cuts | {'end_peak': None},
         'S': sel('S'), 's80_before_cuts': sel('s80'),
         'onset_confound': [r['cluster'] for r in rows if r['s80'] and r['onset_confound']],
@@ -1485,6 +1617,150 @@ def cmd_select_rm(args):
     print('wrote', odir)
 
 
+RM_GROUP_COLORS = {'S': '#57C1EB', 'C': '#F3D37A', 'M': '#E24A33'}
+SELECT_DIRS = {'S_stim': 'select_rm', 'S_stim_cb': 'select_rm_S150cb'}
+RM_ROWS = ('S_stim', 'choice_stim', 'choice_move', 'S_prior', 'prior_stim', 'prior_move')
+
+
+def _rm_members(odir, move_rule):
+    import csv
+    with open(odir / 'clusters.csv') as f:
+        rows = {int(r['cluster']): r for r in csv.DictReader(f)}
+    groups = {'S': 'S', 'C': f'C_{move_rule}', 'M': f'M_{move_rule}'}
+    return rows, {g: [c for c, r in rows.items() if r[k] == 'True'] for g, k in groups.items()}
+
+
+def _rm_group(pop, name, clusters):
+    """Sum per-cluster accumulators (shuffles are shared within an insertion)."""
+    acc = {}
+    for c in clusters:
+        if f'rm{c}' in pop[name]:
+            add_to_acc(acc, {name: {'grp': pop[name][f'rm{c}']}})
+    return acc[name]['grp'] if acc else None
+
+
+def cmd_fig45_rm(args):
+    """Figure 4.5 layout on the stage RM selection: S / C / M = all clusters of each
+    group (no prior gate); panel a outlines the RM S / C / M clusters
+    (``fig45_panel_a.py --rm-select``). S in c and e is prior_stim (150 ms,
+    stim x choice), like C and M. ``--s-test`` picks the selection (``SELECT_DIRS``);
+    panel b's S curve is that S test."""
+    odir = stage_dir(args.out, 'RM') / SELECT_DIRS[args.s_test]
+    _, members = _rm_members(odir, args.move_rule)
+    pop = np.load(stage_dir(args.out, 'RM') / 'population.npy', allow_pickle=True).item()
+    if args.s_test != 'S_stim':
+        pop.update(np.load(stage_dir(args.out, 'RS') / 'population.npy',
+                           allow_pickle=True).item())
+    def curve(g, name):
+        r = _rm_group(pop, name, members[g])
+        keys, md, sc = population_traces(r)
+        return md, sc, int(np.median([r['n'][k] for k in keys]))
+    curves = {key: curve(g, name) for key, (g, name) in {
+        'S': ('S', 'prior_stim'), 'C_stim': ('C', 'prior_stim'), 'C_move': ('C', 'prior_move'),
+        'M_stim': ('M', 'prior_stim'), 'M_move': ('M', 'prior_move')}.items()}
+    # c and e: S on the same 150 ms stim x choice curve as C / M (user, 11-05)
+    _fig45_page(curves, odir / 'fig45' / 'panel_a_test.npz', odir / 'fig45',
+                f'fig45_rm_{args.move_rule}', zoom_ticks=(0, 10000, 20000, 30000),
+                extra={'move_rule': args.move_rule, 'members': members, 'S_analysis': 'prior_stim'},
+                a_letters='SCM', layout='sens', s_name='prior_stim',
+                sens={args.s_test: {'S': curve('S', args.s_test)},
+                      'choice_stim': {L: curve(L, 'choice_stim') for L in 'CM'},
+                      'choice_move': {L: curve(L, 'choice_move') for L in 'CM'}})
+
+
+def cmd_rm_report(args):
+    """Stage RM after select-rm: per-cluster effects along the rastermap order,
+    and S / C / M group curves (per-cluster sums added, shuffles shared within
+    an insertion) with p_mean and prior offset / gain."""
+    import csv
+    from fig45_plot_distances import distance_stats
+    sdir = stage_dir(args.out, 'RM')
+    odir = sdir / 'select_rm'
+    with open(odir / 'clusters.csv') as f:
+        rows = {int(r['cluster']): r for r in csv.DictReader(f)}
+    groups = {'S': 'S', 'C': f'C_{args.move_rule}', 'M': f'M_{args.move_rule}'}
+    members = {g: [c for c, r in rows.items() if r[k] == 'True'] for g, k in groups.items()}
+    cl = sorted(rows)
+
+    fig, axs = plt.subplots(len(RM_ROWS) + 1, 1, figsize=(10, 9), sharex=True,
+                            gridspec_kw={'height_ratios': [0.6] + [1] * len(RM_ROWS)})
+    for i, g in enumerate(groups):
+        x = members[g]
+        axs[0].scatter(x, np.full(len(x), -i), s=14, marker='s', color=RM_GROUP_COLORS[g])
+    axs[0].set_yticks([0, -1, -2], list(groups))
+    axs[0].set_ylim(-2.6, 0.6)
+    for ax, name in zip(axs[1:], RM_ROWS):
+        amp = np.array([float(rows[c].get(f'{name}_amp') or np.nan) for c in cl])
+        sig = np.array([float(rows[c][f'{name}_q']) <= RM_ALPHA for c in cl])
+        ax.bar(cl, amp, color=np.where(sig, 'k', '0.75'), width=0.8)
+        ax.axhline(0, color='k', lw=0.5)
+        ax.set_ylabel(name, fontsize=8)
+    axs[-1].set_xlabel('rastermap cluster (isort order)')
+    for ax in axs:
+        for sp in ('top', 'right'):
+            ax.spines[sp].set_visible(False)
+    fig.tight_layout()
+    savefig_svg_png(fig, odir / f'clusters_overview_{args.move_rule}')
+    plt.close(fig)
+
+    pop = np.load(sdir / 'population.npy', allow_pickle=True).item()
+    use = {'S_stim': 'S', 'choice_stim': 'CM', 'choice_move': 'CM',
+           'S_prior': 'SCM', 'prior_stim': 'SCM', 'prior_move': 'SCM'}
+    curves, stats = {}, {}
+    for name in RM_ROWS:
+        for g in use[name]:
+            acc = {}
+            for c in members[g]:
+                if f'rm{c}' in pop[name]:
+                    add_to_acc(acc, {name: {'grp': pop[name][f'rm{c}']}})
+            if not acc:
+                continue
+            _, md, sc = population_traces(acc[name]['grp'])
+            curves[name, g] = (md, sc)
+            st = distance_stats(md, sc)
+            stats.setdefault(name, {})[g] = {
+                'clusters': len(members[g]), 'p_mean': st['p_mean'],
+                'excess_mean': float((md - sc.mean(0)).mean())}
+    for name, ref in (('prior_stim', None), ('prior_move', 'prior_stim'), ('S_prior', None)):
+        for g in 'SCM':
+            if (name, g) in curves:
+                stats[name][g].update(prior_offset_gain(
+                    *curves[name, g], ANALYSES[name]['win'],
+                    offset_from=curves[ref, g] if ref else None))
+    fig, axs = plt.subplots(2, 3, figsize=(11, 6))
+    for ax, name in zip(axs.flat, RM_ROWS):
+        spec = ANALYSES[name]
+        for g in use[name]:
+            if (name, g) not in curves:
+                continue
+            md, sc = curves[name, g]
+            x = time_axis_ms(spec['win'], len(md))
+            base = sc.mean(0)
+            lo, hi = np.percentile(sc - base, [2.5, 97.5], axis=0)
+            ax.fill_between(x, lo, hi, color=RM_GROUP_COLORS[g], alpha=0.2, lw=0)
+            ax.plot(x, md - base, color=RM_GROUP_COLORS[g], lw=2,
+                    label=f"{g} ({stats[name][g]['clusters']})")
+        ax.axhline(0, color='k', lw=0.5)
+        ax.set_title(name, fontsize=9)
+        ax.set_xlabel(f"time from {spec['align']} (ms)")
+        ax.legend(fontsize=7, frameon=False)
+        for sp in ('top', 'right'):
+            ax.spines[sp].set_visible(False)
+    axs[0, 0].set_ylabel('distance − shuffle mean')
+    axs[1, 0].set_ylabel('distance − shuffle mean')
+    fig.tight_layout()
+    savefig_svg_png(fig, odir / f'group_curves_{args.move_rule}')
+    plt.close(fig)
+    out = {'move_rule': args.move_rule, 'members': members, 'stats': stats}
+    (odir / f'group_stats_{args.move_rule}.json').write_text(json.dumps(out, indent=1))
+    for name, v in stats.items():
+        for g, st in v.items():
+            extra = ''.join(f" {k} {st[k]:.4f}" for k in ('offset', 'p_offset', 'gain', 'p_gain')
+                            if k in st)
+            print(f"{name:12s} {g} p_mean {st['p_mean']:.4f} excess {st['excess_mean']:.4f}{extra}")
+    print('wrote', odir)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -1495,7 +1771,8 @@ def main():
                      ('select-cm', cmd_select_cm),
                      ('choice-selected', cmd_choice_selected),
                      ('panel-e-sel', cmd_panel_e_sel),
-                     ('rm-types', cmd_rm_types), ('select-rm', cmd_select_rm)):
+                     ('rm-types', cmd_rm_types), ('select-rm', cmd_select_rm),
+                     ('rm-report', cmd_rm_report), ('fig45-rm', cmd_fig45_rm)):
         p = sub.add_parser(name)
         p.add_argument('--out', type=Path, default=OUT)
         p.add_argument('--cell-types', type=Path, default=None)
@@ -1516,6 +1793,10 @@ def main():
         if name == 'choice-selected':
             p.add_argument('--fig-dir', type=Path, default=None,
                            help='default <out>/choice_selected')
+        if name in ('select-rm', 'fig45-rm'):
+            p.add_argument('--s-test', choices=list(SELECT_DIRS), default='S_stim')
+        if name in ('rm-report', 'fig45-rm'):
+            p.add_argument('--move-rule', choices=MOVE_RULES, default='late_mean')
         if name == 'choice-clusters':
             p.add_argument('--fig-dir', type=Path, default=None,
                            help='default <out>/choice_clusters')
