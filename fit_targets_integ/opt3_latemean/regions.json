@@ -132,10 +132,15 @@
   "ZI"
  ],
  "S_prior": [
+  "LGd",
+  "LP",
+  "NOT",
+  "PF",
+  "PO",
   "VISal",
   "VISam",
-  "LP",
-  "PO",
+  "VISp",
+  "VISpm",
   "ZI"
  ],
  "P": [

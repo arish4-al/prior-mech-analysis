@@ -98,6 +98,13 @@
 #   → OUT_TAG stageB_hold_newSbin56_mpre3_meancell_integ_<opt>_<arm>
 #     (dirs …_<mtype>_mask<slug>_s<seed>)
 #
+# opt3 prior-gain set (2026-11-08), ungated S, same protocol. One new arm:
+#   allgd0     full:6|7|8|9|12|13    every g_ and d_ = 0        (S prior on, user ask)
+# with the existing gs0gm0 (g_s = g_m = d_m = 0, S prior on), regular
+# (g_s = d_s = 0, no S prior), gonly (all d_ = 0) and donly (all g_ = 0):
+#   STEP=fits OPTS=opt3_latemean STAGEB_ARMS="gs0gm0 regular gonly donly allgd0" \
+#     RETINAL_TAG=retinal_newSbin RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
+#
 # Options 3 and 4 (2026-11-02, journals/stage_b_fit_variants.md): oldrule with
 # the movement cut at the mean slope over the 118 choice-significant regions
 # (panel_i_slope_mean_cut.py). S (10), S prior (5), P and the S RMS target are
@@ -147,6 +154,9 @@ _need_targets() {
       [[ -f "fit_targets_integ/$o/$f" ]] || {
         echo "ERROR: fit_targets_integ/$o/$f missing (steps 1–2)" >&2; exit 1; }
     done
+    # S prior must be the ungated curve (10 sensory regions, 2026-11-08).
+    grep -aq "sensory 10, no prior gate" "fit_targets_integ/$o/data_act_block_duringstim_s_unsplit80.npy" || {
+      echo "ERROR: fit_targets_integ/$o S prior is not the ungated curve" >&2; exit 1; }
   done
 }
 
@@ -257,13 +267,14 @@ case "$STEP" in
               OUT_TAG="stageB_hold_${STAGEB_TAG}${rseed}_mpre3_meancell_integ_$o" \
               bash scripts/submit_fit_stage_b_mpre.sh
             ;;
-          gs0gm0|gm0|gm0gs0|donly|gonly)
+          gs0gm0|gm0|gm0gs0|donly|gonly|allgd0)
             case "$arm" in
               gs0gm0) var="full:7|9|12";       stim=1 ;;
               gm0)    var="full:7|9";          stim=1 ;;
               gm0gs0) var="regular:7|9|12|13"; stim=0 ;;
               donly)  var="full:6|7|12";       stim=1 ;;
               gonly)  var="full:8|9|13";       stim=1 ;;
+              allgd0)    var="full:6|7|8|9|12|13";   stim=1 ;;
             esac
             FIT_TARGETS_DIR="fit_targets_integ/$o" M_PRE_WEIGHT=3 \
               VARIANTS="$var" INCLUDE_STIM_PRIOR="$stim" \
@@ -271,7 +282,7 @@ case "$STEP" in
               bash scripts/submit_fit_stage_b_mpre.sh
             ;;
           *)
-            echo "ERROR: STAGEB_ARMS arm '$arm' (use full, regular, gs0gm0, gm0, gm0gs0, donly or gonly)" >&2
+            echo "ERROR: STAGEB_ARMS arm '$arm' (use full, regular, gs0gm0, gm0, gm0gs0, donly, gonly or allgd0)" >&2
             exit 1 ;;
         esac
       done

@@ -171,6 +171,8 @@ def load_s_unsplit80(path=None):
     payload = np.load(p, allow_pickle=True).flat[0]
     if not isinstance(payload, dict) or payload.get("r_stim") is None:
         raise ValueError(f"{p}: expected dict with r_stim")
+    from model_functions import require_ungated_s
+    require_ungated_s(payload, p)
     return p, payload
 
 

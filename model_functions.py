@@ -4615,6 +4615,21 @@ def prior_distance_I_M_by_choice_and_prior(results, steps_before_obs, T=75, metr
     return out
 
 
+# S prior target = the 10 sensory regions, no prior gate (2026-11-08). The
+# gated 5-region curve and the legacy 13-region fit_targets/ curve are wrong
+# targets; ALLOW_GATED_S=1 only to reproduce old scores.
+UNGATED_S_RULE = 'sensory 10, no prior gate'
+
+
+def require_ungated_s(payload, path):
+    if payload.get('region_rule') == UNGATED_S_RULE or os.environ.get('ALLOW_GATED_S') == '1':
+        return
+    raise ValueError(
+        f"{path}: S prior target is not ungated (region_rule={payload.get('region_rule')!r}, "
+        f"{len(payload.get('regs_stim', []))} regions). Use fit_targets_integ/<set>/"
+        f"data_act_block_duringstim_s_unsplit80.npy, or ALLOW_GATED_S=1 to reproduce old scores.")
+
+
 def loss_prior_effect(
     regions, results, model_params, steps_before_obs, T=72, model_metric="l2",
     timeframes=('act_block_duringstim','act_block_duringchoice'),
@@ -4806,6 +4821,7 @@ def loss_prior_effect(
             stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
             if not (isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None):
                 raise ValueError(f"{stim_path}: expected dict with r_stim")
+            require_ungated_s(stim_payload, stim_path)
             r_stim = np.asarray(stim_payload['r_stim'], dtype=float)
             regs_stim = list(stim_payload.get('regs_stim', regs_stim))
         
@@ -6157,6 +6173,7 @@ def _loss_prior_effect_torch(
                 stim_payload = np.load(stim_path, allow_pickle=True).flat[0]
                 if not (isinstance(stim_payload, dict) and stim_payload.get('r_stim') is not None):
                     raise ValueError(f"{stim_path}: expected dict with r_stim")
+                require_ungated_s(stim_payload, stim_path)
                 r_stim_np = stim_payload['r_stim']
             r_stim = None if r_stim_np is None else torch.tensor(np.asarray(r_stim_np, dtype=float), dtype=dtype, device=device)
         else:
