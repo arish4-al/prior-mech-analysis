@@ -3609,9 +3609,14 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         trials  = trials[~rm_trials]
         
     if standard_act_prior:
-        if not _split_uses_act_prior(split):
+        if _split_uses_bayes_prior(split):
             raise ValueError(
-                f'standard act prior is only for act splits, got {split}')
+                f'standard pipeline has no Bayes prior, got {split}')
+        if not _split_uses_act_prior(split):
+            # True-block standard split: same rows as the act version (mask,
+            # then true 0.5 dropped), labelled with the task block.
+            trials = trials.copy()
+            trials['probabilityLeft'] = trials['true_priors']
     elif _split_uses_act_prior(split):
         # calculate action kernel prior to use for analysis
         trials['true_priors'] = trials['probabilityLeft']

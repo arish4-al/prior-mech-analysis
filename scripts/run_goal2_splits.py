@@ -140,6 +140,12 @@ FIG4_PRIOR = (
 # Null is generate_pseudo_blocks (the only standard split that uses it).
 ITI_ACT = ['act_block_only']
 STANDARD_SPLITS = list(FIG2_STANDARD) + list(FIG4_PRIOR) + ITI_ACT
+# True-block versions of the Figure 2 and Figure 4 standard splits: same
+# names without the act tag, same rows, labels are the task probabilityLeft.
+# No ITI split here (block_only is the lagged t−1 label, not in this set).
+FIG2_STANDARD_TRUE = [s[:-len('_act')] for s in FIG2_STANDARD]
+FIG4_PRIOR_TRUE = [s[len('act_'):] for s in FIG4_PRIOR]
+STANDARD_TRUE_SPLITS = FIG2_STANDARD_TRUE + FIG4_PRIOR_TRUE
 CHOICE_DURINGCHOICE_BAYES = [
     'choice_stim_r_block_r_bayes',
     'choice_stim_l_block_l_bayes',
@@ -221,6 +227,11 @@ PRESETS = {
     'fig4_prior': list(FIG4_PRIOR),
     'iti_act': list(ITI_ACT),
     'standard': list(STANDARD_SPLITS),
+    # True-block labels on the standard rows (mask, drop true 0.5, min5,
+    # plain shuffle). Run with --standard-act-prior; writes res_standard.
+    'fig2_standard_true': list(FIG2_STANDARD_TRUE),
+    'fig4_prior_true': list(FIG4_PRIOR_TRUE),
+    'standard_true': list(STANDARD_TRUE_SPLITS),
     # Same labels as ``standard``. Alternative nulls: see
     # journals/standard_splits.md. Sticky is option-1 AK pseudo-session
     # plus copy-last on the same splits as Harris: 8 choice, 2 stim-side
