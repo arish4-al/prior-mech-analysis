@@ -13,13 +13,16 @@
 #   prior_none — prior L vs R with no stratum (2 fully unsplit).
 #   prior_f12 — prior L vs R inside stim × choice (8 Figure 4 f1/f2;
 #            ARM=harris_prior_f12 / sticky_prior_f12, not part of ARM=all).
+#   prior_iti — intertrial act prior L vs R, no stratum (act_block_only,
+#            stimOn −400 to −100 ms; ARM=harris_prior_iti / sticky_prior_iti,
+#            not part of ARM=all).
 #
 # Harris reads manifold/choice_donors_standard.npy (full-session kernel on
 # the donor, then the same mask and true-0.5 drop). The shuffle catalog in
 # res_standard/{split}.npy is left in place.
 #
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
-#   ARM=sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all
+#   ARM=sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
 #   PREFIT=0           skip the sticky θ prefit (default 1). The prefit fits
 #                      each session once on the full session-loader table
@@ -51,7 +54,9 @@
 #
 # Defaults: choice 4 shards (sticky 12G, Harris 6G), f1/f2 prior sticky
 # 8 shards × 12G (Harris 4 × 8G), stim-stratum prior
-# 4 shards (sticky 12G, Harris 8G), no-stratum prior 12×16G. nrand=2000.
+# 4 shards (sticky 12G, Harris 8G), no-stratum prior 12×16G, intertrial
+# prior 24×24G with a 64G finalize (the 16G shuffle finalize was OOM-killed
+# 2026-11-13; 12 Harris shards missed 5 h in August). nrand=2000.
 # CLEAR_STREAM=1 clears only that arm's suffix under res_standard.
 
 set -euo pipefail
@@ -102,9 +107,9 @@ if [[ ! -d third_party/behavior_models/behavior_models ]]; then
 fi
 
 case "$ARM" in
-  sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) ;;
+  sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all) ;;
   *)
-    echo "ERROR: ARM must be sticky|sticky_prior_f12|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all (got $ARM)" >&2
+    echo "ERROR: ARM must be sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all (got $ARM)" >&2
     exit 1
     ;;
 esac
@@ -134,6 +139,7 @@ list_splits() {
 
 submit_arm() {
   local preset="$1" scheme="$2" shards="$3" mem="$4" tshard="$5" prefix="$6"
+  local mem_fin="${7:-$MEM_FIN}"
   if [[ -n "$N_SHARDS_USER" ]]; then shards="$N_SHARDS_USER"; fi
   if [[ -n "$MEM_SHARD_USER" ]]; then mem="$MEM_SHARD_USER"; fi
   if [[ -n "$TIME_SHARD_USER" ]]; then tshard="$TIME_SHARD_USER"; fi
@@ -213,7 +219,7 @@ submit_arm() {
     # shellcheck disable=SC2086
     FID=$(sbatch --parsable $SBATCH_EXTRA \
       --partition="$PARTITION" \
-      --mem="$MEM_FIN" --cpus-per-task="$CPUS_FIN" --time=2:00:00 \
+      --mem="$mem_fin" --cpus-per-task="$CPUS_FIN" --time=2:00:00 \
       --dependency=afterok:"$DEP" \
       --job-name="${prefix}_fin_${TAG}" \
       --export=ALL,SPLIT="$sp",$EXPORT \
@@ -224,13 +230,13 @@ submit_arm() {
 
 need_donors=0
 case "$ARM" in
-  harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|all) need_donors=1 ;;
+  harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all) need_donors=1 ;;
 esac
 
 if [[ "$PREFLIGHT" == "1" ]]; then
   PF_ARGS=()
   case "$ARM" in
-    sticky|sticky_prior_f12|all)
+    sticky|sticky_prior_f12|sticky_prior_iti|all)
       PF_ARGS+=(--sticky)
       if [[ "$PREFIT" == "1" || -n "${PREFIT_DEP:-}" ]]; then
         PF_ARGS+=(--no-pickle-check)
@@ -268,7 +274,7 @@ if [[ "$PREFIT" == "1" && -n "$PREFIT_DEP" ]]; then
   echo "ERROR: PREFIT_DEP is set; pass PREFIT=0 to wait on those jobs instead" >&2
   exit 1
 fi
-if [[ ( "$ARM" == "sticky" || "$ARM" == "sticky_prior_f12" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
+if [[ ( "$ARM" == "sticky" || "$ARM" == "sticky_prior_f12" || "$ARM" == "sticky_prior_iti" || "$ARM" == "all" ) && "$PREFIT" == "1" ]]; then
   PREFIT_JOBS=()
   for ((k=0; k<N_PREFIT_SHARDS; k++)); do
     # shellcheck disable=SC2086
@@ -304,6 +310,12 @@ if [[ "$ARM" == "sticky_prior_f12" ]]; then
 fi
 if [[ "$ARM" == "harris_prior_f12" ]]; then
   submit_arm standard_prior_harris_f12 harris 4 8G 12:00:00 stdhf
+fi
+if [[ "$ARM" == "sticky_prior_iti" ]]; then
+  submit_arm iti_act sticky 24 24G 12:00:00 stdssi "${MEM_FIN_ITI:-64G}"
+fi
+if [[ "$ARM" == "harris_prior_iti" ]]; then
+  submit_arm iti_act harris 24 24G 12:00:00 stdhi "${MEM_FIN_ITI:-64G}"
 fi
 
 echo "Done (standard alternative nulls). Monitor: squeue -u \$USER"
