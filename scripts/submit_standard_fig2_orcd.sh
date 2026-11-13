@@ -36,6 +36,16 @@ CLEAR_STREAM="${CLEAR_STREAM:-1}"
 DEBIAS_EUC="${DEBIAS_EUC:-0}"
 SFX=""
 if [[ "$DEBIAS_EUC" == "1" ]]; then SFX="_debias"; fi
+# ITI presets (iti_act, iti_true, iti_standard): one shard file is ~1.4G and
+# 58 insertions per shard missed 5 h in August (slowest ~8 min/insertion).
+# 24 shards is 29 insertions each, about 4 h at that rate, inside 12 h.
+case "$PRESET" in
+  iti_*)
+    N_SHARDS="${N_SHARDS:-24}"
+    MEM_SHARD="${MEM_SHARD:-16G}"
+    MEM_FIN="${MEM_FIN:-16G}"
+    ;;
+esac
 MEM_SHARD="${MEM_SHARD:-6G}"
 MEM_FIN="${MEM_FIN:-10G}"
 CPUS_SHARD="${CPUS_SHARD:-2}"

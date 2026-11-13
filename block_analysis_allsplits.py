@@ -3597,6 +3597,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
     if (not standard_act_prior and 'block' in split
             and not is_choicestim_split(split)):
         trials = trials[trials['probabilityLeft']!=0.5] # remove trials without block bias
+    if (standard_act_prior and not _split_uses_act_prior(split)
+            and not _split_uses_bayes_prior(split)):
+        # True-block standard split: same rows as the act version (mask,
+        # then true 0.5 dropped), labelled with the task block. Before the
+        # ITI lag, which reads probabilityLeft.
+        trials = trials.copy()
+        trials['probabilityLeft'] = trials['true_priors']
     # ITI true-block: label the pre-stimOn[t] window with pLeft[t-1].
     # Act / Bayes already include trial t-1's observation in priors[t].
     if _is_true_block_iti_split(split):
@@ -3612,11 +3619,6 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         if _split_uses_bayes_prior(split):
             raise ValueError(
                 f'standard pipeline has no Bayes prior, got {split}')
-        if not _split_uses_act_prior(split):
-            # True-block standard split: same rows as the act version (mask,
-            # then true 0.5 dropped), labelled with the task block.
-            trials = trials.copy()
-            trials['probabilityLeft'] = trials['true_priors']
     elif _split_uses_act_prior(split):
         # calculate action kernel prior to use for analysis
         trials['true_priors'] = trials['probabilityLeft']

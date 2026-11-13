@@ -142,10 +142,13 @@ ITI_ACT = ['act_block_only']
 STANDARD_SPLITS = list(FIG2_STANDARD) + list(FIG4_PRIOR) + ITI_ACT
 # True-block versions of the Figure 2 and Figure 4 standard splits: same
 # names without the act tag, same rows, labels are the task probabilityLeft.
-# No ITI split here (block_only is the lagged t−1 label, not in this set).
+# The ITI split is separate (ITI_TRUE).
 FIG2_STANDARD_TRUE = [s[:-len('_act')] for s in FIG2_STANDARD]
 FIG4_PRIOR_TRUE = [s[len('act_'):] for s in FIG4_PRIOR]
 STANDARD_TRUE_SPLITS = FIG2_STANDARD_TRUE + FIG4_PRIOR_TRUE
+# True-block ITI prior L vs R: the window before stimOn[t] is labelled with
+# the previous kept trial's block. Null is lagged generate_pseudo_blocks.
+ITI_TRUE = ['block_only']
 CHOICE_DURINGCHOICE_BAYES = [
     'choice_stim_r_block_r_bayes',
     'choice_stim_l_block_l_bayes',
@@ -232,6 +235,8 @@ PRESETS = {
     'fig2_standard_true': list(FIG2_STANDARD_TRUE),
     'fig4_prior_true': list(FIG4_PRIOR_TRUE),
     'standard_true': list(STANDARD_TRUE_SPLITS),
+    'iti_true': list(ITI_TRUE),
+    'iti_standard': list(ITI_ACT) + list(ITI_TRUE),
     # Same labels as ``standard``. Alternative nulls: see
     # journals/standard_splits.md. Sticky is option-1 AK pseudo-session
     # plus copy-last on the same splits as Harris: 8 choice, 2 stim-side
