@@ -1559,13 +1559,25 @@ def configure_standard_output_dirs(cache_dir=None):
 
 
 def _standard_act_pack(full):
-    '''Action-kernel labels on a full session, including masked and 0.5 trials.'''
+    '''Subjective-prior labels on a full session, including masked and 0.5 trials.
+
+    Action kernel (α=0.2) on the full choice sequence, and the Bayes-optimal
+    prior on the full stimulus-side sequence (Findling et al. compute
+    ``optimal_Bayesian`` on the full SessionLoader table and mask afterwards).
+    '''
     choice = full['choice'].to_numpy(dtype=float)
     cont, binary = action_kernel_priors(alpha, list(choice))
+    stim_is_left = ~np.isnan(full['contrastLeft'].to_numpy(dtype=float))
+    # No-choice trials (choice 0 / NaN) hold the belief, as in Findling.
+    has_choice = np.isin(choice, (-1.0, 1.0))
+    b_cont, b_bin = bayesian_priors(stim_is_left, update=has_choice)
     return {
         'index': np.asarray(full.index),
         'continuous': np.asarray(cont, dtype=float),
         'binary': np.asarray(binary, dtype=float),
+        'bayes_continuous': np.asarray(b_cont, dtype=float),
+        'bayes_binary': np.asarray(b_bin, dtype=float),
+        'bayes_hold_nochoice': True,
         'true_pleft': full['probabilityLeft'].to_numpy(dtype=float),
     }
 
@@ -1577,7 +1589,8 @@ def attach_standard_act_prior(cache):
     the unmasked ``load_trials_and_mask`` table, so later splits can look up
     labels without recomputing the kernel.
     '''
-    if cache.get('standard_act') is not None:
+    pack = cache.get('standard_act')
+    if pack is not None and pack.get('bayes_hold_nochoice'):
         return cache
     eid = cache.get('eid')
     if eid is None:
@@ -1602,6 +1615,10 @@ def apply_standard_act_prior(trials, pack):
     out['true_priors'] = np.asarray(pack['true_pleft'], dtype=float)[pos]
     out['act_priors'] = np.asarray(pack['continuous'], dtype=float)[pos]
     out['probabilityLeft'] = np.asarray(pack['binary'], dtype=float)[pos]
+    if 'bayes_binary' in pack:
+        out['bayes_priors'] = np.asarray(
+            pack['bayes_continuous'], dtype=float)[pos]
+        out['_bayes_binary'] = np.asarray(pack['bayes_binary'], dtype=float)[pos]
     keep = ~np.isclose(out['true_priors'].to_numpy(dtype=float), 0.5)
     return out.loc[keep]
 
@@ -3201,7 +3218,8 @@ def bayesian_priors(
         tau=BAYES_TAU,
         gamma=BAYES_GAMMA,
         min_len=BAYES_MIN_LEN,
-        max_len=BAYES_MAX_LEN):
+        max_len=BAYES_MAX_LEN,
+        update=None):
     '''
     IBL Bayes-optimal prior from stimulus history (Findling et al. Nature 2025
     SI §1.1.1 / behavior_models.OptimalBayesian).
@@ -3221,6 +3239,11 @@ def bayesian_priors(
         finite). Length T.
     tau, gamma, min_len, max_len : float / int
         Generative-model hyperparameters (IBL defaults).
+    update : array-like of bool, optional
+        False on trials that do not move the belief (no choice), as in
+        prior-localization ``optimal_Bayesian`` (``to_update = act != 0``):
+        a held trial adds neither its observation nor a block-length step,
+        so ``priors[t+1] == priors[t]``. Default: every trial updates.
 
     Returns
     -------
@@ -3233,6 +3256,11 @@ def bayesian_priors(
     T = len(stim_is_left)
     if T == 0:
         return np.array([]), np.array([])
+    if update is None:
+        update = np.ones(T, dtype=bool)
+    update = np.asarray(update, dtype=bool).reshape(-1)
+    if len(update) != T:
+        raise ValueError('update must have the same length as stim_is_left')
 
     # Hazard H(n) for current block length n in {1..max_len}.
     ns = np.arange(1, max_len + 1)
@@ -3255,7 +3283,7 @@ def bayesian_priors(
 
     priors = np.empty(T, dtype=float)
     for t in range(T):
-        if t >= 1:
+        if t >= 1 and update[t - 1]:
             g_new = np.zeros_like(g)
             for lp in range(max_len):
                 Hp = H[lp]
@@ -3285,6 +3313,8 @@ def bayesian_priors(
             p_b = g.sum(axis=0) / z
             priors[t] = float(np.dot(p_b, p_left_given_b))
 
+        if not update[t]:
+            continue  # hold: no observation, no transition into t+1
         # Incorporate observation s_t for next trial's g.
         p_obs = np.where(stim_is_left[t], p_left_given_b, 1.0 - p_left_given_b)
         g = g * p_obs[np.newaxis, :]
@@ -3579,12 +3609,15 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         else:
             trials = trials[mask]
     if standard_act_prior and cached is not None:
-        if cached.get('standard_act') is None:
-            attach_standard_act_prior(cached)
+        # No-op when the pack is current; refreshes packs from before the
+        # full-session Bayes prior was added.
+        attach_standard_act_prior(cached)
         trials = apply_standard_act_prior(trials, cached['standard_act'])
     # Bayes-optimal prior needs the full stimulus history (incl. 0.5 blocks).
     # Compute before dropping unbiased trials; labels are applied after.
-    if 'bayes' in split:
+    # Legacy path: this runs on the masked rows. The standard path already
+    # attached the full-session Bayes prior (before the mask) above.
+    if 'bayes' in split and not standard_act_prior:
         stim_is_left = ~np.isnan(trials['contrastLeft'].astype(float).values)
         bayes_cont, bayes_bin = bayesian_priors(stim_is_left)
         trials = trials.copy()
@@ -3617,8 +3650,13 @@ def get_d_vars(split, pid, mapping='Beryl', lowcontrast=False,
         
     if standard_act_prior:
         if _split_uses_bayes_prior(split):
-            raise ValueError(
-                f'standard pipeline has no Bayes prior, got {split}')
+            if '_bayes_binary' not in trials:
+                raise RuntimeError(
+                    f'standard Bayes prior missing on trials for {split}')
+            # Full-session Bayes labels, already on the masked, 0.5-dropped
+            # rows; true_priors is the saved task block.
+            trials = trials.copy()
+            trials['probabilityLeft'] = trials['_bayes_binary'].values
     elif _split_uses_act_prior(split):
         # calculate action kernel prior to use for analysis
         trials['true_priors'] = trials['probabilityLeft']

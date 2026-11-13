@@ -149,6 +149,15 @@ STANDARD_TRUE_SPLITS = FIG2_STANDARD_TRUE + FIG4_PRIOR_TRUE
 # True-block ITI prior L vs R: the window before stimOn[t] is labelled with
 # the previous kept trial's block. Null is lagged generate_pseudo_blocks.
 ITI_TRUE = ['block_only']
+# Bayes-optimal versions of the Figure 4 prior splits and the ITI split, on
+# the standard rows. Bayes prior on the full session's stimulus sides, then
+# mask, then drop true 0.5, min5. Plain within-stratum shuffle for the 10
+# prior splits. bayes_block_only's standard null is the Bayes pseudo-session
+# (ARM=pseudo_prior_iti_bayes in submit_standard_alt_nulls_orcd.sh), not the
+# generate_pseudo_blocks file a plain PRESET=iti_bayes run would write.
+# Run with --standard-act-prior; writes res_standard.
+FIG4_PRIOR_BAYES = ['bayes_' + s[len('act_'):] for s in FIG4_PRIOR]
+ITI_BAYES = ['bayes_block_only']
 CHOICE_DURINGCHOICE_BAYES = [
     'choice_stim_r_block_r_bayes',
     'choice_stim_l_block_l_bayes',
@@ -237,6 +246,9 @@ PRESETS = {
     'standard_true': list(STANDARD_TRUE_SPLITS),
     'iti_true': list(ITI_TRUE),
     'iti_standard': list(ITI_ACT) + list(ITI_TRUE),
+    # Bayes-optimal prior on the standard rows (see FIG4_PRIOR_BAYES).
+    'fig4_prior_bayes': list(FIG4_PRIOR_BAYES),
+    'iti_bayes': list(ITI_BAYES),
     # Same labels as ``standard``. Alternative nulls: see
     # journals/standard_splits.md. Sticky is option-1 AK pseudo-session
     # plus copy-last on the same splits as Harris: 8 choice, 2 stim-side

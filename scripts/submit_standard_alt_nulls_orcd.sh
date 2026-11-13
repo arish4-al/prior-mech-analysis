@@ -16,13 +16,19 @@
 #   prior_iti — intertrial act prior L vs R, no stratum (act_block_only,
 #            stimOn −400 to −100 ms; ARM=harris_prior_iti / sticky_prior_iti,
 #            not part of ARM=all).
+#   pseudo_prior_iti_bayes — intertrial Bayes-optimal prior L vs R, no
+#            stratum (bayes_block_only). Null = unstratified pseudo-session
+#            (actkernel mode unconstrained): IBL blocks + stims, Bayes prior on
+#            the full pseudo stim sequence, then drop 0.5. No choice model.
+#            Writes res_standard/bayes_block_only_pseudosession.npy. Not part
+#            of ARM=all.
 #
 # Harris reads manifold/choice_donors_standard.npy (full-session kernel on
 # the donor, then the same mask and true-0.5 drop). The shuffle catalog in
 # res_standard/{split}.npy is left in place.
 #
 #   bash scripts/submit_standard_alt_nulls_orcd.sh
-#   ARM=sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all
+#   ARM=sticky|sticky_prior_f12|sticky_prior_iti|pseudo_prior_iti_bayes|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all
 #   REBUILD_DONORS=1   rebuild the standard donor bank (default 0)
 #   PREFIT=0           skip the sticky θ prefit (default 1). The prefit fits
 #                      each session once on the full session-loader table
@@ -107,14 +113,18 @@ if [[ ! -d third_party/behavior_models/behavior_models ]]; then
 fi
 
 case "$ARM" in
-  sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all) ;;
+  sticky|sticky_prior_f12|sticky_prior_iti|pseudo_prior_iti_bayes|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all) ;;
   *)
-    echo "ERROR: ARM must be sticky|sticky_prior_f12|sticky_prior_iti|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all (got $ARM)" >&2
+    echo "ERROR: ARM must be sticky|sticky_prior_f12|sticky_prior_iti|pseudo_prior_iti_bayes|harris_choice|harris_prior_stim|harris_prior_none|harris_prior_f12|harris_prior_iti|all (got $ARM)" >&2
     exit 1
     ;;
 esac
 
-echo "Aim: standard act labels (full-session kernel, mask, drop true 0.5, min5)."
+if [[ "$ARM" == "pseudo_prior_iti_bayes" ]]; then
+  echo "Aim: standard Bayes labels (full-session Bayes prior with no-choice hold, mask, drop true 0.5, min5)."
+else
+  echo "Aim: standard act labels (full-session kernel, mask, drop true 0.5, min5)."
+fi
 echo "ARM=$ARM  nrand=$NRAND  CLEAR_STREAM=$CLEAR_STREAM  REBUILD_DONORS=$REBUILD_DONORS  PREFIT=$PREFIT  DEBIAS_EUC=$DEBIAS_EUC"
 echo "PARTITION=$PARTITION  SBATCH_EXTRA=${SBATCH_EXTRA:-}"
 echo "Outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}{suffix}.npy"
@@ -150,6 +160,10 @@ submit_arm() {
     mode=strat
     sticky=1
     suffix=_pseudo_strat_sticky
+  elif [[ "$scheme" == "pseudo" ]]; then
+    ak=1
+    mode=unconstrained
+    suffix=_pseudosession
   else
     shuffle=1
     suffix=_harris_unique
@@ -314,9 +328,12 @@ fi
 if [[ "$ARM" == "sticky_prior_iti" ]]; then
   submit_arm iti_act sticky 24 24G 12:00:00 stdssi "${MEM_FIN_ITI:-64G}"
 fi
+if [[ "$ARM" == "pseudo_prior_iti_bayes" ]]; then
+  submit_arm iti_bayes pseudo 24 24G 12:00:00 stdpib "${MEM_FIN_ITI:-64G}"
+fi
 if [[ "$ARM" == "harris_prior_iti" ]]; then
   submit_arm iti_act harris 24 24G 12:00:00 stdhi "${MEM_FIN_ITI:-64G}"
 fi
 
 echo "Done (standard alternative nulls). Monitor: squeue -u \$USER"
-echo "Final outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}_pseudo_strat_sticky[_debias].npy and {split}_harris_unique[_debias].npy"
+echo "Final outputs: \$ONE_CACHE_DIR/manifold/res_standard/{split}_pseudo_strat_sticky[_debias].npy, {split}_harris_unique[_debias].npy, {split}_pseudosession[_debias].npy"
