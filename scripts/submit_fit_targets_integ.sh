@@ -105,6 +105,14 @@
 #   STEP=fits OPTS=opt3_latemean STAGEB_ARMS="gs0gm0 regular gonly donly allgd0" \
 #     RETINAL_TAG=retinal_newSbin RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
 #
+# opt3 d_i / g_m arms (2026-11-16), ungated S, same protocol, S prior on.
+# Does C need d_i (small next to d_s in s7), and does g_m (larger than g_s) matter:
+#   gs0gm0dm0di0  full:7|8|9|12   g_s = g_m = d_m = d_i = 0  (g_i, d_s free)
+#   gs0dm0di0     full:8|9|12     g_s = d_m = d_i = 0        (g_i, g_m, d_s free)
+#   gs0dm0        full:9|12       g_s = d_m = 0              (g_i, g_m, d_i, d_s free)
+#   STEP=fits OPTS=opt3_latemean STAGEB_ARMS="gs0gm0dm0di0 gs0dm0di0 gs0dm0" \
+#     RETINAL_TAG=retinal_newSbin RETINAL_JSON=… bash scripts/submit_fit_targets_integ.sh
+#
 # Options 3 and 4 (2026-11-02, journals/stage_b_fit_variants.md): oldrule with
 # the movement cut at the mean slope over the 118 choice-significant regions
 # (panel_i_slope_mean_cut.py). S (10), S prior (5), P and the S RMS target are
@@ -267,7 +275,7 @@ case "$STEP" in
               OUT_TAG="stageB_hold_${STAGEB_TAG}${rseed}_mpre3_meancell_integ_$o" \
               bash scripts/submit_fit_stage_b_mpre.sh
             ;;
-          gs0gm0|gm0|gm0gs0|donly|gonly|allgd0)
+          gs0gm0|gm0|gm0gs0|donly|gonly|allgd0|gs0gm0dm0di0|gs0dm0di0|gs0dm0)
             case "$arm" in
               gs0gm0) var="full:7|9|12";       stim=1 ;;
               gm0)    var="full:7|9";          stim=1 ;;
@@ -275,6 +283,9 @@ case "$STEP" in
               donly)  var="full:6|7|12";       stim=1 ;;
               gonly)  var="full:8|9|13";       stim=1 ;;
               allgd0)    var="full:6|7|8|9|12|13";   stim=1 ;;
+              gs0gm0dm0di0) var="full:7|8|9|12"; stim=1 ;;
+              gs0dm0di0)    var="full:8|9|12";   stim=1 ;;
+              gs0dm0)       var="full:9|12";     stim=1 ;;
             esac
             FIT_TARGETS_DIR="fit_targets_integ/$o" M_PRE_WEIGHT=3 \
               VARIANTS="$var" INCLUDE_STIM_PRIOR="$stim" \
@@ -282,7 +293,7 @@ case "$STEP" in
               bash scripts/submit_fit_stage_b_mpre.sh
             ;;
           *)
-            echo "ERROR: STAGEB_ARMS arm '$arm' (use full, regular, gs0gm0, gm0, gm0gs0, donly, gonly or allgd0)" >&2
+            echo "ERROR: STAGEB_ARMS arm '$arm' (use full, regular, gs0gm0, gm0, gm0gs0, donly, gonly, allgd0, gs0gm0dm0di0, gs0dm0di0 or gs0dm0)" >&2
             exit 1 ;;
         esac
       done
